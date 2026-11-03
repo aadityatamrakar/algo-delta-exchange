@@ -16,9 +16,10 @@ export interface DxRestPort {
     states?: string[]
     underlying?: string[]
     /**
-     * `YYYY-MM-DD`: narrows the expired listing to one settlement date. A
-     * client that ignores it is still correct — the caller filters on the
-     * product's own expiry — it just pages through more history.
+     * `YYYY-MM-DD`, sent as Delta's `expiry`: narrows the expired listing to
+     * one settlement date. It matches every underlying and settlement time on
+     * that date, so callers keep `underlying` set and still filter on the
+     * product's own expiry.
      */
     expiryDate?: string
   }): Promise<readonly DxProduct[]>
