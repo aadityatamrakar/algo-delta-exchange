@@ -556,6 +556,9 @@ export class FillWatcher {
       filledQty: outcome.filledQty,
       avgPrice: outcome.avgPrice,
       ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+      // The order's fee total, on the document the desk folds from
+      // (`apps/api/src/paper-fold.ts:foldedFee`). Absent when nothing said.
+      ...(outcome.fee === undefined ? {} : { fee: outcome.fee }),
     })
     this.#d.log(`${outcome.state} ${order.tradingsymbol} [${base}]`, {
       filledQty: outcome.filledQty,
