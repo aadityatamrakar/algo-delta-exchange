@@ -1680,8 +1680,8 @@ async function handleBrokerSnapshot(deps: ApiDeps, ctx: RouteCtx): Promise<boole
     send(200, {
       available: false,
       reason:
-        'no broker snapshot yet — the gateway publishes one only in xts mode ' +
-        '(DESK_BROKER=xts), not in simulate',
+        'no broker snapshot — this desk\'s gateway publishes none (simulate or delta; ' +
+        'the XTS writer is gone)',
     })
     return true
   }
@@ -1751,8 +1751,8 @@ async function handleBrokerFunds(deps: ApiDeps, ctx: RouteCtx): Promise<boolean>
     send(200, {
       available: false,
       reason:
-        'no broker snapshot yet — the gateway publishes one only in xts mode ' +
-        '(DESK_BROKER=xts), not in simulate',
+        'no broker snapshot — this desk\'s gateway publishes none (simulate or delta; ' +
+        'the XTS writer is gone)',
     })
     return true
   }

@@ -74,8 +74,9 @@ import type { DeskMode } from '../contract.ts'
 import { readBrokerLinkDoc, type BrokerLinkState } from '../safety.ts'
 
 /**
- * Written by `apps/order-gateway/src/main.ts` (`BROKER_SNAPSHOT_COLLECTION`)
- * every 30s — AND ONLY IN `DESK_BROKER=xts` MODE. Named as a literal rather
+ * Written every 30s by the XTS gateway this desk was cloned from. THIS DESK'S
+ * gateway (simulate or delta) writes none, so every read below treats an
+ * absent document as the normal state, never an error. Named as a literal rather
  * than imported, exactly as `routes/desk.ts` names it, because importing the
  * gateway's `main.ts` would pull that whole process's module graph into the
  * bridge for one string.
@@ -443,8 +444,8 @@ async function gateway(deps: ApiDeps, nowMs: number): Promise<SystemComponent> {
         name: 'Order gateway',
         detail:
           (linkText === null ? '' : `${linkText} · `) +
-          `no broker snapshot — the gateway writes one only in xts mode (DESK_BROKER=xts), ` +
-          `never in simulate, so its liveness cannot be observed from here; ${trace}. ` +
+          `no broker snapshot — this desk's gateway writes none (simulate or delta; the XTS ` +
+          `writer is gone), so its liveness cannot be observed from here; ${trace}. ` +
           `${pending} orders pending`,
         lastSeenMs: null,
         expectedEveryMs: CADENCE.gateway.every,
