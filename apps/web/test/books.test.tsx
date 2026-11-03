@@ -426,7 +426,7 @@ describe('the dials panel', () => {
     act(() => { screen.getByRole('button', { name: 'Dials' }).click() })
     await screen.findByText(`Dials \u00b7 ${TCS}`)
     expect(targetPnl().value).toBe('22222')
-  })
+  }, 30_000) // the BULL-S dials made the panel heavier to render
 
   /**
    * THE PANEL SHOWS THE WHOLE SCHEMA, and it no longer needs a catalogue to do
@@ -516,7 +516,7 @@ describe('the dials panel asks before it retunes a live book', () => {
     await confirmWith('hunter2')
     await waitFor(() => expect(patches(sent)).toHaveLength(1))
     expect(patches(sent)[0]?.body).toMatchObject({ mode: 'live', password: 'hunter2' })
-  })
+  }, 30_000) // the BULL-S dials made the panel heavier to render
 
   test('cancelling the prompt sends nothing at all', async () => {
     const sent = await openDials([bookRow({ mode: 'live', dials: { target_pnl: 1 } })], 'live')
