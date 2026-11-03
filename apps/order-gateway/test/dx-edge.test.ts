@@ -11,6 +11,7 @@ import type { OrderIntent } from '@algomaker/order-bus'
 import {
   brokerModeFromEnv,
   chooseAdapter,
+  chooseRail,
   dxCapRefusal,
   dxCapsFromEnv,
   dxSimFee,
@@ -42,6 +43,34 @@ test("only an exact mode 'live' with DESK_DX_LIVE=1 and a delta broker routes to
   assert.equal(chooseAdapter({ mode: 'live' }, LIVE_ENV, { simulator, delta }), delta)
   // No Delta adapter built (simulate mode): the simulator, never a throw.
   assert.equal(chooseAdapter({ mode: 'live' }, LIVE_ENV, { simulator, delta: null }), simulator)
+})
+
+// ------------------------------------------------------------ the demo rail
+
+test("chooseRail: a paper order on a 'demo' book goes to the demo rail; everything else is unchanged", () => {
+  for (const env of [LIVE_ENV, {}, { DESK_BROKER: 'delta' }]) {
+    assert.equal(chooseRail({ mode: 'paper' }, env, 'demo'), 'demo', JSON.stringify(env))
+    assert.equal(chooseRail({ mode: 'paper' }, env, 'sim'), 'sim')
+    // A doc with no mode is paper (fail-closed), and so follows its book.
+    assert.equal(chooseRail({}, env, 'demo'), 'demo')
+  }
+})
+
+test('chooseRail: a LIVE order never reaches the demo rail, whatever its book says', () => {
+  assert.equal(chooseRail({ mode: 'live' }, LIVE_ENV, 'demo'), 'live')
+  // Live with the live rail off is the simulator, as it always was — never demo.
+  for (const env of [{}, { DESK_BROKER: 'delta' }, { DESK_DX_LIVE: '1' }]) {
+    assert.equal(chooseRail({ mode: 'live' }, env, 'demo'), 'sim', JSON.stringify(env))
+  }
+})
+
+test('chooseRail: a rail stamped on the document wins over the book — one order, one exchange', () => {
+  assert.equal(chooseRail({ mode: 'paper', dx_paper_rail: 'demo' }, {}, 'sim'), 'demo')
+  assert.equal(chooseRail({ mode: 'paper', dx_paper_rail: 'sim' }, {}, 'demo'), 'sim')
+  // A junk stamp is not a rail: the book decides.
+  assert.equal(chooseRail({ mode: 'paper', dx_paper_rail: 'Demo' }, {}, 'sim'), 'sim')
+  // And a stamp never makes a live order paper.
+  assert.equal(chooseRail({ mode: 'live', dx_paper_rail: 'demo' }, LIVE_ENV, 'sim'), 'live')
 })
 
 test('the broker modes are simulate (default) and delta; anything else stops the boot', () => {

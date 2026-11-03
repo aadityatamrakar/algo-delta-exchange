@@ -35,3 +35,13 @@ export {
   type DxTradingClient,
 } from './adapter.ts'
 export type * from './types.ts'
+export {
+  DX_PROD_REST_URL,
+  DX_PROD_WS_URL,
+  DX_DEMO_REST_URL,
+  DX_DEMO_WS_URL,
+  DX_DEMO_PUBLIC_WS_URL,
+  assertRailHost,
+  isDemoHost,
+  type DxCredentialRail,
+} from './hosts.ts'

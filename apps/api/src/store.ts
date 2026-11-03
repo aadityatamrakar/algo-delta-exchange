@@ -36,7 +36,7 @@ import {
   type StrategyPatch,
   type StrategyRow,
 } from './strategies.ts'
-import { bookFromDoc, deriveSeries, type BookRow, type BookState, type DialValue, type VariantRow } from './books-registry.ts'
+import { bookFromDoc, deriveSeries, type BookRow, type BookState, type DialValue, type PaperRail, type VariantRow } from './books-registry.ts'
 
 // ------------------------------------------------------------------ the port
 
@@ -1285,6 +1285,20 @@ export class DeskStore {
     }
     await this.#db.collection(COLLECTIONS.booksRegistry).updateOne({ tag, mode }, { $set: set })
     return await this.getBook(tag, mode)
+  }
+
+  /**
+   * A paper book's rail (`PaperRail`), with who set it and when, in ONE
+   * update. Paper rows only — the route refuses live before it gets here.
+   */
+  async setPaperRail(tag: string, rail: PaperRail, nowMs: number, setBy: string): Promise<BookRow | null> {
+    await this.#db
+      .collection(COLLECTIONS.booksRegistry)
+      .updateOne(
+        { tag, mode: 'paper' },
+        { $set: { dx_paper_rail: rail, paperRailSetBy: setBy, paperRailSetAt: nowMs, updatedAt: nowMs } },
+      )
+    return await this.getBook(tag, 'paper')
   }
 
   /** The supervisor reporting its own state back. The only writer of `actual`. */

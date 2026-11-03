@@ -33,6 +33,7 @@ import { FreezeLimits } from '@algomaker/instruments'
 import type { OrderIntent } from '@algomaker/order-bus'
 import { FakeCollection, FakeFills, FakeJournal } from './mongo-harness.ts'
 import { createOrderPlacer, isPaperOrder, tickFanout } from '../src/main.ts'
+import { DemoRail, createAdapterRouter } from '../src/dx-demo.ts'
 import { createPaperSweep, DEFAULT_PAPER_ORPHAN_MS } from '../src/paper-sweep.ts'
 import { OrderQueue, createSweeper } from '../src/queue.ts'
 import { FillWatcher } from '../src/fills.ts'
@@ -264,10 +265,17 @@ function desk(
     readonly halt?: boolean
     /** The operator's "turn the live broker off" switch (the placer's link gate). */
     readonly link?: { readonly released: boolean }
+    /**
+     * Route through the gateway's real per-order router (`createAdapterRouter`)
+     * with this as the book's `dx_paper_rail`, and `demo` as the demo rail.
+     */
+    readonly bookRail?: 'sim' | 'demo'
+    readonly demo?: Pick<Broker, 'placeOrder' | 'onOrderUpdate'>
   } = {},
 ): {
   readonly live: Broker
   readonly paper: Broker
+  readonly demo: Broker
   readonly orders: FakeCollection
   readonly events: FakeJournal
   readonly fills: FakeFills
@@ -296,6 +304,7 @@ function desk(
   const events = new FakeJournal()
   const live = new Broker('live')
   const paper = new Broker('paper')
+  const demo = new Broker('demo')
   const allowlistAsked: string[] = []
   const now = (): number => NOW
   const queue = new OrderQueue({ collection: orders, workerId: 'w1', now })
@@ -313,7 +322,19 @@ function desk(
     queue,
     journal,
     fills: watcher,
-    adapterFor: (doc) => (isPaperOrder(doc) ? paper : live),
+    adapterFor:
+      opts.bookRail === undefined
+        ? (doc) => (isPaperOrder(doc) ? paper : live)
+        : createAdapterRouter({
+            env: opts.live === true ? { DESK_BROKER: 'delta', DESK_DX_LIVE: '1' } : {},
+            simulator: paper as Pick<Broker, 'placeOrder'>,
+            live: live as Pick<Broker, 'placeOrder'>,
+            demo: (opts.demo ?? demo) as Pick<Broker, 'placeOrder'>,
+            bookRail: async () => opts.bookRail ?? 'sim',
+            stamp: async (doc, rail) => {
+              await orders.updateOne({ clientOrderId: doc['clientOrderId'] }, { $set: { dx_paper_rail: rail } })
+            },
+          }),
     resolveContract: (s) => (s === SYMBOL ? CONTRACT : null),
     freeze: () => new FreezeLimits([{ symbol: 'NIFTY', freezeQty: 100 * LOT }]),
     allowsLive: async (tag) => {
@@ -336,11 +357,12 @@ function desk(
     log: () => {},
     now,
   })
-  for (const b of [live, paper]) b.onOrderUpdate((u) => void inflight.push(watcher.handle(u)))
+  for (const b of [live, paper, demo]) b.onOrderUpdate((u) => void inflight.push(watcher.handle(u)))
 
   return {
     live,
     paper,
+    demo,
     orders,
     events,
     fills,
@@ -352,6 +374,59 @@ function desk(
     doc: () => orders.docs[0] as Record<string, unknown>,
   }
 }
+
+// ------------------------------------------------------------ the demo rail
+
+test("a PAPER order on a 'demo' book reaches the demo rail and is stamped demo; the simulator and live see nothing", async () => {
+  const d = desk({ mode: 'paper' }, { live: true, bookRail: 'demo' })
+  await d.sweep()
+  await d.settle()
+  assert.equal(d.demo.placed.length, 1)
+  assert.equal(d.paper.placed.length, 0)
+  assert.equal(d.live.placed.length, 0)
+  assert.equal(d.doc()['dx_paper_rail'], 'demo')
+  assert.equal(d.doc()['state'], 'PLACED')
+  assert.deepEqual(d.allowlistAsked, [])
+})
+
+test("a LIVE order on a book whose paper rail is 'demo' still goes to the live adapter, unstamped", async () => {
+  const d = desk({ mode: 'live' }, { live: true, bookRail: 'demo' })
+  await d.sweep()
+  await d.settle()
+  assert.equal(d.live.placed.length, 1)
+  assert.equal(d.demo.placed.length, 0)
+  assert.equal(d.doc()['dx_paper_rail'], undefined)
+})
+
+test('a symbol the testnet does not list is refused, and the JOURNAL carries the reason', async () => {
+  const rail = new DemoRail({
+    loadConfig: async () => ({
+      baseUrl: 'https://cdn-ind.testnet.deltaex.org',
+      wsUrl: 'wss://socket-ind.testnet.deltaex.org',
+      apiKey: 'DK',
+      apiSecret: 'DS',
+      source: 'broker-store',
+    }),
+    makeRest: () =>
+      ({
+        products: async () => [{ id: 1, symbol: 'C-BTC-77000-041126', contract_type: 'call_options', contract_value: '0.001', tick_size: '0.1' }],
+        placeOrder: async () => {
+          throw new Error('must not be sent')
+        },
+      }) as never,
+    now: () => NOW,
+    log: () => {},
+  })
+  const d = desk({ mode: 'paper' }, { bookRail: 'demo', demo: rail as never })
+  await d.sweep()
+  await d.settle()
+  assert.equal(d.paper.placed.length, 0, 'never the simulator instead')
+  const failed = d.events.rows.find((e) => e['phase'] === 'FAILED')
+  assert.ok(failed !== undefined, 'a FAILED row is journalled')
+  assert.match(String(failed['error']), new RegExp(`${SYMBOL} is not listed on the Delta testnet`))
+  assert.equal(failed['errorClass'], 'fatal')
+  assert.equal(d.doc()['dx_paper_rail'], 'demo')
+})
 
 test('a PAPER order reaches the simulator, and the live allowlist is never asked', async () => {
   // The allowlist answers NO for everything, so a paper order that were asked

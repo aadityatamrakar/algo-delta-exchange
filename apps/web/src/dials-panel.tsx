@@ -82,6 +82,8 @@ import { Collapsible } from '@astryxdesign/core/Collapsible'
 import { PRESETS } from '@algomaker/desk-engine/presets'
 import { api, type BookRow, type DialValue } from './api.ts'
 import { withReauth, type Reauth } from './auth.tsx'
+import { PaperRailControl } from './paper-rail.tsx'
+import { VENUE } from './venue.ts'
 import {
   dialMeta,
   dialsPatch,
@@ -402,6 +404,14 @@ export function DialsPanel(props: {
             <Button variant="ghost" size="sm" label="Close" onClick={props.onClose} />
           </HStack>
         </HStack>
+
+        {/*
+          WHERE THIS PAPER BOOK'S ORDERS GO — the simulator or Delta's testnet.
+          DX only (the demo exchange is Delta's), paper only (the control
+          renders nothing for a live row). Not a dial: it is the book's
+          registry field `dx_paper_rail`, switched on its own confirm.
+        */}
+        {VENUE.id === 'dx' ? <PaperRailControl row={row} onSwitched={() => props.onSaved()} /> : null}
 
         {/*
           THE ONE THING THIS PANEL CANNOT CHECK. The API stores dials verbatim;

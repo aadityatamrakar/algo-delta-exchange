@@ -39,6 +39,24 @@ import {
 /** The operator's ask, or the supervisor's report — never both meanings in one field. */
 export type BookState = 'stopped' | 'running'
 
+/**
+ * WHERE A PAPER BOOK'S ORDERS ARE WORKED (Delta desk). `sim` is the gateway's
+ * simulator; `demo` is Delta's India testnet, through the `delta-demo`
+ * credentials. Live rows carry `sim` and the gateway never reads it for them:
+ * a live order goes to Delta production or nowhere. A registry field, not a
+ * dial — it routes orders and the engine never reads it.
+ */
+export type PaperRail = 'sim' | 'demo'
+
+export function isPaperRail(v: unknown): v is PaperRail {
+  return v === 'sim' || v === 'demo'
+}
+
+/** The stored value, read fail-safe: anything but an exact `'demo'` is the simulator. */
+export function paperRailOf(v: unknown): PaperRail {
+  return v === 'demo' ? 'demo' : 'sim'
+}
+
 export interface BookRow {
   /** The book's key, and the order-bus tag every decision on it arrives under. */
   readonly tag: string
@@ -59,6 +77,8 @@ export interface BookRow {
   readonly desired: BookState
   /** What the supervisor last reported of itself. May lag `desired`. */
   readonly actual: BookState
+  /** Paper books only: the simulator or Delta's testnet. See `PaperRail`. */
+  readonly dx_paper_rail: PaperRail
   /** Epoch ms of the supervisor's last mark, 0 when it has never reported. */
   readonly lastMarkAt: number
   /** Free text: the supervisor's last decision, for the operator's own reading. */
@@ -75,6 +95,7 @@ export const DEFAULT_BOOK: Omit<BookRow, 'tag' | 'symbol' | 'expiry' | 'mode' | 
   dials: {},
   desired: 'stopped',
   actual: 'stopped',
+  dx_paper_rail: 'sim',
   lastMarkAt: 0,
   lastDecision: '',
   createdAt: 0,
@@ -515,6 +536,7 @@ export function bookFromDoc(doc: Record<string, unknown> | null): BookRow | null
     dials,
     desired: isBookState(doc['desired']) ? doc['desired'] : 'stopped',
     actual: isBookState(doc['actual']) ? doc['actual'] : 'stopped',
+    dx_paper_rail: paperRailOf(doc['dx_paper_rail']),
     lastMarkAt: typeof doc['lastMarkAt'] === 'number' && Number.isFinite(doc['lastMarkAt']) ? doc['lastMarkAt'] : 0,
     lastDecision: typeof doc['lastDecision'] === 'string' ? doc['lastDecision'] : '',
     createdAt: typeof doc['createdAt'] === 'number' ? doc['createdAt'] : 0,

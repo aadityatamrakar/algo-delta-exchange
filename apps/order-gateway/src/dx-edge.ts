@@ -14,6 +14,7 @@
  */
 import type { SimulatorOptions } from '@algomaker/brokers'
 import { DX_OPTION_FEE_RATES, optionFee } from '@algomaker/dx'
+import { orderMode } from './journal.ts'
 
 export type GatewayBrokerMode = 'simulate' | 'delta'
 
@@ -47,6 +48,34 @@ export function chooseAdapter<A>(
   adapters: { readonly simulator: A; readonly delta: A | null },
 ): A {
   return adapters.delta !== null && routesToDelta(doc, env) ? adapters.delta : adapters.simulator
+}
+
+/** Where one order is worked: Delta production, Delta's testnet, or the simulator. */
+export type OrderRail = 'live' | 'demo' | 'sim'
+
+/** A paper book's choice, from `desk-books-registry.dx_paper_rail`. */
+export type PaperRailChoice = 'sim' | 'demo'
+
+/** The rail a document was first placed on, if it carries one. */
+export function stampedPaperRail(doc: Record<string, unknown>): PaperRailChoice | null {
+  const v = doc['dx_paper_rail']
+  return v === 'demo' || v === 'sim' ? v : null
+}
+
+/**
+ * THE RAIL FOR THIS DOCUMENT.
+ *
+ *   live — `routesToDelta` exactly as before: exact `'live'`, `DESK_DX_LIVE=1`,
+ *          a delta broker. Nothing here can send a live order anywhere else.
+ *   demo — a PAPER document (`orderMode`, fail-closed) whose book chose the
+ *          demo rail, or which was already placed on it (the stamp wins, so
+ *          every tranche of one order goes to one exchange).
+ *   sim  — everything else, a live document with the live rail off included.
+ */
+export function chooseRail(doc: Record<string, unknown>, env: Env, bookRail: PaperRailChoice): OrderRail {
+  if (routesToDelta(doc, env)) return 'live'
+  if (orderMode(doc) !== 'paper') return 'sim'
+  return (stampedPaperRail(doc) ?? bookRail) === 'demo' ? 'demo' : 'sim'
 }
 
 const r8 = (x: number): number => Number(x.toFixed(8))
