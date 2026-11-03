@@ -148,8 +148,18 @@ export class DxRest {
     return this.#result(await this.#request<DxOrder>('DELETE', '/v2/orders', {}, { id, product_id: productId }, true))
   }
 
-  async editOrder(o: { id: number; productId: number; limitPrice: string }): Promise<DxOrder> {
-    const body = { id: o.id, product_id: o.productId, limit_price: o.limitPrice }
+  /**
+   * Reprice; with `size` (the new TOTAL size) and/or `stopPrice` it also
+   * resizes or moves a stop order (verified on the India testnet, 3 Nov 2026).
+   */
+  async editOrder(o: { id: number; productId: number; limitPrice: string; size?: number; stopPrice?: string }): Promise<DxOrder> {
+    const body = {
+      id: o.id,
+      product_id: o.productId,
+      limit_price: o.limitPrice,
+      ...(o.size === undefined ? {} : { size: o.size }),
+      ...(o.stopPrice === undefined ? {} : { stop_price: o.stopPrice }),
+    }
     return this.#result(await this.#request<DxOrder>('PUT', '/v2/orders', {}, body, true))
   }
 
@@ -161,6 +171,26 @@ export class DxRest {
    */
   async openOrders(): Promise<DxOrder[]> {
     return this.#orderPages('/v2/orders', { states: 'open,pending' }, undefined, true)
+  }
+
+  /**
+   * `DELETE /v2/orders/all` with Delta's own filters. `cancel_stop_orders:
+   * false` leaves untriggered stops resting (verified on testnet, 3 Nov 2026).
+   */
+  async cancelAllOrders(body: {
+    product_id?: number
+    contract_types?: string
+    cancel_limit_orders?: boolean
+    cancel_stop_orders?: boolean
+    cancel_reduce_only_orders?: boolean
+  }): Promise<void> {
+    await this.#request('DELETE', '/v2/orders/all', {}, body, true)
+  }
+
+  /** `POST /v2/positions/close_all` — every position, portfolio and isolated. Does not cancel orders. */
+  async closeAllPositions(): Promise<unknown> {
+    const env = await this.#request<unknown>('POST', '/v2/positions/close_all', {}, { close_all_portfolio: true, close_all_isolated: true }, true)
+    return env.result ?? null
   }
 
   /**
@@ -227,6 +257,19 @@ export class DxRest {
     } else {
       await this.#request('POST', '/v2/heartbeat', {}, { heartbeat_id: id, ttl: ttlMs }, true)
     }
+  }
+
+  /**
+   * One ack of this client's heartbeat id, returning Delta's answer.
+   * OBSERVED ON TESTNET (3 Nov 2026): an ack with `ttl: 0` on an ENABLED switch
+   * disables it (`process_enabled: false`); the same ack on an already
+   * disabled one RE-ENABLES it with a zero ttl, which fires at once. So a
+   * caller that wants it off acks a normal ttl first, then 0.
+   */
+  async heartbeatAck(ttlMs: number): Promise<{ process_enabled?: boolean | string; heartbeat_timestamp?: unknown }> {
+    const id = this.#o.heartbeatId ?? 'algomaker-dx'
+    const env = await this.#request<{ process_enabled?: boolean | string }>('POST', '/v2/heartbeat', {}, { heartbeat_id: id, ttl: ttlMs }, true)
+    return env.result ?? {}
   }
 
   // ---------------------------------------------------------------- core

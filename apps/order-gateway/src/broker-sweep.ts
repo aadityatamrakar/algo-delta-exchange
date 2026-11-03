@@ -43,6 +43,7 @@
 
 import type { BrokerAdapter, PlacedOrder } from '@algomaker/brokers'
 import type { OrderStatus } from '@algomaker/order-bus'
+import { isBackstopOrderId } from './dx-backstop.ts'
 import type { FillWatcher } from './fills.ts'
 import { packedToExchangeToken } from './gateway.ts'
 import { orderMode, type OrderEvent, type OrderJournal } from './journal.ts'
@@ -186,6 +187,10 @@ export function createBrokerSweep(
     let foreign = 0
 
     for (const row of rows) {
+      // An exchange backstop (`dx-backstop.ts`) is that loop's own order, not a
+      // desk tranche and not a stranger's: replaying it would only ask the
+      // watcher about it and name it foreign, every pass.
+      if (isBackstopOrderId(row.clientOrderId)) continue
       try {
         if (row.clientOrderId !== null && row.clientOrderId !== '') {
           clientOrderIds.add(row.clientOrderId)

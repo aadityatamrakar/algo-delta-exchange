@@ -42,6 +42,7 @@ import { BookBuildPage } from './book-build.tsx'
 import { ReportsPage } from './reports.tsx'
 import { ChainPage } from './chain.tsx'
 import { BRAND } from './venue.ts'
+import { AlertsBanner } from './alerts-banner.tsx'
 
 /**
  * The width at and above which the whole navbar fits on one row.
@@ -252,6 +253,8 @@ function Desk(props: {
         The phone gets a tighter step again, in responsive.css.
       */}
       <VStack gap={3} padding={4} className="desk-page">
+        {/* Unacked critical/warn desk-alerts, on every page (alerts-banner.tsx). */}
+        <AlertsBanner />
         <PageBoundary resetKey={`${loc.route}:${loc.tag ?? ''}:${mode}`}>
         {loc.route === 'positions' ? (
           <BookTabsPage mode={mode} tag={loc.tag} onSelect={selectTag} />

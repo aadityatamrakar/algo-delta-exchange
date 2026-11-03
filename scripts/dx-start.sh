@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start the Delta desk (pm2 namespace dx), one app at a time, stopping on the first error.
-# Starts: dx-marketdata dx-api dx-gateway dx-supervisor dx-web. Never dx-runner or dx-traders.
+# Starts: dx-marketdata dx-api dx-gateway dx-supervisor dx-watchdog dx-web. Never dx-runner or dx-traders.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -28,7 +28,7 @@ done <<<"$names"
 echo "building the web (VITE_DESK_VENUE=dx)..."
 VITE_DESK_VENUE=dx npm run build --workspace @algomaker/web
 
-for app in dx-marketdata dx-api dx-gateway dx-supervisor dx-web; do
+for app in dx-marketdata dx-api dx-gateway dx-supervisor dx-watchdog dx-web; do
   echo "starting $app"
   npx pm2 start "$ECO" --only "$app"
 done

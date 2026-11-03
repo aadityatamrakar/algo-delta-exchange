@@ -1,0 +1,13 @@
+{
+  "name": "@algomaker/watchdog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "dx-watchdog: watches the desk from outside and Delta directly — alerts on an outage with open positions, cancels the desk's working orders when the gateway is gone, flattens the live account after a long outage, checks every short leg has its exchange backstop, and forwards desk-alerts to Telegram.",
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/core": "1.0.0",
+    "@algomaker/dx": "1.0.0"
+  }
+}

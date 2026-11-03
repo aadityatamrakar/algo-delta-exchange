@@ -45,6 +45,7 @@ import { API_VENUE } from './venue.ts'
 import { createAuthGate } from './authsvc.ts'
 import { healthRoutes } from './routes/health.ts'
 import { systemRoutes } from './routes/system.ts'
+import { alertRoutes } from './routes/alerts.ts'
 import { authRoutes } from './routes/auth.ts'
 import { brokerRoutes } from './routes/brokers.ts'
 import { deskRoutes } from './routes/desk.ts'
@@ -959,6 +960,8 @@ export async function main(): Promise<void> {
       // every process, its cadence and its broker session state, which is a map
       // of the desk for anyone who can reach the port.
       systemRoutes(routeDeps),
+      // desk-alerts: the banner's unacked list and its Ack (routes/alerts.ts).
+      alertRoutes(routeDeps),
       pnlRoutes(routeDeps),
       // READ-ONLY, and structurally so: the cockpit prices, ranks and explains;
       // it never routes an order. Its one outbound call is `verify-margin`,

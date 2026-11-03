@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import type { BrokerOrder, PlacedOrder } from '@algomaker/brokers'
 import { createBrokerSweep, type BrokerSweepDeps, type SweepOrdersCollection } from '../src/broker-sweep.ts'
 import { FillWatcher } from '../src/fills.ts'
+import { backstopClientOrderId } from '../src/dx-backstop.ts'
 import { OrderQueue } from '../src/queue.ts'
 import type { OrderEvent } from '../src/journal.ts'
 
@@ -615,4 +616,15 @@ test('a LIVE document with NO mode is still swept — `$ne` matches a missing fi
   })
   await h.run()
   assert.equal(h.events.length > 0, true, 'the existing live book keeps its alerts')
+})
+
+test("an exchange BACKSTOP row is the backstop loop's: not replayed, not resolved, not called foreign", async () => {
+  // `dx-backstop.ts` rests a reduce-only stop per short leg. It is no desk
+  // order: replaying it would ask the watcher about it every pass and log it
+  // as a foreign order, noise on exactly the orders that must be left alone.
+  const stop = row({ brokerOrderId: '77', clientOrderId: backstopClientOrderId('live', TAG, SYMBOL), status: 'WORKING', filledQty: 0 })
+  const h = harness({ book: [stop], docs: [orderDoc()], resolvable: true })
+  await h.run()
+  assert.deepEqual(h.handled, [])
+  assert.equal(h.logs.filter((l) => l.includes('77')).length, 0)
 })
