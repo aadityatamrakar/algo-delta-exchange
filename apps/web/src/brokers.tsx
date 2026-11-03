@@ -31,13 +31,15 @@ import {
   type BrokerKind, type BrokerRow, type BrokerState, type BrokerTestResult,
 } from './api.ts'
 import { usePoll } from './shell.tsx'
+import { VENUE } from './venue.ts'
 
 /**
- * Both brokers always get a card, even when the API returns neither, because
- * "XTS is not configured" is information the operator came here for. An empty
- * page would read as "nothing to do".
+ * Every broker of this venue always gets a card, even when the API returns
+ * none, because "XTS is not configured" is information the operator came here
+ * for. An empty page would read as "nothing to do". The DX build has one
+ * broker, Delta Exchange.
  */
-const KINDS: readonly BrokerKind[] = ['xts', 'zerodha']
+const KINDS: readonly BrokerKind[] = VENUE.id === 'dx' ? ['delta'] : ['xts', 'zerodha']
 
 interface FieldSpec { key: string; label: string; hint?: string }
 
@@ -85,6 +87,19 @@ const FIELDS: Record<BrokerKind, { label: string; secret: FieldSpec[]; meta: Fie
       { key: 'totpSecret', label: 'TOTP secret' },
     ],
     meta: [{ key: 'userId', label: 'User id' }],
+  },
+  /**
+   * Delta Exchange India: an API key and its secret (HMAC-SHA256 signing).
+   * The REST base is fixed by the gateway (`api.india.delta.exchange`), so
+   * nothing about the endpoint is typed here.
+   */
+  delta: {
+    label: 'Delta Exchange',
+    secret: [
+      { key: 'apiKey', label: 'API key' },
+      { key: 'apiSecret', label: 'API secret' },
+    ],
+    meta: [],
   },
 }
 

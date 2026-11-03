@@ -10,7 +10,7 @@ test('the traders page reaches only its own code and the shared chart', () => {
   const { files, externals } = walkRuntimeImports(['apps/web/src/traders/main.tsx'])
   const allowedFile = (f: string): boolean =>
     f.startsWith('apps/web/src/traders/') ||
-    ['apps/web/src/payoff-curves.tsx', 'apps/web/src/format.ts', 'apps/web/src/theme-mode.ts', 'apps/web/src/boundary.tsx', 'apps/traders/src/types.ts'].includes(f) ||
+    ['apps/web/src/payoff-curves.tsx', 'apps/web/src/format.ts', 'apps/web/src/venue.ts', 'apps/web/src/theme-mode.ts', 'apps/web/src/boundary.tsx', 'apps/traders/src/types.ts'].includes(f) ||
     /^apps\/web\/src\/[^/]+\.css$/.test(f)
   assert.deepEqual([...files].filter((f) => !allowedFile(f)), [])
   assert.deepEqual([...externals].filter((e) => !/^(react|react-dom|recharts|@astryxdesign\/)/.test(e)), [])

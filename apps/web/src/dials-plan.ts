@@ -53,6 +53,8 @@ import {
   type Dials,
 } from '@algomaker/desk-engine/dials'
 import { PRESETS } from '@algomaker/desk-engine/presets'
+import { VENUE } from './venue.ts'
+import { currencySymbol } from './format.ts'
 
 /** Mirrors `DialValue` in `api.ts`: a dial is a number or a boolean, never null. */
 export type DialValue = number | boolean
@@ -315,7 +317,8 @@ export interface DialMeta {
 
 const UNIT_TEXT: Readonly<Record<DialUnitKind, string | null>> = {
   clock: 'min of day',
-  rupee: '₹',
+  // The venue currency: ₹ on NSE, $ on DX (a "rupee" dial is a money dial).
+  rupee: currencySymbol(),
   seconds: 's',
   ms: 'ms',
   // A fraction gets no trailing unit: "0.5 of 1" reads worse than the "= 50%"
@@ -802,7 +805,7 @@ function clockOf(v: number): string {
 }
 
 const rupeesOf = (v: number): string =>
-  `${v < 0 ? '−' : ''}₹${Math.abs(v).toLocaleString('en-IN')}`
+  `${v < 0 ? '−' : ''}${currencySymbol()}${Math.abs(v).toLocaleString(VENUE.currency === 'USD' ? 'en-US' : 'en-IN')}`
 
 /**
  * The dial's value in the terms the spec states it in, or null when the raw

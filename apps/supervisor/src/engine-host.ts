@@ -177,6 +177,7 @@ import {
   theoreticalPrice,
   totalPnl,
 } from '@algomaker/desk-engine'
+import { roundToStep, venueFromEnv, type VenueSpec } from '@algomaker/venue'
 import type {
   ChainSnap,
   DecisionRequest,
@@ -294,9 +295,15 @@ export interface EngineHostDeps {
   onMark?(sample: MarkSample): void
   /**
    * The contract's tick size, for flooring a maker quote onto the exchange's
-   * grid. `null`/absent falls back to `DEFAULT_TICK` — see `#quoteAt`.
+   * grid. `null`/absent falls back to the venue's `defaultTick` — see `#quoteAt`.
    */
   tickSizeFor?(strike: number, optType: OptType): number | null
+  /**
+   * The venue this book trades on: its quantity step, default tick, clock and
+   * expiry instant. Absent = `venueFromEnv()` (`DESK_VENUE`, NSE when unset),
+   * read once when the host is built.
+   */
+  readonly venue?: VenueSpec
   /**
    * CANCEL EVERY ORDER STILL WORKING UNDER THIS DECISION, and answer how many
    * cancels were requested.
@@ -819,7 +826,24 @@ function shapeOf(decision: EngineDecision): string {
   return JSON.stringify([decision.trigger, actions])
 }
 
-const lotsOf = (qty: number, lotSize: number): number => (lotSize > 0 ? qty / lotSize : 0)
+/**
+ * Lots in a quantity, FLOAT-CLEAN: (0.1 + 0.2) / 0.001 is 300.00000000000006,
+ * which `Math.ceil` would call 301. Snapped to a grid far finer than any lot
+ * (1e-6 of one) rather than to whole lots, so a quantity that really is part
+ * of a lot keeps its fraction and is never rounded to 0.
+ */
+const lotsOf = (qty: number, lotSize: number): number =>
+  lotSize > 0 ? roundToStep(qty / lotSize, LOT_GRID) : 0
+const LOT_GRID = 1e-6
+
+/**
+ * The quantity a whole number of lots puts on the wire: `lots × lotSize` on
+ * the venue's grid. NSE (step 1) is the old `Math.round(lots × lotSize)`
+ * exactly; Delta (step 0.001) is BTC, where that `Math.round` was 0.
+ */
+export function wireQty(lots: number, lotSize: number, step: number): number {
+  return roundToStep(lots * lotSize, step)
+}
 
 /**
  * The book's execution dials as the wire carries them — absent when off.
@@ -1030,7 +1054,7 @@ export function pendingLotsOf(
       continue
     }
     const size = leg.lotSize > 0 ? leg.lotSize : lotSize
-    lots += Math.ceil(Math.abs(leg.lots * size - action.targetQty) / (size > 0 ? size : 1))
+    lots += Math.ceil(lotsOf(Math.abs(leg.lots * size - action.targetQty), size > 0 ? size : 1))
   }
   return lots
 }
@@ -1085,11 +1109,10 @@ function sameRuleState(a: RuleState, b: RuleState): boolean {
  * an error in the log rather than a fill at a price nobody chose. The master IS
  * asked first (`tickSizeFor`); this is what a deployment without it gets.
  */
-const DEFAULT_TICK = 0.05
-
 export class EngineHost {
   readonly #d: EngineHostDeps
   readonly #marks: MarkClock
+  readonly #venue: VenueSpec
   /** The serial queue — one pass at a time. See `#serial`. */
   #running: Promise<void> = Promise.resolve()
   #intent: ArmedIntent | null = null
@@ -1180,6 +1203,7 @@ export class EngineHost {
   constructor(deps: EngineHostDeps) {
     this.#d = deps
     this.#marks = deps.marks ?? new MarkClock()
+    this.#venue = deps.venue ?? venueFromEnv()
   }
 
   /** The decision this book is waiting on — the 1 s poll loop's gate. */
@@ -2087,7 +2111,7 @@ export class EngineHost {
       // ALWAYS `pricing: 'live'`. Parity is a fixture-replay mode and is not
       // settable from anywhere (`marking.ts` §1): a live book steered off
       // Python's mid-or-LTP float is the defect this migration exists to retire.
-      markLeg(leg, quoteFor(chain, leg.strike, leg.optType), chain, dateIst, minuteOfDay, 'live'),
+      markLeg(leg, quoteFor(chain, leg.strike, leg.optType), chain, dateIst, minuteOfDay, 'live', this.#venue),
     )
     return {
       tag: this.#d.tag,
@@ -2104,6 +2128,8 @@ export class EngineHost {
       pendingLots: pendingLotsOf(state, book, chain.lotSize),
       repairHold: await this.#d.repairHold(),
       pricing: 'live',
+      // Absent on NSE, so an NSE book's inputs are exactly what they were.
+      ...(this.#venue.id === 'nse' ? {} : { venue: this.#venue }),
     }
   }
 
@@ -2246,6 +2272,7 @@ export class EngineHost {
       sale.optType,
       inputs.dateIst,
       inputs.minuteOfDay,
+      this.#venue,
     )
     if (g === null) return false
     const lotEquivalent = Math.abs(g.delta) * inputs.chain.lotSize
@@ -2413,7 +2440,7 @@ export class EngineHost {
           })
           continue
         }
-        const qty = Math.round(action.lots * inputs.chain.lotSize)
+        const qty = wireQty(action.lots, inputs.chain.lotSize, this.#venue.qtyStep)
         if (!(qty > 0)) continue
         // `makerQuote` and ONLY `makerQuote`: the flag means "the liquidity gate
         // refused this strike's book", which is a statement about the CHAIN. It
@@ -2483,7 +2510,7 @@ export class EngineHost {
         })
         continue
       }
-      const shares = leg.lots * leg.lotSize
+      const shares = wireQty(leg.lots, leg.lotSize, this.#venue.qtyStep)
       if (action.op === 'close') {
         out.push({
           action: { op: 'close', instrument: action.instrument, ...(workMode === undefined ? {} : { workMode }) },
@@ -2505,7 +2532,7 @@ export class EngineHost {
         })
         continue
       }
-      const targetQty = Math.round(action.targetLots * leg.lotSize)
+      const targetQty = wireQty(action.targetLots, leg.lotSize, this.#venue.qtyStep)
       out.push({
         action: { op: 'resize', instrument: action.instrument, targetQty, ...(workMode === undefined ? {} : { workMode }) },
         basis: {
@@ -2518,7 +2545,7 @@ export class EngineHost {
           entry: leg.entry,
           lots: leg.lots,
           lotSize: leg.lotSize,
-          intentQty: Math.abs(shares - targetQty),
+          intentQty: roundToStep(Math.abs(shares - targetQty), this.#venue.qtyStep),
         },
       })
     }
@@ -2578,11 +2605,13 @@ export class EngineHost {
       optType,
       inputs.dateIst,
       inputs.minuteOfDay,
+      this.#venue,
     )
     if (theo === null) return undefined
 
     const rawTick = this.#d.tickSizeFor?.(strike, optType) ?? null
-    const tick = rawTick !== null && Number.isFinite(rawTick) && rawTick > 0 ? rawTick : DEFAULT_TICK
+    const tick =
+      rawTick !== null && Number.isFinite(rawTick) && rawTick > 0 ? rawTick : this.#venue.defaultTick
     // At least ONE tick: a sub-tick theoretical floors to zero, and a limit of
     // zero is not a quote — it is an order to sell at nothing.
     const price = Math.max(tick, Math.floor(theo / tick) * tick)
@@ -3008,13 +3037,15 @@ export class EngineHost {
    */
   async #progress(request: DecisionRequest, outcome: DecisionResponse): Promise<void> {
     const { tag, mode, log } = this.#d
+    const step = this.#venue.qtyStep
     await this.#update((current) => {
       if (current.inFlight !== request.decisionId) return null
       const wp = current.workingPackage
       if (wp === null) return null
       const filled = new Map<string, number>()
       for (const fill of outcome.fills) {
-        filled.set(fill.instrument, (filled.get(fill.instrument) ?? 0) + fill.qty)
+        // On the venue grid: 0.05 + 0.05 + 0.05 is 0.15000000000000002.
+        filled.set(fill.instrument, roundToStep((filled.get(fill.instrument) ?? 0) + fill.qty, step))
       }
       const basis = new Map(wp.basis.map((b) => [b.instrument, b]))
       // What is STILL OUTSTANDING, per contract — never more than it was.
@@ -3033,7 +3064,10 @@ export class EngineHost {
         const intent = basis.get(action.instrument)?.intentQty ?? 0
         if (intent > 0 && done >= intent) continue
         if (action.op === 'open') {
-          const left = Math.min(action.qty - done, outstanding.get(action.instrument) ?? action.qty)
+          const left = roundToStep(
+            Math.min(action.qty - done, outstanding.get(action.instrument) ?? action.qty),
+            step,
+          )
           if (left <= 0) continue
           remaining.push({ ...action, qty: left })
           continue

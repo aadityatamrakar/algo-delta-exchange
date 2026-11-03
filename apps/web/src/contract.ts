@@ -26,11 +26,30 @@ const WEEKLY = new RegExp(`^([A-Z0-9&-]+?)(\\d{2})([1-9OND])(\\d{2})(\\d+(?:\\.\
 /** SYMBOL + YY + MMM + FUT. */
 const FUTURE = new RegExp(`^([A-Z0-9&-]+?)(\\d{2})(?:${MONTHS})FUT$`)
 
+/**
+ * DELTA EXCHANGE: `C-BTC-76600-041126` — C/P, underlying, strike, DDMMYY.
+ *
+ * Unlike the NSE packings the EXPIRY IS KEPT on screen: a DX book trades
+ * dailies, weeklies and monthlies side by side, so "BTC 76600 CE" names three
+ * different contracts.
+ */
+const DELTA = /^([CP])-([A-Z0-9]+)-(\d+(?:\.\d+)?)-(\d{2})(\d{2})(\d{2})$/
+
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 /** What an exchange packing decomposes into. `strike` is null for a future. */
 export interface ParsedContract {
   readonly underlying: string
   readonly strike: number | null
   readonly type: 'CE' | 'PE' | 'FUT'
+  /** `YYYY-MM-DD`, present only for a packing that carries its full date (Delta). */
+  readonly expiry?: string
+}
+
+/** The Delta symbol for a leg: `deltaSymbol('BTC', 76600, 'CE', '2026-11-04')` → `C-BTC-76600-041126`. */
+export function deltaSymbol(underlying: string, strike: number, type: 'CE' | 'PE', expiry: string): string {
+  const [y, m, d] = expiry.split('-')
+  return `${type === 'CE' ? 'C' : 'P'}-${underlying}-${strike}-${d ?? ''}${m ?? ''}${(y ?? '').slice(2)}`
 }
 
 /**
@@ -47,6 +66,16 @@ export interface ParsedContract {
  */
 export function parseContract(tradingsymbol: string): ParsedContract | null {
   const s = tradingsymbol.trim().toUpperCase()
+
+  const delta = DELTA.exec(s)
+  if (delta !== null) {
+    return {
+      underlying: delta[2] as string,
+      strike: Number(delta[3]),
+      type: delta[1] === 'C' ? 'CE' : 'PE',
+      expiry: `20${delta[6] as string}-${delta[5] as string}-${delta[4] as string}`,
+    }
+  }
 
   const monthly = MONTHLY.exec(s)
   if (monthly !== null) {
@@ -79,5 +108,9 @@ export function formatContract(tradingsymbol: string): string {
   // raw symbol is strictly better than guessing at one.
   if (parsed === null) return tradingsymbol
   if (parsed.type === 'FUT') return `${parsed.underlying} FUT`
+  if (parsed.expiry !== undefined) {
+    const [, m, d] = parsed.expiry.split('-')
+    return `${parsed.underlying} ${d ?? ''} ${MONTH_SHORT[Number(m) - 1] ?? m ?? ''} ${parsed.strike} ${parsed.type}`
+  }
   return `${parsed.underlying} ${parsed.strike} ${parsed.type}`
 }

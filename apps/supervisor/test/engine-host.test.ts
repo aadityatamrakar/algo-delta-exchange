@@ -60,6 +60,7 @@ import {
   type StateCollection,
   type SupervisorBookState,
 } from '../src/state-store.ts'
+import { DX, type VenueSpec } from '@algomaker/venue'
 
 // ────────────────────────────────────────────────────────────── the market
 
@@ -320,7 +321,9 @@ function makeLive(
 }
 
 function make(
-  over: Partial<Pick<Harness, 'book' | 'dials' | 'chain' | 'margin' | 'noCancel'>> = {},
+  over: Partial<Pick<Harness, 'book' | 'dials' | 'chain' | 'margin' | 'noCancel'>> & {
+    readonly venue?: VenueSpec
+  } = {},
   mode: 'paper' | 'live' = 'paper',
 ): Harness {
   const collection = new FakeStateCollection()
@@ -366,6 +369,7 @@ function make(
     log,
     onMark: (sample) => h.marks.push(sample),
     tickSizeFor: () => h.tick,
+    ...(over.venue === undefined ? {} : { venue: over.venue }),
     /**
      * The cancel port. Present unless a test asks for the deployment that has
      * none, so "a guard preempts a working package" is the DEFAULT behaviour
@@ -1920,4 +1924,105 @@ test('a recenter DONE whose every OPEN was skipped is SETTLED, not rolled back �
     0,
     'no refusal fold on the recenter engine',
   )
+})
+
+// ──────────────────────────────────────── 0.001 quantities on Delta (DX)
+
+/**
+ * THE SAME BOOK ON A 0.001 LOT. On NSE the wire quantity is `lots × lotSize`
+ * rounded to a whole share; on Delta it is BTC on a 0.001 grid, and the old
+ * `Math.round` turned every sub-1-BTC open into 0 and dropped it.
+ */
+const BTC_LOT = 0.001
+const dxChain = (): ChainSnap => ({ ...chainOf(), lotSize: BTC_LOT })
+const dxBook = (): LegPosition[] => [legOf({ lotSize: BTC_LOT })]
+const onGrid = (x: number): boolean => x === Number((Math.round(x / BTC_LOT) * BTC_LOT).toFixed(3))
+
+test('DX: a shed of N lots × 0.001 posts qty N/1000 BTC, not 0', async () => {
+  const h = make({ venue: DX, book: dxBook(), chain: dxChain(), dials: dialsOf({ confirm_ms: 60_000 }) })
+  await h.host.evaluate()
+  assert.equal(h.client.requests.length, 1, 'the open is routed, not dropped as 0')
+  const action = h.client.requests[0]?.actions[0]
+  assert.ok(action !== undefined && action.op === 'open', JSON.stringify(action))
+  assert.ok(action.qty > 0 && action.qty < 1, String(action.qty))
+  assert.ok(onGrid(action.qty), `${action.qty} is a clean multiple of 0.001`)
+})
+
+test('DX: lots 50 × 0.001 on the wire is exactly 0.05', async () => {
+  const { wireQty } = await import('../src/engine-host.ts')
+  assert.equal(wireQty(50, BTC_LOT, DX.qtyStep), 0.05)
+  assert.equal(wireQty(150, BTC_LOT, DX.qtyStep), 0.15)
+  assert.equal(wireQty(1, BTC_LOT, DX.qtyStep), 0.001)
+  // NSE: identical to the old Math.round(lots × lotSize).
+  assert.equal(wireQty(54, LOT, 1), 54 * LOT)
+})
+
+test('DX: a partial fill leaves a clean 0.001 remainder', async () => {
+  const h = make({ venue: DX, book: dxBook(), chain: dxChain(), dials: dialsOf({ confirm_ms: 0, cooldown_s: 0 }) })
+  h.client.fallback = (req): DecisionResponse => {
+    const a = req.actions[0]
+    if (a === undefined || a.op !== 'open') return done(req.decisionId)
+    // 0.054 − 0.012 is 0.041999999999999996 in floating point.
+    return working(req.decisionId, [{ instrument: a.instrument, side: 'Sell', qty: 0.012, price: 0.6 }])
+  }
+  await h.host.evaluate()
+  const sent = h.client.requests[0]?.actions[0]
+  assert.ok(sent !== undefined && sent.op === 'open')
+  const held = await h.state()
+  const left = held.workingPackage?.remaining[0]
+  assert.ok(left !== undefined && left.op === 'open', JSON.stringify(held.workingPackage))
+  assert.equal(left.qty, Number((sent.qty - 0.012).toFixed(3)), `${sent.qty} − 0.012 = ${left.qty}`)
+
+})
+
+test('DX: a filled sale folds onto rcStack as whole lots', async () => {
+  const h = make({ venue: DX, book: dxBook(), chain: dxChain(), dials: dialsOf({ confirm_ms: 0, cooldown_s: 0 }) })
+  // Three partial fills that sum to 0.30000000000000004 in floating point.
+  h.client.fallback = (req): DecisionResponse => {
+    const a = req.actions[0]
+    if (a === undefined || a.op !== 'open') return done(req.decisionId)
+    return done(req.decisionId, [
+      { instrument: a.instrument, side: 'Sell', qty: 0.1, price: 0.6 },
+      { instrument: a.instrument, side: 'Sell', qty: 0.2, price: 0.6 },
+    ])
+  }
+  await h.host.evaluate()
+  const stack = (await h.state()).ruleState.rcStack
+  assert.ok(stack.length >= 1, JSON.stringify(stack))
+  for (const row of stack) assert.ok(Number.isInteger(row.lots), `${row.lots} lots`)
+})
+
+test('pendingLotsOf: 0.1 + 0.2 BTC still owed at 0.001 is 300 lots, not 301', async () => {
+  const { pendingLotsOf } = await import('../src/engine-host.ts')
+  const h = make()
+  const state = await h.state()
+  const lots = pendingLotsOf(
+    {
+      ...state,
+      workingPackage: {
+        decisionId: 'x',
+        remaining: [{ op: 'open', instrument: SHED_INSTRUMENT, side: 'Sell', qty: 0.1 + 0.2 }],
+        basis: [],
+        startedAt: 0,
+      } as unknown as NonNullable<SupervisorBookState['workingPackage']>,
+    },
+    [],
+    BTC_LOT,
+  )
+  assert.equal(lots, 300)
+  // A part-lot still owed is still owed: 30 shares of a 75 lot is 1, never 0.
+  const part = pendingLotsOf(
+    {
+      ...state,
+      workingPackage: {
+        decisionId: 'x',
+        remaining: [{ op: 'open', instrument: SHED_INSTRUMENT, side: 'Sell', qty: 30 }],
+        basis: [],
+        startedAt: 0,
+      } as unknown as NonNullable<SupervisorBookState['workingPackage']>,
+    },
+    [],
+    75,
+  )
+  assert.equal(part, 1)
 })
