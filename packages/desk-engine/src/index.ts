@@ -130,3 +130,13 @@ export { steadySpot } from './delta-lean/playbook/kit.ts';
 export { decideBullS, type BullSInputs } from './bull-s/decide.ts';
 export { BS_EMPTY, hydrateBullState, type BullSGroup, type BullSHaltReason, type BullSState } from './bull-s/state.ts';
 export { bsCrossedLevel, bsNearestLevel } from './bull-s/grid.ts';
+export {
+  bsFirstSize,
+  bsNextSize,
+  bullSPyramid,
+  bullSWorstAtCap,
+  leverageAt,
+  quoteMark,
+  shortOptionMargin,
+  type StrikeLeverage,
+} from './bull-s/margin.ts';

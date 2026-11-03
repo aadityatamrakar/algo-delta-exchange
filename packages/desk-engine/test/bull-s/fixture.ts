@@ -97,6 +97,8 @@ export interface TickOpts {
    */
   readonly refuse?: ReadonlyArray<OptType>
   readonly dials?: Dials
+  /** Every strike's leverage, both wings (default 100); null = the master has none. */
+  readonly leverage?: number | null
 }
 
 export interface Flat {
@@ -169,6 +171,10 @@ export class Run {
       ref,
       refAsOf: o.refAsOf ?? (ref === null ? 0 : nowMs),
       minutesToExpiry: o.minutesToExpiry ?? 1_800,
+      leverage: chain.strikes.map((r) => {
+        const lev = o.leverage === undefined ? 100 : o.leverage
+        return { strike: r.strike, ce: lev, pe: lev }
+      }),
     }
   }
 

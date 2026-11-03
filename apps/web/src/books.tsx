@@ -53,7 +53,7 @@ import { Table, proportional, pixel } from '@astryxdesign/core/Table'
 import type { TableColumn } from '@astryxdesign/core/Table'
 import {
   api, ago, explain, inSession, pastExpiry, seriesOf, signed, sign, RED,
-  type BookRow, type BookSummary, type DeskMode, type PnlStrategy,
+  type BookMarginEstimate, type BookRow, type BookSummary, type DeskMode, type PnlStrategy,
 } from './api.ts'
 import { VENUE } from './venue.ts'
 import { railUsedBadge } from './paper-rail.tsx'
@@ -65,6 +65,7 @@ import { useReauth, withReauth } from './auth.tsx'
 import { bullsPatch, bullsStatement, isBullS, type BullSAction } from './bulls.ts'
 import { ManualOrderDialog } from './manual-order.tsx'
 import { DialsPanel } from './dials-panel.tsx'
+import { BookMarginLine, estimateFor, useBookMarginEstimates } from './margin.tsx'
 
 /** A book that has not reported a mark for longer than this, during a
  *  session, is STALLED — see the module comment. */
@@ -154,7 +155,12 @@ export function StateCell(props: { row: BookRow }): React.ReactElement {
   )
 }
 
-function BookCell(props: { row: BookRow; legs: number | undefined }): React.ReactElement {
+function BookCell(props: {
+  row: BookRow
+  legs: number | undefined
+  /** A BULL-S book's margin estimate (`margin.tsx`); undefined renders nothing. */
+  margin?: BookMarginEstimate | undefined
+}): React.ReactElement {
   const alarm = isPastExpiry(props.row, props.legs)
   return (
     <VStack gap={0} style={{ minWidth: 0 }}>
@@ -172,6 +178,9 @@ function BookCell(props: { row: BookRow; legs: number | undefined }): React.Reac
         const b = VENUE.id === 'dx' ? railUsedBadge(props.row) : null
         return b === null ? null : <Badge variant={b.variant} label={b.label} />
       })()}
+      {/* BULL-S only: estimated margin now, the worst case at its cap, and
+          bs_margin_budget when set. "—" with what is missing, never $0. */}
+      {isBullS(props.row) ? <BookMarginLine estimate={props.margin} /> : null}
     </VStack>
   )
 }
@@ -218,6 +227,7 @@ interface BookTableRow extends Record<string, unknown> {
   row: BookRow
   summary: BookSummary | undefined
   pnl: PnlStrategy | undefined
+  margin: BookMarginEstimate | undefined
 }
 
 function BookCard(props: {
@@ -229,12 +239,12 @@ function BookCard(props: {
   onOrder: () => void
   onBullS: (action: BullSAction) => void
 }): React.ReactElement {
-  const { row, summary, pnl } = props.data
+  const { row, summary, pnl, margin } = props.data
   return (
     <Card>
       <VStack gap={2} padding={3}>
         <HStack gap={2} align="start" justify="between">
-          <BookCell row={row} legs={summary?.legs} />
+          <BookCell row={row} legs={summary?.legs} margin={margin} />
           <HStack gap={1} wrap="wrap">
             {/* Same action as the table's Order button — see there. */}
             <Button variant="ghost" size="sm" label="Order" onClick={props.onOrder} />
@@ -329,6 +339,12 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
     () => api.books(props.mode), 5000, [props.mode],
   )
   const { data: pnlData, error: pnlError } = usePoll(() => api.pnl(props.mode), 8000, [props.mode])
+  /*
+    BULL-S MARGIN ESTIMATES, read only while a BULL-S book is on the page —
+    every other book has none, and a desk without one should not pay a read
+    for it. The row line renders nothing until an estimate arrives.
+  */
+  const { data: marginData } = useBookMarginEstimates((registry ?? []).some(isBullS))
   /*
     NO VARIANT-CATALOGUE POLL ANY MORE. This page used to read
     `GET /v1/desk/variants` for one reason: the dials box needed the variant's
@@ -498,12 +514,13 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
 
   const rows: BookTableRow[] = orderBooks(registry ?? []).map((row) => ({
     row, summary: summaries.get(row.tag), pnl: pnls.get(row.tag),
+    margin: estimateFor(marginData, row.tag, row.mode),
   }))
 
   const columns: TableColumn<BookTableRow>[] = [
     {
       key: 'book', header: 'Book', width: proportional(2),
-      renderCell: ({ row, summary }) => <BookCell row={row} legs={summary?.legs} />,
+      renderCell: ({ row, summary, margin }) => <BookCell row={row} legs={summary?.legs} margin={margin} />,
     },
     {
       key: 'state', header: 'State', width: pixel(200),

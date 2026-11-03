@@ -309,6 +309,12 @@ export interface EngineHostDeps {
    */
   tickSizeFor?(strike: number, optType: OptType): number | null
   /**
+   * The contract's leverage (Delta's `default_leverage`, the instrument row's
+   * `dx_leverage`), for the BULL-S `bs_margin_budget` estimate. Absent (NSE) or
+   * null: none stated, and a book with a budget set refuses new entries, named.
+   */
+  leverageFor?(strike: number, optType: OptType): number | null
+  /**
    * The venue this book trades on: its quantity step, default tick, clock and
    * expiry instant. Absent = `venueFromEnv()` (`DESK_VENUE`, NSE when unset),
    * read once when the host is built.
@@ -2069,7 +2075,16 @@ export class EngineHost {
       }
     }
     const minutesToExpiry = (this.#venue.expiryInstantMs(inputs.chain.expiry) - inputs.nowMs) / 60_000
-    return { ...inputs, ref, refAsOf, minutesToExpiry }
+    const leverageFor = this.#d.leverageFor
+    const leverage =
+      leverageFor === undefined
+        ? []
+        : inputs.chain.strikes.map((r) => ({
+            strike: r.strike,
+            ce: leverageFor(r.strike, 'CE'),
+            pe: leverageFor(r.strike, 'PE'),
+          }))
+    return { ...inputs, ref, refAsOf, minutesToExpiry, leverage }
   }
 
   // ------------------------------------------------------ the order budget

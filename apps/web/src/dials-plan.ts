@@ -776,6 +776,15 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
       'fraction',
       'The premium trail arms once the trade is up this share of the premium paid (0.8 is up 80%); from then it exits if profit falls to pb_trail_keep of its peak.',
     ),
+
+    // ── BULL-S ─────────────────────────────────────────────────────────────
+    // USD: BULL-S books are Delta books, and a 'rupee' dial reads in the
+    // venue currency ($ on the DX build).
+    bs_margin_budget: meta(
+      'rupee',
+      'Margin budget in USD for the book: a new straddle whose estimated margin would take the book over it is refused. Stops and closes are never blocked. 0 = off.',
+      { zeroOff: true },
+    ),
   }),
 )
 

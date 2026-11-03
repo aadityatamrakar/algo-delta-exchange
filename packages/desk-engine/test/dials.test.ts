@@ -229,6 +229,7 @@ const SPEC_TABLE: Dials = {
   bs_lots_step: 1,
   bs_lots_cap: 0,
   bs_max_open: 0,
+  bs_margin_budget: 0,
   bs_target: 0,
   bs_loss_cap: 0,
   bs_after_halt: 0,

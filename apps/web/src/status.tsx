@@ -62,6 +62,7 @@ import { usePoll } from './shell.tsx'
 import { FeedSection } from './pages.tsx'
 import { BrokersSection } from './brokers.tsx'
 import { ModeBadge, useMode } from './mode.tsx'
+import { MarginStatusCard } from './margin.tsx'
 
 /**
  * Fast enough to watch a process come back after a restart, slow enough that a
@@ -193,6 +194,9 @@ function SystemsSection(): React.ReactElement {
           detail line like "2 of 2 sockets connected · 900 tokens" still reads. */}
       <Grid columns={{ minWidth: 260, max: 3 }} gap={3}>
         {components.map((c) => <ComponentCard key={c.id} component={c} />)}
+        {/* The Delta accounts' margin, on its own read: not a process, but the
+            same question — is anything here about to stop the desk trading? */}
+        <MarginStatusCard />
       </Grid>
 
       <Text color="secondary" size="sm">

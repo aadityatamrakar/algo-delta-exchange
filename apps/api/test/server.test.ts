@@ -1618,3 +1618,26 @@ itHttp('disarming the day guard actually removes it from the document', async ()
   const after = await handle!.db.collection('desk-strategies').findOne({ tag: 'GUARD_CLEAR' })
   assert.equal('disabledByGuard' in (after ?? {}), false)
 })
+
+itHttp('GET /v1/desk/margin with no tag is the Delta accounts; a failed read is failed, never zeros', async () => {
+  const col = handle!.db.collection('desk-broker-margin')
+  await col.deleteMany({})
+  await col.insertMany([
+    { _id: 'delta-demo' as never, asOf: Date.now(), ok: true, error: '', rail: 'demo', balance: 500, available: 400, positionMargin: 95, orderMargin: 5, portfolioMargin: 0, used: 100, utilizedPct: 20 },
+    { _id: 'delta' as never, asOf: Date.now(), ok: false, error: 'Delta /v2/wallet/balances failed: 401', rail: 'live', balance: null, used: null },
+  ])
+  const res = await fetch(`${base}/v1/desk/margin`, { headers: auth })
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as { inrPerUsd: number; accounts: Record<string, unknown>[] }
+  assert.deepEqual(body.accounts.map((a) => [a['id'], a['state'], a['utilizedPct']]), [
+    ['delta-demo', 'ok', 20],
+    ['delta', 'failed', null],
+  ])
+  // The per-book form is unchanged.
+  const book = await fetch(`${base}/v1/desk/margin?tag=`, { headers: auth })
+  assert.equal(book.status, 400)
+  const books = await fetch(`${base}/v1/desk/margin/books`, { headers: auth })
+  assert.equal(books.status, 200)
+  assert.deepEqual(((await books.json()) as { books: unknown[] }).books, [])
+  await col.deleteMany({})
+})

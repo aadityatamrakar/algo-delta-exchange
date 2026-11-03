@@ -114,6 +114,7 @@ import type { NudgeKind } from '../../api/src/engine-notify.ts'
 import { connectMongo } from '../../api/src/mongo.ts'
 import type { Database } from '../../api/src/store.ts'
 import { loadStoredInstruments } from '../../marketdata/src/sync-runner.ts'
+import { loadDxLeverage } from '../../marketdata/src/dx-sync.ts'
 import {
   ensureSubscriptionIndexes,
   publishSubscription,
@@ -251,6 +252,8 @@ export interface MasterPort {
   tickSizeFor(symbol: string, expiry: string, strike: number, optType: OptType): number | null
   /** The chain's lot size and strike step. `0` when the master has neither. */
   chainMeta(symbol: string, expiry: string): { lotSize: number; step: number }
+  /** The contract's leverage (DX `dx_leverage`), or null when the master states none. */
+  leverageFor(symbol: string, expiry: string, strike: number, optType: OptType): number | null
 }
 
 /** desk-api, as this process reaches it outside the decision wire. */
@@ -1102,6 +1105,8 @@ export class Supervisor {
           this.#d.master().instrumentFor(runtime.book.symbol, runtime.book.expiry, strike, optType),
         tickSizeFor: (strike, optType) =>
           this.#d.master().tickSizeFor(runtime.book.symbol, runtime.book.expiry, strike, optType),
+        leverageFor: (strike, optType) =>
+          this.#d.master().leverageFor(runtime.book.symbol, runtime.book.expiry, strike, optType),
         repairHold: repairHoldReader({
           lookup: repairHoldLookupFor(this.#d.db, this.#d.now),
           tag: book.tag,
@@ -1467,8 +1472,17 @@ function makeLogger(): HostLog {
  * index, and a BTC future the sync happened to list would be a forward that
  * is not the settlement's. `0` sends the chain to the index proxy.
  */
-export function masterPort(master: () => OptionMaster, venue: VenueSpec = NSE): MasterPort {
+export function masterPort(
+  master: () => OptionMaster,
+  venue: VenueSpec = NSE,
+  /** Token → `dx_leverage`, read beside the master (`loadDxLeverage`). */
+  leverage: () => ReadonlyMap<number, number> = () => new Map(),
+): MasterPort {
   return {
+    leverageFor: (symbol, expiry, strike, optType): number | null => {
+      const token = master().resolve(symbol, expiry, strike, optType)?.instrumentToken
+      return token === undefined ? null : (leverage().get(token) ?? null)
+    },
     tokensFor: (symbol, expiry): ChainToken[] => {
       const m = master()
       const rows: ChainToken[] = []
@@ -1595,11 +1609,14 @@ export async function main(): Promise<void> {
   })
 
   let master = new OptionMaster(await loadStoredInstruments(mongo.db.collection('instrument')))
-  log.info('instrument master loaded', { contracts: master.optionCount })
+  /** Delta's per-product leverage, for the BULL-S margin budget. Empty off DX. */
+  let leverage = await loadDxLeverage(mongo.db.collection('instrument') as never)
+  log.info('instrument master loaded', { contracts: master.optionCount, withLeverage: leverage.size })
   const refresh = setInterval(() => {
     void (async () => {
       try {
         master = new OptionMaster(await loadStoredInstruments(mongo.db.collection('instrument')))
+        leverage = await loadDxLeverage(mongo.db.collection('instrument') as never)
       } catch (err) {
         log.error('the instrument master could not be refreshed', { error: String(err) })
       }
@@ -1624,7 +1641,7 @@ export async function main(): Promise<void> {
     bus,
     client: new DecisionsClient(apiUrl, token, { log: (msg, ctx) => log.warn(msg, ctx) }),
     api: deskApi(apiUrl, token, log),
-    master: () => masterPort(() => master, venue),
+    master: () => masterPort(() => master, venue, () => leverage),
     venue,
     lease,
     // The host name and pid, so a `/health` or a lease document names the

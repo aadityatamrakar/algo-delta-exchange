@@ -79,6 +79,7 @@ const master: MasterPort = {
   instrumentFor: (symbol, expiry, strike, optType) =>
     symbol === SYMBOL && expiry === EXPIRY ? symbolOf(strike, optType) : null,
   tickSizeFor: () => 0.05,
+  leverageFor: () => null,
   chainMeta: (symbol, expiry) =>
     symbol === SYMBOL && expiry === EXPIRY ? { lotSize: LOT, step: STEP } : { lotSize: 0, step: 0 },
 }

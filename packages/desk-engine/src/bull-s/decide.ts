@@ -65,6 +65,7 @@ import type {
 } from '../types.ts';
 import { bsCrossedLevel, bsNearestLevel } from './grid.ts';
 import type { BullSGroup, BullSHaltReason, BullSState } from './state.ts';
+import { bsFirstSize, bsNextSize, leverageAt, quoteMark, shortOptionMargin, type StrikeLeverage } from './margin.ts';
 
 /**
  * What BULL-S needs beyond an ordinary `EngineInputs`. All three REQUIRED: an
@@ -81,6 +82,12 @@ export interface BullSInputs extends EngineInputs {
   readonly ref: number | null;
   readonly refAsOf: number;
   readonly minutesToExpiry: number;
+  /**
+   * Each listed strike's leverage per wing (Delta's `default_leverage`, the
+   * instrument row's `dx_leverage`), for the `bs_margin_budget` estimate.
+   * A wing the master states none for is null; [] on a venue with none.
+   */
+  readonly leverage: ReadonlyArray<StrikeLeverage>;
 }
 
 /** Strike equality, the tolerance `marking.ts` matches a chain row on. */
@@ -176,15 +183,8 @@ function stopLine(g: BullSGroup, dials: Dials): number {
   return dials.bs_stop_basis === 0 ? Math.trunc(raw) : raw;
 }
 
-function firstSize(dials: Dials): number {
-  return dials.bs_lots_cap > 0 ? Math.min(dials.bs_lots_start, dials.bs_lots_cap) : dials.bs_lots_start;
-}
-
-/** Rule 4: each accepted entry adds a step, never past the cap (0 = uncapped). */
-function nextSize(size: number, dials: Dials): number {
-  const up = size + dials.bs_lots_step;
-  return dials.bs_lots_cap > 0 ? Math.min(up, dials.bs_lots_cap) : up;
-}
+const firstSize = bsFirstSize;
+const nextSize = bsNextSize;
 
 /** Start or Re-arm: a new P&L baseline, size back to start, the halt cleared. */
 function arm(bs: BullSState, inputs: BullSInputs, dials: Dials, lastRef: number, lastRefMs: number): BullSState {
@@ -594,6 +594,16 @@ export function decideBullS(
   }
 
   const size = bs.size > 0 ? bs.size : firstSize(dials);
+  if (dials.bs_margin_budget > 0) {
+    const est = marginWithEntry(inputs, level, size, ceQ, peQ);
+    if ('missing' in est) return refuse(`margin budget: ${est.missing} — cannot estimate, no entry`);
+    if (est.usd > dials.bs_margin_budget) {
+      return refuse(
+        `margin budget: est $${est.usd.toFixed(2)} > $${fmt(dials.bs_margin_budget)} ` +
+          `(held $${est.held.toFixed(2)} + this straddle $${est.entry.toFixed(2)})`,
+      );
+    }
+  }
   const group: BullSGroup = {
     strike: level,
     lots: size,
@@ -622,4 +632,39 @@ export function decideBullS(
     after,
     mark,
   );
+}
+
+/**
+ * THE BOOK'S ESTIMATED MARGIN WITH ONE MORE STRADDLE (`bs_margin_budget`):
+ * every short option it holds at its own mark, plus the new straddle at the
+ * level's marks, all against the reference index and each product's own
+ * leverage (`margin.ts`). A missing mark or leverage is NAMED, never guessed.
+ */
+function marginWithEntry(
+  inputs: BullSInputs,
+  level: number,
+  size: number,
+  ceQ: Quote,
+  peQ: Quote,
+): { usd: number; held: number; entry: number } | { missing: string } {
+  const index = inputs.ref as number;
+  let held = 0;
+  for (const l of inputs.legs) {
+    if (l.kind === 'future' || l.side !== 'Sell' || !(l.lots > 0)) continue;
+    const mark = quoteMark(l.exit);
+    const lev = leverageAt(inputs.leverage, l.strike, l.optType);
+    if (lev === null) return { missing: `no leverage for the ${fmt(l.strike)} ${l.optType}` };
+    if (mark === null) return { missing: `no mark for the held ${fmt(l.strike)} ${l.optType}` };
+    held += shortOptionMargin({ mark, qty: l.lots * l.lotSize, index, leverage: lev });
+  }
+  let entry = 0;
+  const qty = size * inputs.chain.lotSize;
+  for (const [opt, q] of [['CE', ceQ], ['PE', peQ]] as const) {
+    const lev = leverageAt(inputs.leverage, level, opt);
+    if (lev === null) return { missing: `no leverage for the ${fmt(level)} ${opt}` };
+    const mark = quoteMark(q);
+    if (mark === null) return { missing: `no mark for the ${fmt(level)} ${opt}` };
+    entry += shortOptionMargin({ mark, qty, index, leverage: lev });
+  }
+  return { usd: held + entry, held, entry };
 }
