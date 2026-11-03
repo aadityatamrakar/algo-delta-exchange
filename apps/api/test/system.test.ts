@@ -30,6 +30,7 @@ import { systemRoutes, type SystemComponent } from '../src/routes/system.ts'
 import type { ApiDeps, RouteCtx } from '../src/routes/kit.ts'
 import type { DeskStore } from '../src/store.ts'
 import type { BookRow, VariantRow } from '../src/books-registry.ts'
+import { DX } from '../src/venue.ts'
 
 // ------------------------------------------------------------------ harness
 
@@ -114,6 +115,8 @@ function harness(opts: {
   feedHealth?: ApiDeps['feedHealth']
   busConnected?: (() => boolean) | undefined
   failOn?: string | null
+  venue?: ApiDeps['venue']
+  marks?: ApiDeps['marks']
 } = {}): Harness {
   let now = NOW
   const store = {
@@ -127,6 +130,8 @@ function harness(opts: {
     master: null as unknown as ApiDeps['master'],
     ...(opts.feedHealth === undefined ? {} : { feedHealth: opts.feedHealth }),
     ...(opts.busConnected === undefined ? {} : { busConnected: opts.busConnected }),
+    ...(opts.venue === undefined ? {} : { venue: opts.venue }),
+    ...(opts.marks === undefined ? {} : { marks: opts.marks }),
     log: () => {},
     now: () => now,
   }
@@ -723,4 +728,111 @@ test('paused live execution is named FIRST in the gateway detail', async () => {
   )
   assert.match(done.detail, /^Live execution PAUSED by aaditya/)
   assert.equal((done.extra?.['brokerLink'] as { applied?: string } | undefined)?.applied, 'released')
+})
+
+// ------------------------------------------------------------- the DX desk
+
+/** A Delta desk where every process just wrote. */
+function dxHarness(over: { fixtures?: Fixtures; books?: Partial<Record<'paper' | 'live', BookRow[]>>; index?: { price: number; asOf: number } | null } = {}): Harness {
+  return harness({
+    venue: DX,
+    fixtures: over.fixtures ?? {
+      'desk-gateway-heartbeat': [
+        { _id: 'gateway', at: NOW - 5_000, broker: 'delta', host: 'api.india.delta.exchange', lastOrderAt: NOW - 120_000, deltaHeartbeatOk: true },
+      ],
+      'desk-supervisor-lease': [{ key: 'desk-supervisor', owner: 'ip-10-0-0-1:4242', acquiredAt: NOW - 3_600_000, expiresAt: NOW + 25_000 }],
+      'desk-gateway-orders': [],
+      'desk-safety': [],
+      'desk-positions-compare': [comparison({ symbols: [] })],
+    },
+    books: over.books ?? {
+      paper: [book({ tag: 'BTC-A' }), book({ tag: 'BTC-B', actual: 'stopped' })],
+      live: [book({ tag: 'BTC-L', mode: 'live' })],
+    },
+    feedHealth: {
+      payload: {
+        sockets: [{ socket: 0, connected: true, tokens: 300, downForMs: null }],
+        tokens: 300,
+        session: true,
+        instrumentSyncDay: '2026-11-03',
+        instrumentsStale: false,
+      },
+      receivedAt: NOW - 3_000,
+    },
+    marks: {
+      spotQuote: () => (over.index === undefined ? { price: 76543.21, asOf: NOW - 2_000 } : over.index),
+    } as unknown as ApiDeps['marks'],
+    busConnected: () => true,
+  })
+}
+
+test('DX: one supervisor, no runner, the gateway from its heartbeat — all ok', async () => {
+  const r = await report(dxHarness())
+  assert.deepEqual(
+    r.components.map((c) => c.id),
+    ['dx-api', 'dx-marketdata', 'dx-gateway', 'dx-supervisor', 'positions-truth', 'mongo'],
+  )
+  assert.deepEqual(r.components.filter((c) => c.state !== 'ok').map((c) => `${c.id}: ${c.detail}`), [])
+  for (const c of r.components) assert.doesNotMatch(c.detail, /XTS|Zerodha/, c.id)
+
+  const gw = find(r, 'dx-gateway')
+  assert.equal(gw.expectedEveryMs, 15_000)
+  assert.match(gw.detail, /live orders route to Delta \(api\.india\.delta\.exchange\)/)
+  assert.match(gw.detail, /last order event 2m ago/)
+
+  const sup = find(r, 'dx-supervisor')
+  assert.equal(sup.name, 'Supervisor')
+  assert.match(sup.detail, /^steering both rails as ip-10-0-0-1:4242/)
+  assert.match(sup.detail, /2 paper books \(1 running\) · 1 live books \(1 running\)/)
+
+  const md = find(r, 'dx-marketdata')
+  assert.match(md.detail, /^Delta public feed · BTC index 76,543\.21, 2s old · /)
+  assert.equal(md.extra?.['btcIndexAgeMs'], 2_000)
+})
+
+test('DX: the gateway heartbeat goes stale after four missed beats; none at all is unknown', async () => {
+  const h = dxHarness()
+  h.setNow(NOW + 50_000)
+  assert.equal(find(await report(h), 'dx-gateway').state, 'ok', '55s is under four 15s beats')
+  h.setNow(NOW + 60_000)
+  assert.equal(find(await report(h), 'dx-gateway').state, 'stale')
+
+  const none = find(await report(dxHarness({ fixtures: {} })), 'dx-gateway')
+  assert.equal(none.state, 'unknown')
+  assert.match(none.detail, /no gateway heartbeat/)
+})
+
+test('DX: a simulate gateway says so, and a failing Delta dead-man switch is named', async () => {
+  const sim = find(
+    await report(dxHarness({ fixtures: { 'desk-gateway-heartbeat': [{ _id: 'gateway', at: NOW - 1_000, broker: 'simulate', host: null, lastOrderAt: null, deltaHeartbeatOk: null }] } })),
+    'dx-gateway',
+  )
+  assert.equal(sim.state, 'ok')
+  assert.match(sim.detail, /simulator — every order is paper/)
+  assert.match(sim.detail, /no order event journalled/)
+
+  const dead = find(
+    await report(dxHarness({ fixtures: { 'desk-gateway-heartbeat': [{ _id: 'gateway', at: NOW - 1_000, broker: 'delta', host: 'h', lastOrderAt: null, deltaHeartbeatOk: false }] } })),
+    'dx-gateway',
+  )
+  assert.match(dead.detail, /Delta dead-man heartbeat FAILING/)
+})
+
+test('DX: an expired lease is stale and says no supervisor is steering; no lease is unknown', async () => {
+  const expired = find(
+    await report(dxHarness({ fixtures: { 'desk-supervisor-lease': [{ key: 'desk-supervisor', owner: 'box:1', expiresAt: NOW - 90_000 }] } })),
+    'dx-supervisor',
+  )
+  assert.equal(expired.state, 'stale')
+  assert.match(expired.detail, /lease EXPIRED 1m ago \(last held by box:1\) — no supervisor is steering/)
+
+  const none = find(await report(dxHarness({ fixtures: {} })), 'dx-supervisor')
+  assert.equal(none.state, 'unknown')
+  assert.match(none.detail, /no supervisor lease/)
+  assert.equal(none.extra?.['paperBooks'], 2)
+})
+
+test('DX: no BTC index yet is stated on the market-data card', async () => {
+  const md = find(await report(dxHarness({ index: null })), 'dx-marketdata')
+  assert.match(md.detail, /BTC index NOT RECEIVED/)
 })

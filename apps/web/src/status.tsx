@@ -511,8 +511,8 @@ function OrderFailuresSection(): React.ReactElement {
       ) : null}
 
       <Text color="secondary" size="sm">
-        Every refused submission — an order-size cap, the kill switch, a risk gate, a broker
-        reject. A refusal never reaches the broker, so it is on no other screen; the full
+        Every refused submission — an order cap, the kill switch, margin, an exchange reject from
+        Delta. The desk's own refusals never reach Delta, so they are on no other screen; the full
         lifecycle of any one of these is in its own book's order log.
       </Text>
     </VStack>
