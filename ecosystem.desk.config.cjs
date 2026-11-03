@@ -248,6 +248,20 @@ module.exports = {
     ),
 
     /**
+     * THE WATCHDOG — the desk seen from OUTSIDE it (apps/watchdog).
+     *
+     * Every 10s it reads the desk's health (gateway heartbeat row, supervisor
+     * lease, desk-api's system report) and each Delta account straight from
+     * Delta with its own client. A desk process down > 30s while Delta holds
+     * positions is a critical alert; the gateway down > 30s cancels the desk's
+     * non-stop working orders (the retired dead-man switch's job, keeping the
+     * exchange backstops); the LIVE account is flattened after
+     * DX_WATCHDOG_FLATTEN_S (300; 0 = off). It forwards desk-alerts to
+     * Telegram when DX_ALERT_TELEGRAM_TOKEN / DX_ALERT_TELEGRAM_CHAT are set.
+     */
+    app('dx-watchdog', 'bin/dx-watchdog.mjs', { DESK_API_URL: 'http://127.0.0.1:8890' }),
+
+    /**
      * ONE-PORT WEB FRONT: serves apps/web/dist and proxies /v1 (HTTP + websocket)
      * to desk-api. No bus dependency; holds no credentials.
      */

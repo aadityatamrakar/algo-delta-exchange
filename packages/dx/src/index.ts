@@ -31,6 +31,7 @@ export {
   type DxQuote,
   type DxFrame,
 } from './normalise.ts'
+export { DX_BACKSTOP_PREFIX, backstopClientOrderId, isBackstopOrderId } from './backstop-id.ts'
 export { optionFee, DX_OPTION_FEE_RATES, type OptionFeeRates } from './fees.ts'
 export { contractsOf, qtyOfContracts } from './qty.ts'
 export {

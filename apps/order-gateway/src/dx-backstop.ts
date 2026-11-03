@@ -41,14 +41,14 @@
  *
  * NEVER THROWS out of `run`; failures are logged and alerted (`desk-alerts`).
  */
-import { createHash } from 'node:crypto'
 import type { PlacedOrder } from '@algomaker/brokers'
-import type { DxOrder, DxOrderRequest, DxPosition, DxRest } from '@algomaker/dx'
+import { backstopClientOrderId, isBackstopOrderId, type DxOrder, type DxOrderRequest, type DxPosition, type DxRest } from '@algomaker/dx'
+
+export { DX_BACKSTOP_PREFIX, backstopClientOrderId, isBackstopOrderId } from '@algomaker/dx'
 import { createDxHeartbeat, retireDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
 
 type Env = Readonly<Record<string, string | undefined>>
 
-export const DX_BACKSTOP_PREFIX = 'bkstp'
 /** The reconcile cadence. */
 export const DX_BACKSTOP_MS = 15_000
 /** How long after a desk fill the next reconcile runs: desk-books lags the fill by a few seconds. */
@@ -76,15 +76,6 @@ export function backstopLimitPct(env: Env): number {
     throw new Error(`DX_BACKSTOP_LIMIT_PCT='${raw}' is not a positive number — the backstop will not guess its limit`)
   }
   return n
-}
-
-export function backstopClientOrderId(rail: BackstopRail, tag: string, symbol: string): string {
-  const h = createHash('sha256').update(`${rail}|${tag}|${symbol}`).digest('base64url')
-  return DX_BACKSTOP_PREFIX + h.slice(0, 32 - DX_BACKSTOP_PREFIX.length)
-}
-
-export function isBackstopOrderId(id: string | null | undefined): boolean {
-  return typeof id === 'string' && id.startsWith(DX_BACKSTOP_PREFIX)
 }
 
 // ------------------------------------------------------------- desk view
