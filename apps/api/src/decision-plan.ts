@@ -29,7 +29,7 @@ import { applyRoutedFill } from './book.ts'
 import type { BridgeLeg, DeskAction, DeskMode, DeskSide, Fill, Skip } from './contract.ts'
 import { deriveUnderlying } from '../../order-gateway/src/gateway.ts'
 import { marketableLimit, type MarketableConfig } from './marketable.ts'
-import { istDate, istDayRange } from './routes/kit.ts'
+import { API_VENUE, venueDayRange, type VenueSpec } from './venue.ts'
 import { addsExposure, type FlattenLegPlan, type KillSwitchState } from './safety.ts'
 
 /**
@@ -411,7 +411,7 @@ export interface FlattenLegResult {
  * the window to extend past it. Off-by-one here silently drops the most recent
  * order — which for an intraday strategy is the one that matters most.
  *
- * A whole IST day is the right default because hosted strategies are intraday by
+ * A whole venue day (IST on NSE, 12:00 UTC to 12:00 UTC on DX) is the right default because hosted strategies are intraday by
  * contract — the runner's own square-off cron is a daily one.
  *
  * A POSITIONAL BOOK DEFAULTS TO EVERY FILL (`positional`): its legs cross
@@ -424,8 +424,9 @@ export function flattenWindow(
   nowMs: number,
   sinceMs?: number,
   positional = false,
+  venue: VenueSpec = API_VENUE,
 ): { readonly from: number; readonly to: number } {
-  const from = sinceMs ?? (positional ? 0 : istDayRange(istDate(nowMs)).from)
+  const from = sinceMs ?? (positional ? 0 : venueDayRange(venue.dayKey(nowMs), venue).from)
   return { from, to: nowMs + 1 }
 }
 

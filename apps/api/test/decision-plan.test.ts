@@ -15,6 +15,7 @@ import { test } from 'node:test'
 
 import type { InstrumentRef } from '@algomaker/order-bus'
 import type { BridgeLeg, DeskAction, Fill } from '../src/contract.ts'
+import { DX, NSE } from '../src/venue.ts'
 import {
   actionsFullyRouted,
   firstFillOpensPosition,
@@ -633,6 +634,15 @@ test('a POSITIONAL book with no sinceMs reads every fill; an explicit one still 
   const now = Date.UTC(2026, 9, 19, 4, 41)
   assert.equal(flattenWindow(now, undefined, true).from, 0)
   assert.equal(flattenWindow(now, 500, true).from, 500)
+})
+
+test('on DX the day window opens at the venue day (12:00 UTC), not IST midnight', () => {
+  const now = Date.UTC(2026, 10, 3, 15, 0, 0)
+  const w = flattenWindow(now, undefined, false, DX)
+  assert.equal(w.from, Date.UTC(2026, 10, 3, 12, 0, 0))
+  const early = Date.UTC(2026, 10, 3, 5, 0, 0)
+  assert.equal(flattenWindow(early, undefined, false, DX).from, Date.UTC(2026, 10, 2, 12, 0, 0))
+  assert.equal(flattenWindow(now, undefined, false, NSE).from, Date.UTC(2026, 10, 2, 18, 30, 0))
 })
 
 test('with no sinceMs the window opens at the start of the IST trading day', () => {
