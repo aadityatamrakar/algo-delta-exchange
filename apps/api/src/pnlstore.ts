@@ -33,7 +33,7 @@
 import type { DeskMode } from './contract.ts'
 import { paperFillEvent, withDecisionContext, withOrderContext } from './rail.ts'
 import { COLLECTIONS, type Database } from './store.ts'
-import { istDate, istDayRange } from './routes/kit.ts'
+import { API_VENUE, venueDayRange, type VenueSpec } from './venue.ts'
 import type { ClosingSource, DailyReport, SeriesPoint, StampedFill } from './rollup.ts'
 
 export const PNL_SNAPSHOTS = 'desk-pnl-snapshots'
@@ -177,9 +177,20 @@ function mergeNewestFirst(a: readonly StampedDoc[], b: readonly StampedDoc[]): S
 
 export class PnlStore {
   readonly #db: Database
+  /**
+   * Whose day `date` arguments name: an IST date on NSE, a settlement day
+   * (12:00 UTC to 12:00 UTC) on DX. Absent is the process venue.
+   */
+  readonly #venue: VenueSpec
 
-  constructor(db: Database) {
+  constructor(db: Database, venue: VenueSpec = API_VENUE) {
     this.#db = db
+    this.#venue = venue
+  }
+
+  /** `[from, to)` of one venue day — the window every `date` argument here names. */
+  dayRange(date: string): { from: number; to: number } {
+    return venueDayRange(date, this.#venue)
   }
 
   /**
@@ -401,7 +412,7 @@ export class PnlStore {
 
   /** A whole IST day's series, grouped by `tag|mode`. What the rollup reads. */
   async seriesByKey(date: string): Promise<Map<string, PnlSnapshot[]>> {
-    const { from, to } = istDayRange(date)
+    const { from, to } = this.dayRange(date)
     const out = new Map<string, PnlSnapshot[]>()
     for (const s of await this.series({ from, to })) {
       const key = pnlKey(s.tag, s.mode)
@@ -413,12 +424,12 @@ export class PnlStore {
   }
 
   async countSnapshots(date: string): Promise<number> {
-    const { from, to } = istDayRange(date)
+    const { from, to } = this.dayRange(date)
     return await this.#db.collection(PNL_SNAPSHOTS).countDocuments({ ts: { $gte: from, $lt: to } })
   }
 
   async deleteSnapshots(date: string): Promise<void> {
-    const { from, to } = istDayRange(date)
+    const { from, to } = this.dayRange(date)
     await this.#db.collection(PNL_SNAPSHOTS).deleteMany({ ts: { $gte: from, $lt: to } })
   }
 
@@ -562,7 +573,7 @@ export class PnlStore {
    * and only the detail itself can answer that.
    */
   async snapshotKeys(date: string): Promise<Set<string>> {
-    const { from, to } = istDayRange(date)
+    const { from, to } = this.dayRange(date)
     const out = new Set<string>()
     for (const s of await this.series({ from, to })) out.add(pnlKey(s.tag, s.mode))
     return out
@@ -598,7 +609,7 @@ export class PnlStore {
       .toArray()
     for (const d of decisions) {
       const at = Number(d.createdAt)
-      if (Number.isFinite(at) && at > 0) dates.add(istDate(at))
+      if (Number.isFinite(at) && at > 0) dates.add(this.#venue.dayKey(at))
     }
     return [...dates].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)).slice(0, limit)
   }
@@ -615,7 +626,7 @@ export class PnlStore {
     const days = new Set<string>()
     for (const d of docs) {
       const ts = Number(d['ts'])
-      if (Number.isFinite(ts)) days.add(istDate(ts))
+      if (Number.isFinite(ts)) days.add(this.#venue.dayKey(ts))
     }
     return [...days].sort()
   }
@@ -656,8 +667,8 @@ export class PnlStore {
     failuresOnly?: boolean
     limit?: number
   }): Promise<Record<string, unknown>[]> {
-    const { to } = istDayRange(q.date)
-    const from = istDayRange(q.from ?? q.date).from
+    const { to } = this.dayRange(q.date)
+    const from = this.dayRange(q.from ?? q.date).from
     const limit = q.limit ?? 500
     const filter: Record<string, unknown> = { ts: { $gte: from, $lt: to } }
     if (q.tag !== undefined) filter['tag'] = q.tag
@@ -749,6 +760,11 @@ export function toStampedFill(value: unknown, createdAt: number): StampedFill | 
   if (side !== 'Buy' && side !== 'Sell') return null
   if (!Number.isFinite(qty) || qty <= 0) return null
   if (!Number.isFinite(price) || price < 0) return null
+  // The venue's charge, when the fill row carries one (Delta). A malformed one
+  // is dropped rather than poisoning realised: absent is zero, and the fill
+  // itself is still good.
+  const rawFee = Number(f['fee'])
+  const fee = Number.isFinite(rawFee) && rawFee > 0 ? rawFee : undefined
   const rawTs = Number(f['ts'])
   const ts = Number.isFinite(rawTs) && rawTs > 0 ? rawTs : createdAt
   // `op` is passed through, not validated away: it is the ONLY signal a
@@ -766,6 +782,7 @@ export function toStampedFill(value: unknown, createdAt: number): StampedFill | 
     price,
     ts: Number.isFinite(ts) ? ts : 0,
     ...(op === undefined ? {} : { op }),
+    ...(fee === undefined ? {} : { fee }),
   }
 }
 
@@ -918,6 +935,9 @@ function toReport(doc: Record<string, unknown>): DailyReport {
     tag: String(doc['tag'] ?? ''),
     mode: doc['mode'] === 'live' ? 'live' : 'paper',
     realised: Number(doc['realised'] ?? 0),
+    // A row written before fees were recorded was gross and fee-free.
+    gross: Number(doc['gross'] ?? doc['realised'] ?? 0),
+    fees: Number(doc['fees'] ?? 0),
     total: numberOrNull(doc['total']),
     maxProfit: numberOrNull(doc['maxProfit']),
     maxLoss: numberOrNull(doc['maxLoss']),

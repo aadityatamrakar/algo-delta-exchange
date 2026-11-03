@@ -39,6 +39,7 @@ import {
   type Position,
 } from '@algomaker/pnl'
 import { IST_OFFSET_MS } from './routes/kit.ts'
+import { API_VENUE, isNse, type VenueSpec } from './venue.ts'
 
 /** A fill with the timestamp we file it under. See `pnlstore.loadFills`. */
 export interface StampedFill extends PnlFill {
@@ -57,6 +58,19 @@ export interface StampedFill extends PnlFill {
    * absent means "unknown", never "open".
    */
   readonly op?: 'open' | 'close' | 'roll' | 'resize'
+  /**
+   * WHAT THE VENUE CHARGED FOR THIS FILL, in the book currency (Delta: USD,
+   * GST included). Absent is zero — every NSE fill, whose charges the desk
+   * reports gross (B3). Charged against realised in the window the fill lands
+   * in, never spread over a mark.
+   */
+  readonly fee?: number
+}
+
+/** A fill's fee, or 0. A non-finite or negative value is not a charge. */
+export function feeOf(f: { readonly fee?: number }): number {
+  const v = f.fee
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
 }
 
 /**
@@ -81,7 +95,12 @@ export interface PnlWindow {
  * it.
  */
 export interface StrategyPnl {
+  /** Booked in the window, NET of `fees` and of any supplied costs. */
   readonly realised: number
+  /** Booked in the window before fees and costs. */
+  readonly gross: number
+  /** Venue fees on the window's own fills. 0 when no fill carries one. */
+  readonly fees: number
   readonly unrealised: number | null
   readonly total: number | null
   readonly openLegs: number
@@ -126,6 +145,8 @@ export interface MarkedLeg {
    * a figure inflated by every earlier day still inside the lookback.
    */
   readonly realised: number
+  /** The venue fees on this contract's window fills, already taken off `realised`. */
+  readonly fees: number
   /**
    * The two sides of what was actually traded, over the SAME fills the
    * position was built from.
@@ -189,7 +210,16 @@ export function computeWindowPnl(w: PnlWindow, marks: Marks, costs?: Costs): Str
   // Booked by the fills INSIDE the window. Everything before it was already
   // reported on the day it happened; counting it again would make a week-old
   // roll reappear in today's number every day until the position closed.
-  const realised = cumulative - carriedRealised - totalCosts(costs)
+  const gross = cumulative - carriedRealised
+  const feesBySymbol = new Map<string, number>()
+  let fees = 0
+  for (const f of w.during) {
+    const fee = feeOf(f)
+    if (fee === 0) continue
+    fees += fee
+    feesBySymbol.set(f.tradingsymbol, (feesBySymbol.get(f.tradingsymbol) ?? 0) + fee)
+  }
+  const realised = gross - fees - totalCosts(costs)
 
   const open = markOpenLegs(positions, marks)
   const complete = open.unpriced.length === 0
@@ -256,7 +286,9 @@ export function computeWindowPnl(w: PnlWindow, marks: Marks, costs?: Costs): Str
     const unreal = p.qty === 0 ? null : (m?.unrealised ?? null)
     const t = traded.get(p.tradingsymbol)
     // Booked by THIS window's fills on this contract, matching the card.
-    const bookedHere = p.realised - (carriedRealisedBySymbol.get(p.tradingsymbol) ?? 0)
+    // Net of this contract's own fees, so the legs still sum to the card.
+    const legFees = feesBySymbol.get(p.tradingsymbol) ?? 0
+    const bookedHere = p.realised - (carriedRealisedBySymbol.get(p.tradingsymbol) ?? 0) - legFees
     return [{
       tradingsymbol: p.tradingsymbol,
       qty: p.qty,
@@ -264,6 +296,7 @@ export function computeWindowPnl(w: PnlWindow, marks: Marks, costs?: Costs): Str
       mark,
       unrealised: unreal,
       realised: bookedHere,
+      fees: legFees,
       buyQty: t?.buyQty ?? 0,
       buyValue: t?.buyValue ?? 0,
       sellQty: t?.sellQty ?? 0,
@@ -276,6 +309,8 @@ export function computeWindowPnl(w: PnlWindow, marks: Marks, costs?: Costs): Str
 
   return {
     realised,
+    gross,
+    fees,
     unrealised,
     total: unrealised === null ? null : realised + unrealised,
     openLegs: positions.filter((p) => p.qty !== 0).length,
@@ -396,7 +431,11 @@ export interface DailyReport {
   readonly date: string
   readonly tag: string
   readonly mode: 'paper' | 'live'
+  /** NET of fees. */
   readonly realised: number
+  /** Before fees. Equal to `realised` on a venue that charges none here (NSE). */
+  readonly gross: number
+  readonly fees: number
   readonly total: number | null
   readonly maxProfit: number | null
   readonly maxLoss: number | null
@@ -478,6 +517,8 @@ export function buildDailyReport(input: DailyReportInput): DailyReport {
     tag: input.tag,
     mode: input.mode,
     realised: live.realised,
+    gross: live.gross,
+    fees: live.fees,
     total,
     maxProfit: ext.maxProfit,
     maxLoss: ext.maxLoss,
@@ -601,7 +642,10 @@ export const MARKET_OPEN_MIN = 9 * 60 + 15
  * cheaper than a holiday calendar that goes stale and silently suppresses a
  * real trading day.
  */
-export function inTradingSession(tsMs: number): boolean {
+export function inTradingSession(tsMs: number, venue: VenueSpec = API_VENUE): boolean {
+  // A 24x7 venue is always in session: its book is priced every minute of the
+  // week, so its series is too.
+  if (!isNse(venue)) return venue.isOpen(tsMs)
   const day = istWeekday(tsMs)
   if (day === 0 || day === 6) return false
   const m = istMinutesOfDay(tsMs)

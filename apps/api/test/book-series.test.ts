@@ -259,6 +259,8 @@ const report = (over: Partial<DailyReport>): DailyReport => ({
   tag: 'N1',
   mode: 'paper',
   realised: 0,
+  gross: 0,
+  fees: 0,
   total: 0,
   maxProfit: 0,
   maxLoss: 0,

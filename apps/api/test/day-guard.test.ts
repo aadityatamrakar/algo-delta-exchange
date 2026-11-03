@@ -23,6 +23,7 @@ import {
 import { DEFAULT_STRATEGY, type StrategyPatch, type StrategyRow } from '../src/strategies.ts'
 import type { PnlRow, PnlSummary } from '../src/pnl-jobs.ts'
 import type { DeskMode } from '../src/contract.ts'
+import { DX, type VenueSpec } from '@algomaker/venue'
 
 /** 2026-08-14 12:00 IST, a Friday inside the session. */
 const NOW = Date.parse('2026-08-14T06:30:00.000Z')
@@ -44,6 +45,8 @@ const pnlRow = (over: Partial<PnlRow> = {}): PnlRow => ({
   label: 'ORB scalp',
   mode: 'paper',
   realised: 0,
+  gross: 0,
+  fees: 0,
   unrealised: 0,
   total: 0,
   openLegs: 0,
@@ -79,6 +82,7 @@ function harness(input: {
   /** `undefined` falls through to the fake's own merge. */
   patchResult?: (attempt: number) => StrategyRow | null | 'conflict' | undefined
   now?: () => number
+  venue?: VenueSpec
 }): Harness {
   const records = new Map<string, GuardRecord>()
   const logs: { msg: string; ctx?: Record<string, unknown> }[] = []
@@ -89,6 +93,7 @@ function harness(input: {
   let attempt = 0
 
   const ports: DayGuardPorts = {
+    ...(input.venue === undefined ? {} : { venue: input.venue }),
     now: input.now ?? ((): number => NOW),
     log: (msg, ctx) => {
       logs.push(ctx === undefined ? { msg } : { msg, ctx })
@@ -558,4 +563,61 @@ test('the trip lands in the ORDER FEED, stamped with its rail', async () => {
   // Once, like everything else here.
   await h.guard.runGuards(NOW + 10_000)
   assert.equal(h.journalled.length, 1)
+})
+
+// ------------------------------------------------------- DX: the settlement day
+
+/**
+ * On Delta the day is the settlement cycle: 12:00 UTC to 12:00 UTC. An IST
+ * midnight day would split one expiry cycle, and an 08:45 IST re-arm would sit
+ * a stopped paper book out of hours of a market that never closes.
+ */
+test('DX: the guard keys 2026-11-04 at 12:00:00Z, and 2026-11-03 one second before', async () => {
+  const before = Date.parse('2026-11-03T11:59:59.000Z')
+  const at = Date.parse('2026-11-03T12:00:00.000Z')
+  const mk = (): Harness =>
+    harness({
+      venue: DX,
+      rows: [row({ dailyLimits: { stop: 250 } })],
+      pnl: { paper: [pnlRow({ total: -300, realised: -300 })] },
+      runtimeHost: () => 'runner',
+    })
+  const h1 = mk()
+  await h1.guard.runGuards(before)
+  assert.ok(h1.records.has(guardRecordId('ORB_SCALP_BN', 'paper', '2026-11-03')))
+  const h2 = mk()
+  await h2.guard.runGuards(at)
+  assert.ok(h2.records.has(guardRecordId('ORB_SCALP_BN', 'paper', '2026-11-04')))
+  assert.deepEqual(h2.patches[0]?.patch.disabledByGuard, {
+    paper: { day: '2026-11-04', trigger: 'stop' },
+  })
+})
+
+test('DX: a paper rail stopped in one settlement day re-arms right after the next 12:00 UTC', async () => {
+  const h = harness({
+    venue: DX,
+    rows: [
+      row({
+        modes: { paper: { enabled: false } },
+        disabledByGuard: { paper: { day: '2026-11-04', trigger: 'stop' } },
+      }),
+    ],
+  })
+  // 20:00 IST on 3 Nov is still the day that settles at 12:00 UTC on 4 Nov.
+  assert.deepEqual(await h.guard.rearm(Date.parse('2026-11-03T14:30:00.000Z')), [])
+  assert.deepEqual(await h.guard.rearm(Date.parse('2026-11-04T11:59:59.000Z')), [])
+  // 12:00:30 UTC: a new day, no 08:45 IST wait.
+  assert.deepEqual(await h.guard.rearm(Date.parse('2026-11-04T12:00:30.000Z')), ['ORB_SCALP_BN'])
+})
+
+test('DX: the trip in the order feed is in dollars', async () => {
+  const h = harness({
+    venue: DX,
+    rows: [row({ dailyLimits: { stop: 250 } })],
+    pnl: { paper: [pnlRow({ total: -312.5, realised: -312.5 })] },
+    runtimeHost: () => 'runner',
+  })
+  await h.guard.runGuards(Date.parse('2026-11-03T14:30:00.000Z'))
+  const msg = String(h.journalled[0]?.['error'])
+  assert.match(msg, /of \$250\.00 at -\$312\.50/)
 })

@@ -142,6 +142,7 @@ import {
 } from './state-store.ts'
 import { workingOrderCanceller } from './working-orders.ts'
 import type { LegPosition, OptType } from '@algomaker/desk-engine'
+import { NSE, venueFromEnv, type VenueSpec } from '@algomaker/venue'
 
 // ─────────────────────────────────────────────────────────────── cadences
 
@@ -295,6 +296,15 @@ export interface SupervisorDeps {
    * book's own `dl_parity_forward` decide.
    */
   readonly chainForward?: 'future' | null
+  /**
+   * The venue this process steers books on, `DESK_VENUE` read ONCE by `main`.
+   * ABSENT IS NSE — every upstream test builds these deps without one.
+   *
+   * On DX the index IS the forward: Delta's options settle on `.DEXBTUSD`, the
+   * master lists no future, and `md.spot` BTC is the only underlying price
+   * there is. So every managed symbol gets the §5 proxy, whatever its engine.
+   */
+  readonly venue?: VenueSpec
   /** Test seams. Production takes the constants above. */
   readonly leaseTtlMs?: number
   readonly leaseRetryMs?: number
@@ -898,7 +908,7 @@ export class Supervisor {
     // Per SYMBOL rather than per book because `ChainView` is per chain and
     // shared. A symbol carrying both kinds of book resolves toward the proxy,
     // which is the direction that keeps the delta-lean book deciding.
-    if (!this.#deltaLeanSymbols.has(symbol)) return null
+    if (!this.#proxySymbols.has(symbol)) return null
     const last = this.#lastSpot.get(symbol)
     if (last === undefined) return null
     if (this.#d.now() - last.ts > SPOT_PROXY_MAX_AGE_MS) return null
@@ -914,11 +924,16 @@ export class Supervisor {
     return (ring === undefined ? null : steadySpot(ring)) ?? last.price
   }
 
-  /** Every symbol a currently-managed delta-lean book is running on. */
-  get #deltaLeanSymbols(): ReadonlySet<string> {
+  /**
+   * Every symbol the §5 proxy may answer for: on NSE, those a currently-managed
+   * delta-lean book is running on; on a venue with no future (DX), every
+   * managed symbol — there the index is the only forward that exists.
+   */
+  get #proxySymbols(): ReadonlySet<string> {
+    const everyBook = (this.#d.venue ?? NSE).id !== 'nse'
     const out = new Set<string>()
     for (const runtime of this.#hosts.values()) {
-      if (runtime.book.dials.delta_lean_enabled) out.add(runtime.book.symbol)
+      if (everyBook || runtime.book.dials.delta_lean_enabled) out.add(runtime.book.symbol)
     }
     return out
   }
@@ -1435,8 +1450,17 @@ function makeLogger(): HostLog {
   }
 }
 
-/** `OptionMaster`, as `MasterPort`. The one place the dump's shape is read. */
-function masterPort(master: () => OptionMaster): MasterPort {
+/**
+ * `OptionMaster`, as `MasterPort`. The one place the dump's shape is read.
+ *
+ * On DX the `instrument` collection holds Delta's BTC options in the same row
+ * shape (marketdata's dx sync: `name` BTC, CE/PE, `lot_size` 0.001, the tick
+ * the exchange states), so every question but one is answered the same way.
+ * THE FUTURE IS NEVER ONE OF THEM there: Delta settles its options on the
+ * index, and a BTC future the sync happened to list would be a forward that
+ * is not the settlement's. `0` sends the chain to the index proxy.
+ */
+export function masterPort(master: () => OptionMaster, venue: VenueSpec = NSE): MasterPort {
   return {
     tokensFor: (symbol, expiry): ChainToken[] => {
       const m = master()
@@ -1453,7 +1477,8 @@ function masterPort(master: () => OptionMaster): MasterPort {
     // The chain's own expiry is NOT used: `future(underlying)` is the
     // nearest-expiry future, which is the forward the desk marks against
     // (`marks.ts`), and an option chain three months out is still priced off it.
-    futureToken: (symbol): number => master().future(symbol)?.instrumentToken ?? 0,
+    futureToken: (symbol): number =>
+      venue.id === 'nse' ? (master().future(symbol)?.instrumentToken ?? 0) : 0,
     instrumentFor: (symbol, expiry, strike, optType): string | null =>
       master().resolve(symbol, expiry, strike, optType)?.tradingsymbol ?? null,
     tickSizeFor: (symbol, expiry, strike, optType): number | null =>
@@ -1545,6 +1570,9 @@ export async function main(): Promise<void> {
   // ONCE, here, and never again: a revert that changed under a running process
   // would reprice books mid-pass. Said out loud, with the raw value, so a typo
   // that left the books on their own dials is the first thing an operator sees.
+  // The venue, ONCE: a bad DESK_VENUE throws here, before anything is steered.
+  const venue = venueFromEnv(process.env)
+  log.info('venue', { DESK_VENUE: process.env['DESK_VENUE'] ?? null, venue: venue.id })
   const chainForward = chainForwardOverride(process.env)
   log.info('chain forward', {
     DESK_CHAIN_FORWARD: process.env['DESK_CHAIN_FORWARD'] ?? null,
@@ -1589,7 +1617,8 @@ export async function main(): Promise<void> {
     bus,
     client: new DecisionsClient(apiUrl, token, { log: (msg, ctx) => log.warn(msg, ctx) }),
     api: deskApi(apiUrl, token, log),
-    master: () => masterPort(() => master),
+    master: () => masterPort(() => master, venue),
+    venue,
     lease,
     // The host name and pid, so a `/health` or a lease document names the
     // process an operator has to go and look at.

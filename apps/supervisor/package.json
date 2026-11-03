@@ -12,6 +12,7 @@
     "@algomaker/core": "1.0.0",
     "@algomaker/desk-engine": "0.1.0",
     "@algomaker/greeks": "1.0.0",
-    "@algomaker/instruments": "1.0.0"
+    "@algomaker/instruments": "1.0.0",
+    "@algomaker/venue": "1.0.0"
   }
 }

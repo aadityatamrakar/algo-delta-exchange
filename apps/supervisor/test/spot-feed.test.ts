@@ -66,6 +66,7 @@ import { Lease } from '../src/lease.ts'
 import type { ChainToken, MdTick } from '../src/chain-view.ts'
 import { istDateOf, type HostLog } from '../src/engine-host.ts'
 import { SUPERVISOR_STATE_COLLECTION, stateKey } from '../src/state-store.ts'
+import { DX, type VenueSpec } from '@algomaker/venue'
 
 // ────────────────────────────────────────────────────────────── the market
 
@@ -390,7 +391,10 @@ function registryRow(
   }
 }
 
-function rig(rows: Record<string, unknown>[], over: { chainForward?: 'future' | null } = {}): Rig {
+function rig(
+  rows: Record<string, unknown>[],
+  over: { chainForward?: 'future' | null; venue?: VenueSpec } = {},
+): Rig {
   const db = new FakeDb()
   const bus = new FakeBus()
   const client = new FakeClient()
@@ -413,6 +417,7 @@ function rig(rows: Record<string, unknown>[], over: { chainForward?: 'future' | 
     log,
     leaseRetryMs: 1,
     ...(over.chainForward === undefined ? {} : { chainForward: over.chainForward }),
+    ...(over.venue === undefined ? {} : { venue: over.venue }),
   })
   return Object.assign(r, {
     supervisor,
@@ -879,4 +884,60 @@ test('DESK_CHAIN_FORWARD=future puts that same book back on the future`s mid', a
   assert.ok(mark !== undefined)
   assert.equal(mark['spot'], NIFTY_SPOT + 300)
   assert.equal(mark['forwardSource'], 'future')
+})
+
+test('DX: a book of ANY engine prices off the index — the venue lists no future to quote', async () => {
+  // The same tape the recenter test above refuses: a listed future nothing
+  // quotes. On Delta the options settle on the index itself and the master
+  // carries no future at all, so the index IS the forward for every book.
+  const r = rig([registryRow(NIFTY_TAG, NIFTY, NIFTY_EXPIRY, { dials: { confirm_ms: 0 } })], { venue: DX })
+  await r.supervisor.boot()
+
+  r.bus.spot(NIFTY, NIFTY_SPOT, r.now)
+  r.bus.emit('md.tick', optionFrame(r.now))
+  await r.supervisor.evaluateDue()
+  await until(() => r.marks().length > 0, 20)
+  assert.ok(r.marks().length > 0, 'the chain snapped off the index')
+})
+
+test('DX master: the chain is read off the Delta rows, and the future is never the forward', async () => {
+  const { OptionMaster } = await import('@algomaker/instruments')
+  const { masterPort } = await import('../src/main.ts')
+  const rows = [
+    ...(['CE', 'PE'] as const).map((t, i) => ({
+      instrument_token: 5000 + i,
+      tradingsymbol: `${t === 'CE' ? 'C' : 'P'}-BTC-76600-041126`,
+      name: 'BTC',
+      expiry: '2026-11-04',
+      strike: 76600,
+      tick_size: 0.1,
+      lot_size: 0.001,
+      instrument_type: t,
+      segment: 'DX-OPT',
+      exchange: 'DELTA',
+    })),
+    {
+      instrument_token: 6000,
+      tradingsymbol: 'BTCUSD-FUT',
+      name: 'BTC',
+      expiry: '2026-11-27',
+      strike: 0,
+      tick_size: 0.5,
+      lot_size: 0.001,
+      instrument_type: 'FUT',
+      segment: 'DX-FUT',
+      exchange: 'DELTA',
+    },
+  ]
+  const m = new OptionMaster(rows)
+  const dx = masterPort(() => m, DX)
+  assert.deepEqual(
+    dx.tokensFor('BTC', '2026-11-04').map((t) => [t.token, t.optType, t.instrument]),
+    [[5000, 'CE', 'C-BTC-76600-041126'], [5001, 'PE', 'P-BTC-76600-041126']],
+  )
+  assert.equal(dx.futureToken('BTC'), 0)
+  assert.equal(dx.tickSizeFor('BTC', '2026-11-04', 76600, 'CE'), 0.1)
+  assert.equal(dx.chainMeta('BTC', '2026-11-04').lotSize, 0.001)
+  // NSE keeps reading its future.
+  assert.equal(masterPort(() => m).futureToken('BTC'), 6000)
 })

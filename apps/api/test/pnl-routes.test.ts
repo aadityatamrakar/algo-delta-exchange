@@ -709,6 +709,8 @@ function report(over: {
     tag: over.tag,
     mode: over.mode,
     realised: over.realised,
+    gross: over.realised,
+    fees: 0,
     total: over.total,
     maxProfit: null,
     maxLoss: null,

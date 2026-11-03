@@ -47,6 +47,21 @@ export interface ChainQuote {
    * from "the book is genuinely one level deep".
    */
   readonly depth?: DepthBook
+  /**
+   * DELTA'S OPTION FIELDS, for the option chain page: the exchange's own mark
+   * price, the size at the touch, mark IV, and the exchange's greeks. ABSENT
+   * on NSE — its feed sends none, and the Python desk computes its own greeks
+   * off the near future (the header's rule stands there). On DX these are
+   * display figures, not inputs to any decision.
+   */
+  readonly mark?: number
+  readonly bidSize?: number
+  readonly askSize?: number
+  readonly iv?: number
+  readonly delta?: number
+  readonly gamma?: number
+  readonly theta?: number
+  readonly vega?: number
   readonly asOf: number
   readonly ageMs: number
 }
@@ -110,7 +125,16 @@ function quoteFor(deps: ChainDeps, token: number | undefined, display: boolean):
     asOf: q.asOf,
     ageMs: q.ageMs,
     ...(q.depth === undefined ? {} : { depth: q.depth }),
+    ...(q.option ?? {}),
   }
+}
+
+/** `GET /v1/desk/chain/:symbol/expiries` — the listed option expiries, ascending. */
+export function chainExpiries(
+  master: OptionMaster,
+  underlying: string,
+): { readonly underlying: string; readonly expiries: readonly string[] } {
+  return { underlying, expiries: master.expiries(underlying) }
 }
 
 export function buildChain(
@@ -148,8 +172,11 @@ export function buildChain(
   }
 
   const spotToken = master.spotToken(underlying)
-  const spotQuote =
+  const tokenQuote =
     spotToken === null ? null : display ? deps.marks.displayQuote(spotToken) : deps.marks.quote(spotToken)
+  // An underlying with NO index row (Delta's BTC) is priced off `md.spot`.
+  // One that has a row keeps reading it, exactly as before.
+  const spotQuote = spotToken === null ? deps.marks.spotQuote(underlying, display) : tokenQuote
   const futureToken = master.future(underlying)?.instrumentToken
   const futureQuote = quoteFor(deps, futureToken, display)
 

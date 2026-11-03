@@ -46,9 +46,10 @@ import { auditLog, type AuditLog } from './audit.ts'
 import type { PnlRow, PnlSummary } from './pnl-jobs.ts'
 import { pnlFor } from './pnl-jobs.ts'
 import { PnlStore } from './pnlstore.ts'
-import { istDate, type ApiDeps } from './routes/kit.ts'
+import type { ApiDeps } from './routes/kit.ts'
 import { istMinutesOfDay } from './rollup.ts'
 import { RUNTIME_COLLECTION } from '../../runner/src/runtime.ts'
+import { API_VENUE, formatMoney, isNse, type VenueSpec } from './venue.ts'
 import {
   isOn,
   type DailyLimits,
@@ -115,6 +116,12 @@ export interface GuardFlatten {
 }
 
 export interface DayGuardPorts {
+  /**
+   * The venue whose day this guard keys on. Absent is the process venue
+   * (`DESK_VENUE`). NSE: the IST date, re-armed after 08:45 IST. DX: the
+   * settlement day (12:00 UTC to 12:00 UTC), re-armed as soon as it turns.
+   */
+  readonly venue?: VenueSpec
   now(): number
   log(msg: string, ctx?: Record<string, unknown>): void
   listStrategies(): Promise<readonly StrategyRow[]>
@@ -230,7 +237,15 @@ export function guardTrigger(
  * an unstamped event is read as LIVE, and a paper stop appearing under the live
  * log is the 2026-07-28 defect all over again.
  */
-export function guardJournalEvent(record: GuardRecord, limits: DailyLimits | undefined): Record<string, unknown> {
+export function guardJournalEvent(
+  record: GuardRecord,
+  limits: DailyLimits | undefined,
+  venue: VenueSpec = API_VENUE,
+): Record<string, unknown> {
+  // NSE keeps the upstream text exactly: a ₹ on the limit, a bare en-IN figure
+  // for the P&L. DX states both in dollars.
+  const nse = isNse(venue)
+  const pnlText = nse ? formatMoney(record.pnlAtTrigger, venue, { symbol: false }) : formatMoney(record.pnlAtTrigger, venue)
   const line = record.trigger === 'stop' ? 'daily stop-loss' : 'daily target'
   const limit = record.trigger === 'stop' ? limits?.stop : limits?.target
   return {
@@ -246,8 +261,8 @@ export function guardJournalEvent(record: GuardRecord, limits: DailyLimits | und
     ts: record.firedAt,
     error:
       `day guard: ${record.tag} hit its ${line}` +
-      `${limit === undefined ? '' : ` of ₹${limit.toLocaleString('en-IN')}`} at ` +
-      `${record.pnlAtTrigger.toLocaleString('en-IN')} — switched off for ${record.mode} ` +
+      `${limit === undefined ? '' : ` of ${formatMoney(limit, venue)}`} at ` +
+      `${pnlText} — switched off for ${record.mode} ` +
       `for the rest of ${record.day}` +
       `${record.incomplete ? ' (judged on REALISED only; a leg was unpriced)' : ''}`,
     detail: {
@@ -307,8 +322,12 @@ export class DayGuard {
   }
 
   /** Every armed, enabled rail, judged against today's P&L. */
+  get #venue(): VenueSpec {
+    return this.#d.venue ?? API_VENUE
+  }
+
   async runGuards(nowMs: number): Promise<GuardRecord[]> {
-    const day = istDate(nowMs)
+    const day = this.#venue.dayKey(nowMs)
     const rows = (await this.#d.listStrategies()).filter(isArmed)
     if (rows.length === 0) return []
 
@@ -419,7 +438,7 @@ export class DayGuard {
     // Into the ORDER FEED as well as the log — see `guardJournalEvent`. Before
     // the switch, so the journal carries the reason even if the write below
     // fails; `journalBlocked` never throws, so this cannot cost the stop.
-    await this.#d.journal([guardJournalEvent(record, row.dailyLimits)])
+    await this.#d.journal([guardJournalEvent(record, row.dailyLimits, this.#venue)])
 
     const off = await this.#switchOff(row, mode, day, trigger)
     await this.#d.guards.appendAction(id, { step: 'switch-off', at: this.#d.now(), note: off })
@@ -593,9 +612,11 @@ export class DayGuard {
    * is not over.
    */
   async rearm(nowMs: number): Promise<string[]> {
-    const day = istDate(nowMs)
+    const day = this.#venue.dayKey(nowMs)
     if (this.#rearmedFor === day) return []
-    if (istMinutesOfDay(nowMs) < REARM_AFTER_IST_MINUTES) return []
+    // NSE waits for the morning; a 24x7 venue's day starts trading the moment
+    // the last one settled, so its re-arm is due at once.
+    if (isNse(this.#venue) && istMinutesOfDay(nowMs) < REARM_AFTER_IST_MINUTES) return []
 
     const rearmed: string[] = []
     for (const row of await this.#d.listStrategies()) {
@@ -669,8 +690,9 @@ export function guardStore(db: ApiDeps['db']): GuardStore {
 
 /** The real collections behind `DayGuardPorts`. */
 export function dayGuardPorts(deps: ApiDeps): DayGuardPorts {
-  const store = new PnlStore(deps.db)
+  const store = new PnlStore(deps.db, deps.venue)
   return {
+    ...(deps.venue === undefined ? {} : { venue: deps.venue }),
     now: () => deps.now(),
     log: deps.log,
     listStrategies: async () => await deps.store.listStrategies(),

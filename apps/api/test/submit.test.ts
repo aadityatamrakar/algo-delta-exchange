@@ -2408,3 +2408,45 @@ test('a fallback instrument the master never synced keeps the base buffer on exp
   assert.equal(res.accepted, true)
   assert.equal(paper.routed[0]?.fill.limitPrice, 122.4)
 })
+
+test('DX: "expires today" is the settlement day — 14:00 UTC the day before is inside it', async () => {
+  const { DX } = await import('@algomaker/venue')
+  // 14:00 UTC on the eve: past the previous 12:00 UTC settlement, so on DX the
+  // contract settles at the NEXT 12:00 UTC — today, by the venue's day.
+  nowMs = Date.parse(`${EXPIRY}T14:00:00.000Z`) - 24 * 60 * 60 * 1000
+  const dx = new SubmitService({
+    store,
+    rails: { paper, live },
+    master: { current: master },
+    marks: MARKS,
+    freeze: () => FREEZE,
+    liveTags: new Set(),
+    orderCollections: ORDER_COLLECTIONS,
+    now: () => nowMs,
+    log: (msg, ctx) => logs.push(ctx === undefined ? { msg } : { msg, ctx }),
+    marketable: { bufferPct: 0.02, minTicks: 2, tickSize: 0.05, expiryBufferPct: 0.1 },
+    venue: DX,
+  })
+  await dx.submit(req({ side: 'Sell', lots: 1 }))
+  assert.equal(paper.routed[0]?.fill.limitPrice, 108)
+})
+
+test('DX: after the 12:00 UTC instant the contract no longer "expires today"', async () => {
+  const { DX } = await import('@algomaker/venue')
+  nowMs = Date.parse(`${EXPIRY}T12:00:00.000Z`)
+  const dx = new SubmitService({
+    store,
+    rails: { paper, live },
+    master: { current: master },
+    marks: MARKS,
+    freeze: () => FREEZE,
+    liveTags: new Set(),
+    orderCollections: ORDER_COLLECTIONS,
+    now: () => nowMs,
+    log: (msg, ctx) => logs.push(ctx === undefined ? { msg } : { msg, ctx }),
+    marketable: { bufferPct: 0.02, minTicks: 2, tickSize: 0.05, expiryBufferPct: 0.1 },
+    venue: DX,
+  })
+  await dx.submit(req({ side: 'Sell', lots: 1 }))
+  assert.equal(paper.routed[0]?.fill.limitPrice, 117.6)
+})
