@@ -1,0 +1,11 @@
+{
+  "name": "@algomaker/venue",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The venue a desk trades on (NSE or Delta Exchange): currency, quantity step, tick, rate, session clock, settlement day and expiry instant. Pure, no clock, no IO.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": { "@algomaker/desk-engine": "*" }
+}
