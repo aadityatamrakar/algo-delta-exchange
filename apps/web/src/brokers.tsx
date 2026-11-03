@@ -10,8 +10,8 @@
  * writing half of it would silently destroy the other half. The form therefore
  * accepts every secret field or none, and says so.
  *
- * `unreadable` IS NOT `absent`. "No XTS configured" is a setup step you have not
- * done; "XTS configured but the ciphertext will not open" means the master key
+ * `unreadable` IS NOT `absent`. "No Delta key configured" is a setup step you have not
+ * done; "Delta configured but the ciphertext will not open" means the master key
  * changed under the stored blob, and the only fix is re-entering the credential.
  * They are rendered as different states because they need different responses.
  */
@@ -31,76 +31,53 @@ import {
   type BrokerKind, type BrokerRow, type BrokerState, type BrokerTestResult,
 } from './api.ts'
 import { usePoll } from './shell.tsx'
-import { VENUE } from './venue.ts'
 
 /**
- * Every broker of this venue always gets a card, even when the API returns
- * none, because "XTS is not configured" is information the operator came here
- * for. An empty page would read as "nothing to do". The DX build has one
- * broker, Delta Exchange.
+ * ONE BROKER, Delta Exchange India. The card is always drawn, even when the
+ * API returns no row for it, because "Delta is not configured" is information
+ * the operator came here for. Any other kind the list carries (the api still
+ * knows `zerodha`) is not this desk's and gets no card.
  */
-const KINDS: readonly BrokerKind[] = VENUE.id === 'dx' ? ['delta'] : ['xts', 'zerodha']
+const KINDS: readonly BrokerKind[] = ['delta']
 
-interface FieldSpec { key: string; label: string; hint?: string }
+/** Where the api's credential test and the gateway sign their requests to. */
+export const DELTA_BASE_URL = 'https://api.india.delta.exchange'
+
+interface FieldSpec { key: string; label: string; hint?: string; default?: string }
 
 /**
  * The contract fixes the SHAPE (`secret` is an object of credential fields) but
- * not the field NAMES. These mirror the environment variables the consumers
- * already read — `XTS_APP_KEY` / `XTS_SECRET_KEY`, `ZERODHA_PASSWORD` /
- * `ZERODHA_TOTP_SECRET` — so a credential typed here matches the one the
- * gateway was booting with.
+ * not the field NAMES. These are the names the api's `testDelta` and the dx
+ * gateway read: `secret.apiKey`, `secret.apiSecret` (HMAC-SHA256 signing) and
+ * `meta.baseUrl`, which the api REQUIRES rather than defaults — so the form
+ * fills it with the India host on a row that has none.
  */
 const FIELDS: Record<BrokerKind, { label: string; secret: FieldSpec[]; meta: FieldSpec[] }> = {
-  xts: {
-    label: 'XTS',
-    secret: [
-      { key: 'appKey', label: 'App key' },
-      { key: 'secretKey', label: 'Secret key' },
-    ],
-    meta: [
-      { key: 'baseUrl', label: 'Base URL' },
-      { key: 'uniqueKey', label: 'Unique key' },
-      /**
-       * THE DEALER CLIENT CODE, and it is `meta` rather than `secret` on
-       * purpose: it is an account identifier, not a credential, so it can be
-       * shown on the card without breaking the rule that no secret is ever
-       * rendered — and being in `meta` is also what lets it be saved without
-       * re-typing the app key.
-       *
-       * A DEALER ACCOUNT NEEDS IT. The gateway otherwise derives `clientID`
-       * from the login response, which for a dealer is the dealer's own id and
-       * not the account orders must be stamped with; the legacy system carried
-       * it as an account field and the port dropped it. Blank keeps the
-       * derived value, which is correct for an investor account.
-       */
-      {
-        key: 'clientId',
-        label: 'Client code (dealer accounts)',
-        hint: 'Leave blank to use whatever the login returns — correct for an investor account. A DEALER account must state it here, or orders are stamped with the wrong client.',
-      },
-    ],
-  },
-  zerodha: {
-    label: 'Zerodha',
-    secret: [
-      { key: 'password', label: 'Password' },
-      { key: 'totpSecret', label: 'TOTP secret' },
-    ],
-    meta: [{ key: 'userId', label: 'User id' }],
-  },
-  /**
-   * Delta Exchange India: an API key and its secret (HMAC-SHA256 signing).
-   * The REST base is fixed by the gateway (`api.india.delta.exchange`), so
-   * nothing about the endpoint is typed here.
-   */
   delta: {
-    label: 'Delta Exchange',
+    label: 'Delta Exchange India',
     secret: [
       { key: 'apiKey', label: 'API key' },
       { key: 'apiSecret', label: 'API secret' },
     ],
-    meta: [],
+    meta: [
+      {
+        key: 'baseUrl',
+        label: 'Base URL',
+        default: DELTA_BASE_URL,
+        hint: 'Delta Exchange India REST. Change it only to point at a different Delta host.',
+      },
+    ],
   },
+}
+
+/** The stored meta with every blank field that has a default filled in. */
+function metaWithDefaults(kind: BrokerKind, stored: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...stored }
+  for (const f of FIELDS[kind].meta) {
+    const v = out[f.key]
+    if (f.default !== undefined && (v === undefined || v === null || v === '')) out[f.key] = f.default
+  }
+  return out
 }
 
 function stateBadge(state: BrokerState): React.ReactElement {
@@ -165,12 +142,11 @@ function EditDialog(props: {
    * SEEDED FROM THE WHOLE STORED `meta`, not just the fields shown.
    *
    * A save REPLACES `meta` server-side, so seeding only the keys this form
-   * knows about would silently delete the ones it does not — `prefix`,
-   * `hostLookupUrl` and `investorClient` are all read by the gateway and none
-   * of them has an input here. Correcting a label would have quietly changed
-   * how the process logs in.
+   * knows about would silently delete the ones it does not. Correcting a label
+   * would have quietly changed how the process logs in. A blank field with a
+   * default (the base URL) starts at that default.
    */
-  const [meta, setMeta] = useState<Record<string, unknown>>(() => ({ ...props.row.meta }))
+  const [meta, setMeta] = useState<Record<string, unknown>>(() => metaWithDefaults(props.kind, props.row.meta))
   const metaText = (key: string): string => {
     const v = meta[key]
     return v === undefined || v === null ? '' : String(v)
@@ -330,11 +306,7 @@ export function BrokersSection(): React.ReactElement {
         reading its logs.
       </Text>
 
-      {/*
-        Two cards side by side on a desk, one above the other below ~700px.
-        320px is the width at which a credential card's "Client code (dealer
-        accounts)" row still fits its label and its value on one line.
-      */}
+      {/* One card; the grid keeps it at a card's width rather than the page's. */}
       <Grid columns={{ minWidth: 320, max: 2 }} gap={4}>
         {KINDS.map((kind) => {
           const row: BrokerRow = byKind.get(kind) ?? {
@@ -354,6 +326,7 @@ export function BrokersSection(): React.ReactElement {
 
                 <VStack gap={1}>
                   {FIELDS[kind].meta.map((f) => {
+                    // What is STORED, not the form's default: an unsaved base URL is "—".
                     const v = row.meta[f.key]
                     return (
                       <MetaRow

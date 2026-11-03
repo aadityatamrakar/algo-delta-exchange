@@ -736,8 +736,12 @@ export interface LoginResult {
 
 // ---------------------------------------------------------------- brokers
 
-/** `delta` is the DX build's one broker (Delta Exchange India). */
-export type BrokerKind = 'xts' | 'zerodha' | 'delta'
+/**
+ * The one broker this desk saves and tests: Delta Exchange India. The api 404s
+ * `xts` (removed in T6); it still lists a `zerodha` row, which the dashboard
+ * does not offer.
+ */
+export type BrokerKind = 'delta'
 
 /**
  * `unreadable` is NOT `absent`. "No XTS configured" and "XTS configured but the
@@ -3474,7 +3478,10 @@ export function inSession(atMs: number, venue: VenueSpec = VENUE): boolean {
  * live for the 6½ hours after it settled.
  */
 export function pastExpiry(expiry: string, atMs: number = Date.now(), venue: VenueSpec = VENUE): boolean {
-  const at = venue.expiryInstantMs(expiry)
+  // The venue THROWS on a malformed date; a row with a bad expiry must not
+  // blank the Books page, so it is simply not called past expiry.
+  let at: number
+  try { at = venue.expiryInstantMs(expiry) } catch { return false }
   return Number.isFinite(at) && atMs >= at
 }
 

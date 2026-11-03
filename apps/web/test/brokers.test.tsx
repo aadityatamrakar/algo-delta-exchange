@@ -5,26 +5,36 @@
  * it in every screenshot of this page; a form that writes an empty secret
  * destroys a working credential while reporting success, and the next thing
  * anyone learns about it is that the gateway will not log in.
+ *
+ * The DX desk has ONE broker, Delta Exchange India. XTS is gone from the api
+ * (it 404s the kind) and Zerodha is not this desk's, so neither gets a card
+ * even when the list carries a row for it.
  */
 import { expect, test, describe } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { BrokersSection } from '../src/brokers.tsx'
 import { installFetch, type SentRequest } from './http.tsx'
 
-const XTS_ROW = {
-  kind: 'xts',
-  label: 'XTS live',
-  meta: { baseUrl: 'https://xts.example', uniqueKey: 'UK-1', clientId: 'DEALER01', prefix: 'enms' },
+const DELTA_ROW = {
+  kind: 'delta',
+  label: 'Delta live',
+  meta: { baseUrl: 'https://api.india.delta.exchange', note: 'kept' },
   configured: true,
   state: 'ok',
   lastVerifiedAt: 1_700_000_000_000,
   lastError: null,
 }
 
-function mountBrokers(): SentRequest[] {
+const ZERODHA_ROW = {
+  kind: 'zerodha', label: 'Zerodha (market data)', meta: {}, configured: false,
+  state: 'absent', lastVerifiedAt: null, lastError: null,
+}
+
+function mountBrokers(rows: unknown[] = [DELTA_ROW, ZERODHA_ROW]): SentRequest[] {
   const sent = installFetch(({ path, method }) => {
-    if (path === '/v1/desk/brokers' && method === 'GET') return { body: { brokers: [XTS_ROW] } }
-    return { body: { ok: true, kind: 'xts' } }
+    if (path === '/v1/desk/brokers' && method === 'GET') return { body: { brokers: rows } }
+    if (path === '/v1/desk/brokers/delta/test') return { body: { ok: true, verifiedAt: 1_700_000_100_000, note: 'signed wallet read ok' } }
+    return { body: { ok: true, kind: 'delta' } }
   })
   render(<BrokersSection />)
   return sent
@@ -33,87 +43,85 @@ function mountBrokers(): SentRequest[] {
 const puts = (sent: readonly SentRequest[]): SentRequest[] =>
   sent.filter((r) => r.method === 'PUT')
 
-/** The XTS card is the first of the two; Zerodha has an Edit button too. */
-async function openEditor(): Promise<void> {
-  await screen.findByText('XTS live')
-  const edit = screen.getAllByRole('button', { name: 'Edit credentials' })[0]
-  expect(edit).toBeTruthy()
-  act(() => { edit?.click() })
-  await screen.findByLabelText('App key')
+function type(label: string, value: string): void {
+  act(() => {
+    const el = screen.getByLabelText(label) as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setter?.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
 }
+
+async function openEditor(heading = 'Delta live'): Promise<void> {
+  await screen.findByText(heading)
+  act(() => { screen.getByRole('button', { name: 'Edit credentials' }).click() })
+  await screen.findByLabelText('API key')
+}
+
+describe('the broker cards', () => {
+  test('one Delta card — no XTS, no Zerodha, even when the list has a zerodha row', async () => {
+    mountBrokers()
+    await screen.findByText('Delta live')
+    expect(screen.getAllByRole('button', { name: 'Edit credentials' })).toHaveLength(1)
+    expect(screen.queryByText(/XTS/)).toBe(null)
+    expect(screen.queryByText(/Zerodha/)).toBe(null)
+    // The base URL is on the card: it is where the gateway signs its requests to.
+    expect(screen.getByText('https://api.india.delta.exchange')).toBeTruthy()
+  })
+
+  test('Test connection posts to the delta kind and shows the verdict', async () => {
+    const sent = mountBrokers()
+    await screen.findByText('Delta live')
+    act(() => { screen.getByRole('button', { name: 'Test connection' }).click() })
+    await waitFor(() =>
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/v1/desk/brokers/delta/test')).toBe(true))
+    expect(await screen.findByText('Login succeeded')).toBeTruthy()
+    expect(sent.some((r) => r.path.includes('/xts') || r.path.includes('/zerodha'))).toBe(false)
+  })
+})
 
 describe('the broker form', () => {
   test('the credential fields open blank, whatever the server said', async () => {
-    // A row that (wrongly) carried a secret back must still not put it on
-    // screen. Nothing here reads from the response into a credential input.
-    installFetch(({ path }) =>
-      path === '/v1/desk/brokers'
-        ? { body: { brokers: [{ ...XTS_ROW, secret: { appKey: 'LEAKED-KEY' } }] } }
-        : { body: {} })
-    render(<BrokersSection />)
+    mountBrokers([{ ...DELTA_ROW, secret: { apiKey: 'LEAKED-KEY' } }])
     await openEditor()
-
-    expect((screen.getByLabelText('App key') as HTMLInputElement).value).toBe('')
-    expect((screen.getByLabelText('Secret key') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('API key') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('API secret') as HTMLInputElement).value).toBe('')
     expect(document.body.textContent).not.toContain('LEAKED-KEY')
   })
 
-  test('saving with the credential fields blank does not send a secret', async () => {
-    const sent = mountBrokers()
-    await openEditor()
-
-    // The button says which of the two saves this is, before it is pressed.
-    const save = screen.getByRole('button', { name: 'Save (credential unchanged)' })
-    act(() => { save.click() })
-
-    await waitFor(() => expect(puts(sent).length).toBe(1))
-    const body = puts(sent)[0]?.body ?? {}
-    // Not `secret: {}` — ABSENT. An empty object is a value, and the server
-    // would have every right to seal it over the working credential.
-    expect('secret' in body).toBe(false)
-    expect(body['meta']).toMatchObject({ baseUrl: 'https://xts.example' })
-  })
-
-  test('a save preserves meta keys the form has no input for', async () => {
+  test('saving with the credential fields blank does not send a secret, and keeps meta', async () => {
     const sent = mountBrokers()
     await openEditor()
     act(() => { screen.getByRole('button', { name: 'Save (credential unchanged)' }).click() })
-
     await waitFor(() => expect(puts(sent).length).toBe(1))
-    // `prefix` is read by the gateway and has no field here. A save REPLACES
-    // meta server-side, so dropping it would silently change how the process
-    // logs in — from a dialog the operator opened to fix a label.
-    expect((puts(sent)[0]?.body?.['meta'] as Record<string, unknown>)['prefix']).toBe('enms')
+    expect(puts(sent)[0]?.path).toBe('/v1/desk/brokers/delta')
+    const body = puts(sent)[0]?.body ?? {}
+    expect('secret' in body).toBe(false)
+    // A save REPLACES meta server-side: a key the form has no input for survives.
+    expect(body['meta']).toEqual({ baseUrl: 'https://api.india.delta.exchange', note: 'kept' })
+  })
+
+  test('a first save fills the base URL with the India host, and sends both secret fields', async () => {
+    const sent = mountBrokers([])
+    await openEditor('Delta Exchange India')
+    expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.india.delta.exchange')
+    type('API key', 'k-1')
+    type('API secret', 's-1')
+    act(() => { screen.getByRole('button', { name: 'Save credential' }).click() })
+    await waitFor(() => expect(puts(sent).length).toBe(1))
+    expect(puts(sent)[0]?.body).toEqual({
+      label: 'Delta Exchange India',
+      meta: { baseUrl: 'https://api.india.delta.exchange' },
+      secret: { apiKey: 'k-1', apiSecret: 's-1' },
+    })
   })
 
   test('half a credential cannot be saved', async () => {
     const sent = mountBrokers()
     await openEditor()
-
-    act(() => {
-      const el = screen.getByLabelText('App key') as HTMLInputElement
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setter?.call(el, 'only-half')
-      el.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-
-    // The credential is sealed as ONE blob: writing half of it destroys the
-    // other half, so the form refuses rather than doing it.
+    type('API key', 'only-half')
     await screen.findByText('Fill in every credential field, or none')
-    expect((screen.getByRole('button', { name: 'Save credential' }) as HTMLButtonElement).disabled)
-      .toBe(true)
+    expect((screen.getByRole('button', { name: 'Save credential' }) as HTMLButtonElement).disabled).toBe(true)
     expect(puts(sent).length).toBe(0)
-  })
-
-  test('the dealer client code is on the card and in the form', async () => {
-    mountBrokers()
-    // On the card, because it is an account identifier and not a credential —
-    // an operator has to be able to see what the gateway will stamp orders with.
-    await screen.findByText('Client code (dealer accounts)')
-    expect(screen.getByText('DEALER01')).toBeTruthy()
-
-    await openEditor()
-    expect((screen.getByLabelText('Client code (dealer accounts)') as HTMLInputElement).value)
-      .toBe('DEALER01')
   })
 })
