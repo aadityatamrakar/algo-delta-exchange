@@ -33,7 +33,21 @@ const usToMs = (v: unknown): number | null => {
  * `instrument_token` is the Delta product id — the integer every order and
  * ticker for the contract carries.
  */
-export function toInstrumentRow(p: DxProduct): InstrumentRow | null {
+/**
+ * An instrument row plus Delta's open-interest cap, from `product_specs`
+ * (written by the marketdata sync so every desk process reads it off the
+ * instrument master, with no REST on the order path). Both are set on every
+ * option row — the flag `false` rather than absent — so an upsert clears a
+ * lifted cap. Absent on the spot row.
+ */
+export type DxInstrumentRow = InstrumentRow & {
+  /** `product_specs.max_oi_usd`; null when Delta lists none. */
+  readonly dx_max_oi_usd?: number | null
+  /** `product_specs.oi_reduce_only_mode` (or `only_reduce_only_orders_allowed`) at sync time. */
+  readonly dx_oi_reduce_only?: boolean
+}
+
+export function toInstrumentRow(p: DxProduct): DxInstrumentRow | null {
   const type = p.contract_type === 'call_options' ? 'CE' : p.contract_type === 'put_options' ? 'PE' : null
   if (type === null) return null
   if (p.underlying_asset?.symbol !== 'BTC') return null
@@ -53,6 +67,9 @@ export function toInstrumentRow(p: DxProduct): InstrumentRow | null {
     instrument_type: type,
     segment: DX_OPTION_SEGMENT,
     exchange: DX_EXCHANGE,
+    dx_max_oi_usd: num(p.product_specs?.max_oi_usd),
+    dx_oi_reduce_only:
+      p.product_specs?.oi_reduce_only_mode === true || p.product_specs?.only_reduce_only_orders_allowed === true,
   }
 }
 
@@ -68,45 +85,79 @@ export function opensAllowed(x: DxProduct | DxTicker): boolean {
   return specs?.oi_reduce_only_mode !== true && specs?.only_reduce_only_orders_allowed !== true
 }
 
+/**
+ * A product's open interest in USD: `oi_contracts × contract_value × index`.
+ * Verified against Delta's own `oi_value_usd` on 3 Nov 2026 (testnet
+ * C-BTC-77200-041126: 55,371 × 0.001 × 76,462 = $4,233,772). Null when either
+ * input is missing.
+ */
+export function oiUsdOf(oiContracts: number | null, contractValue: number, index: number | null): number | null {
+  if (oiContracts === null || index === null || !Number.isFinite(oiContracts) || !Number.isFinite(index) || index <= 0) return null
+  return Number((oiContracts * contractValue * index).toFixed(4))
+}
+
+/**
+ * Which rule decided a cap check:
+ *   flag            — Delta flags the product reduce-only, and the figures confirm it
+ *   cap             — no flag, but a cap is listed: enforced anyway (Delta rejected
+ *                     at the cap whether or not a flag was showing)
+ *   flag-no-figures — flagged, but OI or cap unknown: capped on Delta's word
+ *   no-figures      — no flag and OI or cap unknown: cannot be checked, not capped
+ */
+export type OiCapBasis = 'flag' | 'cap' | 'flag-no-figures' | 'no-figures'
+
 export interface OiCapStatus {
-  /** A new position here would be refused (`only_reduce_only_orders_allowed`). */
+  /** A NEW position here would be refused (`only_reduce_only_orders_allowed`). */
   readonly capped: boolean
-  /** Delta has the product in reduce-only mode (product or ticker flag). */
-  readonly enforced: boolean
-  /** `oi_value_usd` from the ticker. */
+  readonly basis: OiCapBasis
   readonly oiUsd: number | null
-  /** `product_specs.max_oi_usd`. */
   readonly capUsd: number | null
   /** capUsd − oiUsd; negative when over. */
   readonly headroomUsd: number | null
 }
 
 /**
- * The product's open-interest cap against its current OI.
- *
- * Capped when Delta ENFORCES it — `oi_reduce_only_mode` on the product's specs
- * or its ticker, or `only_reduce_only_orders_allowed` — and the OI plus this
- * order's notional is at or over the cap. With the flag on and a figure
- * missing it is capped: Delta has said reduce-only, and nothing here can
- * overrule that. Without the flag it is never capped (not enforced), but the
- * figures are still reported.
+ * The cap check: capped when OI + this order's notional is at or over the cap.
+ * The reduce-only flag only decides the case with a figure missing.
  */
-export function oiCapStatus(product: DxProduct, ticker: DxTicker | null, orderNotionalUsd = 0): OiCapStatus {
+export function oiCapCheck(a: {
+  readonly oiUsd: number | null
+  readonly capUsd: number | null
+  readonly reduceOnly: boolean
+  readonly orderNotionalUsd?: number
+}): OiCapStatus {
+  const { oiUsd, capUsd } = a
+  const headroomUsd = oiUsd === null || capUsd === null ? null : Number((capUsd - oiUsd).toFixed(4))
+  if (oiUsd === null || capUsd === null) {
+    return { capped: a.reduceOnly, basis: a.reduceOnly ? 'flag-no-figures' : 'no-figures', oiUsd, capUsd, headroomUsd }
+  }
+  const capped = oiUsd + Math.max(0, a.orderNotionalUsd ?? 0) >= capUsd
+  return { capped, basis: a.reduceOnly ? 'flag' : 'cap', oiUsd, capUsd, headroomUsd }
+}
+
+/**
+ * The cap check off a REST product and ticker (the demo rail's path): OI from
+ * the ticker's `oi_contracts` × contract value × its `spot_price` (else
+ * `index`), cap and flag from the product's specs (the ticker's flag counts too).
+ */
+export function oiCapStatus(
+  product: DxProduct,
+  ticker: DxTicker | null,
+  orderNotionalUsd = 0,
+  index: number | null = null,
+): OiCapStatus {
   const specs = product.product_specs
-  const oiUsd = num(ticker?.oi_value_usd)
-  const capUsd = num(specs?.max_oi_usd)
-  const headroomUsd = oiUsd === null || capUsd === null ? null : Number((capUsd - oiUsd).toFixed(8))
-  const enforced =
-    specs?.oi_reduce_only_mode === true ||
-    ticker?.oi_reduce_only_mode === true ||
-    specs?.only_reduce_only_orders_allowed === true
-  const capped =
-    enforced &&
-    (specs?.only_reduce_only_orders_allowed === true ||
-      oiUsd === null ||
-      capUsd === null ||
-      oiUsd + Math.max(0, orderNotionalUsd) >= capUsd)
-  return { capped, enforced, oiUsd, capUsd, headroomUsd }
+  const cv = num(product.contract_value) ?? 0.001
+  const idx = num(ticker?.spot_price) ?? index
+  return oiCapCheck({
+    oiUsd: oiUsdOf(num(ticker?.oi_contracts), cv, idx),
+    capUsd: num(specs?.max_oi_usd),
+    reduceOnly:
+      specs?.oi_reduce_only_mode === true ||
+      specs?.only_reduce_only_orders_allowed === true ||
+      ticker?.oi_reduce_only_mode === true,
+    orderNotionalUsd,
+  })
 }
 
 /** The `.DEXBTUSD` index as the chain's spot row (`OptionMaster` matches the INDICES segment). */
@@ -126,8 +177,8 @@ export function spotInstrumentRow(idx: DxSpotIndexRef = { id: 14, symbol: DX_SPO
 }
 
 /** Every BTC option row, plus one spot row taken from the first option's `spot_index`. */
-export function toInstrumentRows(products: readonly DxProduct[]): InstrumentRow[] {
-  const rows: InstrumentRow[] = []
+export function toInstrumentRows(products: readonly DxProduct[]): DxInstrumentRow[] {
+  const rows: DxInstrumentRow[] = []
   let spot: DxSpotIndexRef | undefined
   for (const p of products) {
     const row = toInstrumentRow(p)

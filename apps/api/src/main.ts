@@ -279,7 +279,10 @@ export async function main(): Promise<void> {
     log,
   )
   await masterSource.reload('boot')
-  const masterProvider: MasterProvider = { current: () => masterSource.current() }
+  const masterProvider: MasterProvider = {
+    current: () => masterSource.current(),
+    oiCap: (token) => masterSource.oiCap(token),
+  }
 
   const refreshMs = Number(process.env['DESK_MASTER_REFRESH_MS'] ?? 15 * 60_000)
   const checkMs = Number(process.env['DESK_MASTER_CHECK_MS'] ?? 10_000)

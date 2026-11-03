@@ -22,9 +22,23 @@
 
 import { OptionMaster, type InstrumentRow } from '@algomaker/instruments'
 
+/** A stored row, with Delta's OI cap when the dx sync wrote one (`loadStoredInstruments`). */
+export type MasterRow = InstrumentRow & {
+  readonly dx_max_oi_usd?: number | null
+  readonly dx_oi_reduce_only?: boolean
+}
+
+/** Delta's OI cap for one contract, off its master row. */
+export interface OiCapRef {
+  readonly capUsd: number | null
+  readonly reduceOnly: boolean
+  /** BTC per contract, for the OI value. */
+  readonly lotSize: number
+}
+
 export interface MasterSource {
   /** Every stored instrument row — `loadStoredInstruments`. */
-  readonly load: () => Promise<InstrumentRow[]>
+  readonly load: () => Promise<MasterRow[]>
   /** Cheap: changes whenever rows are inserted or deleted. */
   readonly fingerprint: () => Promise<string>
 }
@@ -44,6 +58,7 @@ export async function collectionFingerprint(col: {
 
 export class MasterRefresher {
   #master: OptionMaster = new OptionMaster([])
+  #caps = new Map<number, OiCapRef>()
   #seen: string | null = null
   #busy: Promise<void> | null = null
   private readonly source: MasterSource
@@ -58,6 +73,11 @@ export class MasterRefresher {
     return this.#master
   }
 
+  /** Delta's OI cap for a token, or null (no cap on record, or not a Delta option). */
+  oiCap(token: number): OiCapRef | null {
+    return this.#caps.get(token) ?? null
+  }
+
   /** Reload unconditionally. Concurrent calls share one load. */
   async reload(reason: 'boot' | 'scheduled' | 'changed' = 'scheduled'): Promise<void> {
     if (this.#busy !== null) return this.#busy
@@ -65,6 +85,11 @@ export class MasterRefresher {
       const fp = await this.source.fingerprint()
       const rows = await this.source.load()
       this.#master = new OptionMaster(rows)
+      this.#caps = new Map(
+        rows
+          .filter((r) => r.dx_max_oi_usd !== undefined || r.dx_oi_reduce_only !== undefined)
+          .map((r) => [r.instrument_token, { capUsd: r.dx_max_oi_usd ?? null, reduceOnly: r.dx_oi_reduce_only === true, lotSize: r.lot_size }]),
+      )
       this.#seen = fp
       this.log(reason === 'boot' ? 'instrument master loaded' : 'instrument master refreshed', {
         contracts: this.#master.optionCount,

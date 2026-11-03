@@ -287,7 +287,16 @@ export async function loadFreezeLimits(collection: SyncCollection): Promise<Free
 }
 
 /** Load the stored dump back out, for building an `OptionMaster`. */
-export async function loadStoredInstruments(collection: SyncCollection): Promise<InstrumentRow[]> {
+/**
+ * A stored row, plus Delta's OI cap fields when the dx sync wrote them
+ * (`DxInstrumentRow`): present only on Delta option rows, absent elsewhere.
+ */
+export type StoredInstrumentRow = InstrumentRow & {
+  readonly dx_max_oi_usd?: number | null
+  readonly dx_oi_reduce_only?: boolean
+}
+
+export async function loadStoredInstruments(collection: SyncCollection): Promise<StoredInstrumentRow[]> {
   const docs = await collection.find({}).toArray()
   return docs.map((d) => ({
     instrument_token: Number(d['instrument_token']),
@@ -300,5 +309,9 @@ export async function loadStoredInstruments(collection: SyncCollection): Promise
     instrument_type: String(d['instrument_type'] ?? ''),
     segment: String(d['segment'] ?? ''),
     exchange: String(d['exchange'] ?? ''),
+    ...('dx_max_oi_usd' in d
+      ? { dx_max_oi_usd: typeof d['dx_max_oi_usd'] === 'number' ? d['dx_max_oi_usd'] : null }
+      : {}),
+    ...('dx_oi_reduce_only' in d ? { dx_oi_reduce_only: d['dx_oi_reduce_only'] === true } : {}),
   }))
 }

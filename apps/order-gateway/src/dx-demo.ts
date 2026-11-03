@@ -34,7 +34,7 @@ import {
   type PlacedOrder,
 } from '@algomaker/brokers'
 import type { OrderIntent } from '@algomaker/order-bus'
-import { DxAdapter, DxOrderError, DxRest, type DxTradingClient } from '@algomaker/dx'
+import { DxAdapter, DxOrderError, DxRest, type DxProduct, type DxTradingClient } from '@algomaker/dx'
 import { DX_USER_AGENT, type DxConfig } from './dx-config.ts'
 import { chooseRail, stampedPaperRail, type OrderRail, type PaperRailChoice } from './dx-edge.ts'
 import { orderMode } from './journal.ts'
@@ -78,6 +78,8 @@ export class DemoRail implements BrokerAdapter {
   /** tradingsymbol → testnet product id. */
   #ids = new Map<string, number>()
   #idsAt = 0
+  /** tradingsymbol → testnet's product, from the same listing (its `product_specs` carry the OI cap). */
+  #listed = new Map<string, DxProduct>()
   #idsLoaded = false
   /** testnet product id → the production token the desk knows it by. */
   readonly #prodToken = new Map<number, number>()
@@ -157,6 +159,22 @@ export class DemoRail implements BrokerAdapter {
   /** @deprecated Alias for {@link onOrderUpdate}. */
   onFill(handler: (order: PlacedOrder) => void): () => void {
     return this.onOrderUpdate(handler)
+  }
+
+  /**
+   * Testnet's product for a symbol, from the cached listing (re-read on the
+   * listing's own schedule, never per call) — for the OI-cap check. Null when
+   * testnet does not list it or the rail cannot be built.
+   */
+  async testnetProduct(symbol: string): Promise<DxProduct | null> {
+    let b: Built
+    try {
+      b = await this.#ensure()
+    } catch {
+      return null
+    }
+    const id = await this.#testnetId(b.rest, symbol, `oi-cap ${symbol}`)
+    return id === null ? null : (this.#listed.get(symbol) ?? null)
   }
 
   /** One frame off the demo private socket. Ignored until the rail is built. */
@@ -245,10 +263,15 @@ export class DemoRail implements BrokerAdapter {
     try {
       const products = await rest.products({ states: ['live'] })
       const ids = new Map<string, number>()
+      const listed = new Map<string, DxProduct>()
       for (const p of products) {
-        if (typeof p.symbol === 'string' && p.symbol !== '' && Number.isInteger(p.id) && p.id > 0) ids.set(p.symbol, p.id)
+        if (typeof p.symbol === 'string' && p.symbol !== '' && Number.isInteger(p.id) && p.id > 0) {
+          ids.set(p.symbol, p.id)
+          listed.set(p.symbol, p)
+        }
       }
       this.#ids = ids
+      this.#listed = listed
       this.#idsAt = now
       this.#idsLoaded = true
     } catch (err) {

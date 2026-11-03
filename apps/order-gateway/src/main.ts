@@ -80,7 +80,7 @@ import {
 } from './dx-edge.ts'
 import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore } from './dx-config.ts'
 import { DemoRail, createAdapterRouter, demoKeyReadiness, holdsLegs } from './dx-demo.ts'
-import { OiCapGate } from './dx-oicap.ts'
+import { OiCapGate, demoOiCapSource, liveOiCapSource, type MasterCap } from './dx-oicap.ts'
 import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
 import {
   BROKER_SNAPSHOT_COLLECTION,
@@ -1580,10 +1580,31 @@ export async function main(): Promise<void> {
    * freeze lookup that missed — see `gateway.ts:deriveUnderlying`.
    */
   let underlyingBySymbol = new Map<string, string>()
+  /**
+   * Delta's OI cap per option symbol, off the master rows the dx sync wrote
+   * (`dx_max_oi_usd`, `dx_oi_reduce_only`) — the live OI-cap check's reference
+   * half, refreshed with the master. Empty on NSE.
+   */
+  let dxCapBySymbol = new Map<string, MasterCap>()
+  /** OI contracts per token, off `md.tick` (`oi`) — the live OI-cap check's market half. */
+  const oiContractsByToken = new Map<number, number>()
 
   const loadReference = async (): Promise<void> => {
     const rows = await loadStoredInstruments(mongo.db.collection('instrument'))
     master = new OptionMaster(rows)
+    dxCapBySymbol = new Map(
+      rows
+        .filter((r) => r.dx_max_oi_usd !== undefined || r.dx_oi_reduce_only !== undefined)
+        .map((r) => [
+          r.tradingsymbol,
+          {
+            token: r.instrument_token,
+            lotSize: r.lot_size,
+            capUsd: r.dx_max_oi_usd ?? null,
+            reduceOnly: r.dx_oi_reduce_only === true,
+          },
+        ]),
+    )
     underlyingBySymbol = new Map(
       rows.filter((r) => r.tradingsymbol !== '' && r.name !== '').map((r) => [r.tradingsymbol, r.name]),
     )
@@ -2191,9 +2212,23 @@ export async function main(): Promise<void> {
   const dxCaps = onDx ? dxCapsFromEnv(process.env) : null
   if (dxCaps !== null) log('DX caps', { ...dxCaps })
   /** Delta's per-product OI cap, checked per opening package on the rail it goes to. */
+  const liveOiCaps = liveOiCapSource({
+    capOf: (symbol) => dxCapBySymbol.get(symbol) ?? null,
+    oiContractsOf: (token) => oiContractsByToken.get(token) ?? null,
+    index: () => btcIndex,
+  })
   const oiCapGate = onDx
     ? new OiCapGate({
-        venueFor: (rail) => (rail === 'live' ? dxRest : rail === 'demo' ? (demoRail?.rest ?? null) : null),
+        sourceFor: (rail) => {
+          if (rail === 'live') return liveOiCaps
+          const rest = demoRail?.rest ?? null
+          if (rail !== 'demo' || demoRail === null || rest === null) return null
+          return demoOiCapSource({
+            ticker: (s) => rest.ticker(s),
+            productOf: (s) => demoRail.testnetProduct(s),
+            index: () => btcIndex,
+          })
+        },
         loadPackage: async (decisionId) => {
           const d = await mongo.db.collection('desk-decisions').findOne({ decisionId })
           const planned = d?.['plannedFills']
@@ -2329,7 +2364,9 @@ export async function main(): Promise<void> {
    * order pegs to and the book and print that fill a resting paper order come
    * off the same frame and cannot drift apart.
    */
-  bus.subscribe<{ token: number; price: number }>('md.tick', (m) => {
+  bus.subscribe<{ token: number; price: number; oi?: number }>('md.tick', (m) => {
+    const oi = m.payload?.oi
+    if (typeof oi === 'number' && Number.isFinite(oi) && oi >= 0) oiContractsByToken.set(m.payload.token, oi)
     onTick(m.payload)
   })
   /** The BTC index for the fee model's notional and the notional cap. */
