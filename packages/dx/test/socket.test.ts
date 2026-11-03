@@ -154,3 +154,26 @@ test('private socket: key-auth first, subscribe only after auth, re-auth on reco
     await srv.close()
   }
 })
+
+test('public socket: a compact ticker with two symbols in d reaches onFrame as two quotes', async () => {
+  const srv = await fakeServer()
+  const frames: DxFrame[] = []
+  const s = new DxPublicSocket(srv.url, { onFrame: (f) => frames.push(f), reconnectMs: 20 })
+  try {
+    s.subscribe('ticker', ['C-BTC-77000-041126', 'P-BTC-77000-041126'])
+    await until(() => subs(srv.conns[0]?.msgs ?? []).length === 1, 'subscription')
+    srv.conns[0]?.ws.send(JSON.stringify({
+      type: 'ticker', sy: 'C-BTC-77000-041126', sp: '76787.8', ts: 1793696838633307,
+      d: [
+        { s: 'C-BTC-77000-041126', i: 161396, m: '600.26', q: ['606', '8588', '601', '13682', null] },
+        { s: 'P-BTC-77000-041126', i: 161397, m: '700.1', q: ['702', '10', '698', '20', null] },
+      ],
+    }))
+    await until(() => frames.filter((f) => f.kind === 'ticker').length === 2, 'two ticker frames')
+    const syms = frames.flatMap((f) => (f.kind === 'ticker' ? [f.quote.symbol] : []))
+    assert.deepEqual(syms, ['C-BTC-77000-041126', 'P-BTC-77000-041126'])
+  } finally {
+    s.close()
+    await srv.close()
+  }
+})

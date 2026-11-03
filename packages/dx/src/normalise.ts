@@ -149,20 +149,30 @@ export function quoteFromTicker(t: DxTicker): DxQuote {
 const at = (xs: unknown, i: number): unknown => (Array.isArray(xs) ? xs[i] : undefined)
 
 /**
- * WS `ticker` frame (compact keys) → quote.
+ * WS `ticker` → quote. Two forms reach here:
+ *
+ *   COMPACT (what Delta's public socket actually sends, probe 3 Nov 2026):
+ *     {type:'ticker', sy, sp, ts, d:[{s, i, m, q, qiv, g, oi, …}, …]}
+ *     — one quote per element of `d`; `sp`/`ts` sit on the envelope (an
+ *     element's own `sp`/`ts` wins when present).
+ *   FLAT (the docs' sample): the same element keys on the envelope itself.
+ *
  *   q   = [best_ask, ask_size, best_bid, bid_size, impact_mid]
  *   qiv = [ask_iv, bid_iv, mark_iv]
- *   g   = [delta, gamma, rho, theta, vega]   (null for futures)
+ *   g   = [delta, gamma, rho, theta, vega]   (null for futures) — order
+ *         cross-checked against the REST greeks of the same product
+ *   oi  = [contracts, ?] — the first matches REST `oi_contracts` in scale; the
+ *         second is not a plain contracts × spot value (UNCONFIRMED), unused
  */
-function quoteFromTickerFrame(m: Record<string, unknown>): DxQuote {
-  const g = m['g']
-  const q = m['q']
-  const qiv = m['qiv']
+function quoteFromTickerElement(e: Record<string, unknown>, env: Record<string, unknown>): DxQuote {
+  const g = e['g']
+  const q = e['q']
+  const qiv = e['qiv']
   return {
-    symbol: String(m['sy'] ?? m['s'] ?? ''),
-    productId: num(m['i']),
-    mark: num(m['m']),
-    spot: num(m['sp']),
+    symbol: String(e['s'] ?? e['sy'] ?? env['sy'] ?? ''),
+    productId: num(e['i']),
+    mark: num(e['m']),
+    spot: num(e['sp'] ?? env['sp']),
     ask: num(at(q, 0)),
     askSize: num(at(q, 1)),
     bid: num(at(q, 2)),
@@ -170,19 +180,25 @@ function quoteFromTickerFrame(m: Record<string, unknown>): DxQuote {
     askIv: num(at(qiv, 0)),
     bidIv: num(at(qiv, 1)),
     iv: num(at(qiv, 2)),
-    oi: num(at(m['oi'], 0)),
+    oi: num(at(e['oi'], 0)),
     delta: num(at(g, 0)),
     gamma: num(at(g, 1)),
     rho: num(at(g, 2)),
     theta: num(at(g, 3)),
     vega: num(at(g, 4)),
-    tsMs: usToMs(m['ts']),
+    tsMs: usToMs(e['ts'] ?? env['ts']),
   }
 }
 
+const isRecord = (x: unknown): x is Record<string, unknown> =>
+  x !== null && typeof x === 'object' && !Array.isArray(x)
+
 export type DxFrame =
+  /** One contract's quote. A compact message with N symbols is N of these (`parseFrames`). */
   | { readonly kind: 'ticker'; readonly quote: DxQuote }
   | { readonly kind: 'spot'; readonly symbol: string; readonly price: number | null; readonly tsMs: number | null }
+  /** `mark_price`; `symbol` without Delta's `MARK:` prefix. */
+  | { readonly kind: 'mark'; readonly symbol: string; readonly price: number | null; readonly tsMs: number | null }
   | {
       readonly kind: 'ob_l1'
       readonly symbol: string
@@ -198,17 +214,28 @@ export type DxFrame =
   /** Everything else — private channels included — untouched. */
   | { readonly kind: 'other'; readonly raw: unknown }
 
-/** A parsed WS message (already JSON-decoded) → typed frame. */
-export function parseFrame(raw: unknown): DxFrame {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { kind: 'other', raw }
-  const m = raw as Record<string, unknown>
+/**
+ * A parsed WS message (already JSON-decoded) → typed frames. Usually one; a
+ * compact `ticker` yields one per element of `d` (none for an empty `d`).
+ * The sockets deliver these one at a time.
+ */
+export function parseFrames(raw: unknown): DxFrame[] {
+  if (!isRecord(raw)) return [{ kind: 'other', raw }]
+  const m = raw
   switch (m['type']) {
-    case 'ticker':
-      return { kind: 'ticker', quote: quoteFromTickerFrame(m) }
+    case 'ticker': {
+      const d = m['d']
+      if (Array.isArray(d)) {
+        return d.filter(isRecord).map((e) => ({ kind: 'ticker', quote: quoteFromTickerElement(e, m) }) as const)
+      }
+      return [{ kind: 'ticker', quote: quoteFromTickerElement(m, m) }]
+    }
     case 'spot_price':
-      return { kind: 'spot', symbol: String(m['sy'] ?? ''), price: num(m['p']), tsMs: usToMs(m['ts']) }
+      return [{ kind: 'spot', symbol: String(m['sy'] ?? ''), price: num(m['p']), tsMs: usToMs(m['ts']) }]
+    case 'mark_price':
+      return [{ kind: 'mark', symbol: String(m['sy'] ?? '').replace(/^MARK:/, ''), price: num(m['p']), tsMs: usToMs(m['ts']) }]
     case 'ob_l1':
-      return {
+      return [{
         kind: 'ob_l1',
         symbol: String(m['sy'] ?? ''),
         ask: num(m['ap']),
@@ -216,14 +243,24 @@ export function parseFrame(raw: unknown): DxFrame {
         bid: num(m['bp']),
         bidSize: num(m['bs']),
         tsMs: usToMs(m['ts']),
-      }
+      }]
     case 'subscriptions':
-      return { kind: 'subscriptions', raw: m }
+      return [{ kind: 'subscriptions', raw: m }]
     case 'heartbeat':
-      return { kind: 'heartbeat' }
+      return [{ kind: 'heartbeat' }]
     case 'key-auth':
-      return { kind: 'auth', ok: m['success'] === true, raw: m }
+      return [{ kind: 'auth', ok: m['success'] === true, raw: m }]
     default:
-      return { kind: 'other', raw: m }
+      return [{ kind: 'other', raw: m }]
   }
+}
+
+/**
+ * The FIRST frame of a message — exact for every message type except a
+ * compact `ticker` carrying several symbols, where only `d[0]` is returned.
+ * Use `parseFrames` wherever a message may carry more than one symbol (the
+ * sockets do). A compact ticker with an empty `d` is `{kind:'other'}`.
+ */
+export function parseFrame(raw: unknown): DxFrame {
+  return parseFrames(raw)[0] ?? { kind: 'other', raw }
 }
