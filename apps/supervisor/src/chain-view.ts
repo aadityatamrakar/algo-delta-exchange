@@ -433,6 +433,25 @@ export class ChainView {
   }
 
   /**
+   * This chain's held quotes BY TOKEN — and, like `snap()`, the declaration
+   * that makes its ticks worth keeping (§3).
+   *
+   * For a view that cannot `snap()`: the Delta-testnet view (`md.tick.demo`)
+   * carries only the contracts demo-rail books hold, never a forward, so a snap
+   * of it would be `null` and declare nothing anyone could read. The host lays
+   * these over the production snap (`demo-marks.ts`).
+   */
+  quotes(symbol: string, expiry: string): ReadonlyMap<number, Quote> {
+    const def = this.#declare(symbol, expiry)
+    const out = new Map<number, Quote>()
+    for (const r of def.rows) {
+      const q = this.#quotes.get(r.token)
+      if (q !== undefined) out.set(r.token, q)
+    }
+    return out
+  }
+
+  /**
    * The newest tick this view ADMITTED, or 0. The caller's coalescing stamp.
    *
    * Exposed beside `touchedSince` because a caller that asks "is there anything

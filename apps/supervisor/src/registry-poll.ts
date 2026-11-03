@@ -37,7 +37,7 @@
  */
 
 import { resolveDials, type Dials, type Mode } from '@algomaker/desk-engine'
-import { bookFromDoc } from '../../api/src/books-registry.ts'
+import { bookFromDoc, marksVenueOf, type MarksVenue } from '../../api/src/books-registry.ts'
 import { isOn, strategyFromDoc } from '../../api/src/strategies.ts'
 import type { HostLog } from './engine-host.ts'
 import { Throttle } from './throttle.ts'
@@ -66,6 +66,13 @@ export interface ManagedBook {
    * the guard, because a blip on one collection must not stand every book down.
    */
   readonly enabled: boolean | null
+  /**
+   * WHOSE PRICES MARK THIS BOOK (`marksVenueOf`): `demo` for a paper book on
+   * Delta's testnet rail — the rail the gateway last used, else the setting —
+   * and `prod` for everything else. Re-read every pass, so a book's venue
+   * follows its row. `main.ts` reads it only on a non-NSE venue.
+   */
+  readonly marks: MarksVenue
 }
 
 /** The narrow Mongo surface: one query shape. */
@@ -111,6 +118,7 @@ export function desiredBooks(
       dials,
       unknownDials: unknown,
       enabled: strategy === undefined ? null : isOn(strategy.modes, row.mode),
+      marks: marksVenueOf(row),
     })
   }
   return out
