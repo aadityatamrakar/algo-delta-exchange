@@ -241,6 +241,8 @@ const SPEC_TABLE: Dials = {
   bs_flat_before_expiry_min: 0,
   bs_ref_max_age_s: 10,
   bs_level_cooldown_s: 300,
+  bs_quote_max_age_s: 20,
+  bs_stale_exit_s: 120,
   bs_close_req: 0,
   bs_rearm_req: 0,
 }

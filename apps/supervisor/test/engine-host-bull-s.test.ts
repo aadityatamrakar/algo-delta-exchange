@@ -338,6 +338,7 @@ test('a restart with a half straddle (PE held, CE not) neither re-enters the lev
     ceOpen: false,
     peOpen: true,
     breachSinceMs: 0,
+    staleSinceMs: 0,
     filled: false,
   }
   const h = make({ book: [legOf(76_600, 'PE', pe)] })
@@ -372,7 +373,7 @@ test('a restart with the CE still working keeps the half straddle and adopts not
       ...BS_EMPTY,
       groups: [{
         strike: 76_600, lots: 50, ceEntry: premium(76_600, 'CE') - 1, peEntry: pe,
-        openedMs: T0 - 60_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: false,
+        openedMs: T0 - 60_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: false, staleSinceMs: 0,
       }],
       size: 100,
       lastRef: INDEX,

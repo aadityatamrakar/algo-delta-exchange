@@ -41,6 +41,12 @@ export interface BullSGroup {
    * or one leg was refused, and is undone (size) and cooled (level).
    */
   readonly filled: boolean;
+  /**
+   * Since when a held leg's quote has been STALE (`bs_quote_max_age_s`): the
+   * instant it passed the max age, off the quote's own `asOf`, or the first
+   * pass that saw no quote at all. 0 = every held leg is fresh.
+   */
+  readonly staleSinceMs: number;
 }
 
 /** A level whose last entry was refused, not to be sold again before `untilMs`. */
@@ -124,9 +130,12 @@ function group(v: unknown): BullSGroup[] {
   if (!finite(ceEntry) || !finite(peEntry) || !finite(openedMs) || !finite(breachSinceMs)) return [];
   if (typeof ceOpen !== 'boolean' || typeof peOpen !== 'boolean') return [];
   if (!ceOpen && !peOpen) return [];
-  // The nine fields and nothing else, in this order: `sameRuleState` is a
+  // A row from before the field, or a bad one: not stale. The next pass reads
+  // the quotes again and starts the clock if they are.
+  const staleSinceMs = finite(g['staleSinceMs']) && g['staleSinceMs'] > 0 ? g['staleSinceMs'] : 0;
+  // The ten fields and nothing else, in this order: `sameRuleState` is a
   // `JSON.stringify` equality.
-  return [{ strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs, filled }];
+  return [{ strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs, filled, staleSinceMs }];
 }
 
 function cooldown(v: unknown): BullSCooldown[] {

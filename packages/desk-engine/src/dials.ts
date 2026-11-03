@@ -526,6 +526,17 @@ export interface Dials {
    * and that leg closed as a half straddle — is not sold again for this many
    * seconds; after it, on its next crossing. 0 = off. */
   readonly bs_level_cooldown_s: number;
+  /**
+   * A HELD leg whose quote (its book frame's own `asOf`) is older than this,
+   * or that has no quote at all, is STALE: a frozen quote looks calm, so the
+   * stop cannot be read as safe off it. While any held leg is stale the book
+   * sells no new straddle and names the leg; the stop clock is never reset
+   * by a stale reading.
+   */
+  readonly bs_quote_max_age_s: number;
+  /** A straddle stale for longer than this is closed whole (`bs-stale`).
+   * 0 = off (opens stay refused while stale). */
+  readonly bs_stale_exit_s: number;
   /** One-shot commands as COUNTERS: the dashboard PATCHes +1, and the engine
    * acts once when the dial exceeds the count it has already seen. Close book
    * closes every straddle and halts; Re-arm clears a halt. */
@@ -774,6 +785,8 @@ export const DEFAULT_DIALS: Dials = {
   bs_flat_before_expiry_min: 0, // hold into settlement
   bs_ref_max_age_s: 10,
   bs_level_cooldown_s: 300,
+  bs_quote_max_age_s: 20,
+  bs_stale_exit_s: 120,
   bs_close_req: 0,
   bs_rearm_req: 0,
 };
@@ -1111,6 +1124,9 @@ export const DIAL_SECTIONS: ReadonlyArray<DialSection> = [
       'bs_flat_before_expiry_min',
       'bs_ref_max_age_s',
       'bs_level_cooldown_s',
+      // A held leg's quote gone stale
+      'bs_quote_max_age_s',
+      'bs_stale_exit_s',
       // The two book actions, as counters
       'bs_close_req',
       'bs_rearm_req',
@@ -1153,6 +1169,8 @@ const BS_RANGES: Partial<Record<BsKey, (v: number) => boolean>> = {
   bs_flat_before_expiry_min: nonNegative,
   bs_ref_max_age_s: (v) => v > 0,
   bs_level_cooldown_s: nonNegative,
+  bs_quote_max_age_s: (v) => v > 0,
+  bs_stale_exit_s: nonNegative,
   bs_close_req: count,
   bs_rearm_req: count,
 };

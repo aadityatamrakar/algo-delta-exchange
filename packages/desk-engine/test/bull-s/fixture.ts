@@ -206,7 +206,16 @@ export class Run {
         this.book.delete(a.instrument)
         this.orders.push({ op: 'close', strike: h.strike, optType: h.opt, side: 'Buy', lots: h.lots })
       } else {
-        throw new Error('BULL-S never resizes')
+        // BULL-S resizes only DOWN, to balance a straddle's legs (`bs-balance`).
+        const h = this.book.get(a.instrument)
+        if (h === undefined) throw new Error(`resize of a leg not held: ${a.instrument}`)
+        if (!(a.targetLots < h.lots)) throw new Error(`BULL-S never resizes up: ${a.instrument} ${h.lots} → ${a.targetLots}`)
+        const leg = inputs.legs.find((l) => l.instrument === a.instrument)
+        const px = this.fillMode === 'ltp' ? leg?.exit.ltp : leg?.exit.ask
+        const off = h.lots - a.targetLots
+        this.cum += (h.entry - (px ?? h.entry)) * off * h.lotSize
+        this.book.set(a.instrument, { ...h, lots: a.targetLots })
+        this.orders.push({ op: 'close', strike: h.strike, optType: h.opt, side: 'Buy', lots: off })
       }
     }
     return d

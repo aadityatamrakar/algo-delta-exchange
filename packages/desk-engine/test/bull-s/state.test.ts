@@ -9,8 +9,8 @@ import { EMPTY_RULE_STATE, TRIGGERS, type Trigger } from '../../src/types.ts'
 
 const MID: BullSState = {
   groups: [
-    { strike: 80_000, lots: 50, ceEntry: 2_079.2, peEntry: 1_989.4, openedMs: 1_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: true },
-    { strike: 80_200, lots: 100, ceEntry: 2_045, peEntry: 1_995, openedMs: 2_000, ceOpen: false, peOpen: true, breachSinceMs: 1_500, filled: false },
+    { strike: 80_000, lots: 50, ceEntry: 2_079.2, peEntry: 1_989.4, openedMs: 1_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: true, staleSinceMs: 0 },
+    { strike: 80_200, lots: 100, ceEntry: 2_045, peEntry: 1_995, openedMs: 2_000, ceOpen: false, peOpen: true, breachSinceMs: 1_500, filled: false, staleSinceMs: 1_700 },
   ],
   size: 150,
   lastRef: 80_250,
@@ -45,7 +45,7 @@ test('a mid-book row round-trips through JSON exactly, in BS_EMPTY key order', (
   assert.deepEqual(back, MID)
   assert.deepEqual(Object.keys(back), Object.keys(BS_EMPTY))
   assert.deepEqual(Object.keys(back.groups[0] ?? {}), [
-    'strike', 'lots', 'ceEntry', 'peEntry', 'openedMs', 'ceOpen', 'peOpen', 'breachSinceMs', 'filled',
+    'strike', 'lots', 'ceEntry', 'peEntry', 'openedMs', 'ceOpen', 'peOpen', 'breachSinceMs', 'filled', 'staleSinceMs',
   ])
   const reversed = Object.fromEntries(Object.entries(MID).reverse())
   assert.equal(JSON.stringify(hydrateBullState(reversed)), JSON.stringify(MID), 'a stored key order never moves the row')
@@ -80,8 +80,8 @@ test('a group that is not a whole group is DROPPED, never zero-filled', () => {
   assert.deepEqual(hydrateBullState({ groups: { 0: g } }).groups, [])
 })
 
-test('the eight bs- triggers exist, after every older trigger', () => {
-  const bs = ['bs-entry', 'bs-stop', 'bs-target', 'bs-loss', 'bs-flat', 'bs-close', 'bs-rearm', 'bs-expiry']
+test('the ten bs- triggers exist, after every older trigger; bs-stale and bs-balance appended last', () => {
+  const bs = ['bs-entry', 'bs-stop', 'bs-target', 'bs-loss', 'bs-flat', 'bs-close', 'bs-rearm', 'bs-expiry', 'bs-stale', 'bs-balance']
   assert.deepEqual(TRIGGERS.filter((t) => t.startsWith('bs-')), bs)
   assert.deepEqual(TRIGGERS.slice(-bs.length), bs as Trigger[])
 })
@@ -90,6 +90,13 @@ test('a group stored before `filled` existed reads as OPENED — its size alread
   const { filled: _f, ...legacy } = MID.groups[0]!
   void _f
   assert.equal(hydrateBullState({ groups: [legacy] }).groups[0]?.filled, true)
+})
+
+test('a group stored before `staleSinceMs` existed reads as not stale; a bad one reads as not stale too', () => {
+  const { staleSinceMs: _s, ...legacy } = MID.groups[1]!
+  void _s
+  assert.equal(hydrateBullState({ groups: [legacy] }).groups[0]?.staleSinceMs, 0)
+  assert.equal(hydrateBullState({ groups: [{ ...legacy, staleSinceMs: 'x' }] }).groups[0]?.staleSinceMs, 0)
 })
 
 test('cooldowns hydrate field by field; a bad one is dropped, a missing reason reads as none', () => {
