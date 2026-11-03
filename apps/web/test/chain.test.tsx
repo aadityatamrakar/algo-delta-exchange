@@ -13,7 +13,7 @@ import { ChainPage, ChainTable, ExpiryPills, MISSING } from '../src/chain.tsx'
 import { OiChart } from '../src/chain-oi-chart.tsx'
 import {
   compactNumber, daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, indexChange, isFar, itmSides, maxPain,
-  niceCeil, oiWalls,
+  niceCeil, oiWalls, perContractText, unitsLine,
   putCallRatio, spotLineIndex,
 } from '../src/chain-model.ts'
 
@@ -450,5 +450,42 @@ describe('the OI chart', () => {
     const ce = await screen.findByText('Call OI wall', { selector: 'dt' })
     expect(ce.nextElementSibling?.textContent).toBe('76,000 · 76,200')
     expect(screen.getByText('Put OI wall', { selector: 'dt' }).nextElementSibling?.textContent).toBe('76,600 · 76,400')
+  })
+})
+
+describe('units and per-contract cost', () => {
+  test('the per-contract cost of a quote, in USD and INR', () => {
+    expect(perContractText(102.81, 0.001, 85)).toBe('$0.10 per contract · ₹8.74')
+    expect(perContractText(2180.23, 0.001, 85)).toBe('$2.18 per contract · ₹185.32')
+    // Sub-cent: four decimals, never "$0.00".
+    expect(perContractText(0.5, 0.001, 85)).toBe('$0.0005 per contract · ₹0.04')
+    expect(perContractText(null, 0.001, 85)).toBe(null)
+  })
+
+  test('the units line', () => {
+    expect(unitsLine(0.001, 85)).toBe('Prices in USD per 1 BTC · 1 contract = 0.001 BTC · OI in contracts · ₹ at 85/USD')
+  })
+
+  test('the page shows the units line under the header, from Delta\'s venue spec', async () => {
+    installFetch(({ path }) => {
+      if (path === '/v1/desk/chain/BTC/expiries') return { body: { expiries: ['2026-11-06'] } }
+      if (path === '/v1/desk/chain/BTC') return { body: { expiry: '2026-11-06', spot: 76290, future: null, lotSize: 0.001, rows: ROWS } }
+      return { body: {} }
+    })
+    render(<ChainPage />)
+    expect(await screen.findByText('Prices in USD per 1 BTC · 1 contract = 0.001 BTC · OI in contracts · ₹ at 85/USD')).toBeTruthy()
+  })
+
+  test('hovering bid, ask or mark gives the per-contract cost; other cells do not', () => {
+    table([{ strike: 77200, CE: side({ bid: 100, ask: 105.5, mark: 102.81 }), PE: null }], 77180)
+    const cell = (k: string): HTMLElement =>
+      sides('77,200').ce.find((c) => c.classList.contains(`chain-c-${k}`)) as HTMLElement
+    expect(cell('mark').title.split('\n')[0]).toBe('$0.10 per contract · ₹8.74')
+    expect(cell('bid').title.split('\n')[0]).toBe('$0.10 per contract · ₹8.50')
+    expect(cell('ask').title.split('\n')[0]).toBe('$0.11 per contract · ₹8.97')
+    expect(cell('iv').title).not.toContain('per contract')
+    // A side with no quote has no cost to show.
+    const pe = sides('77,200').pe.find((c) => c.classList.contains('chain-c-mark')) as HTMLElement
+    expect(pe.title).not.toContain('per contract')
   })
 })
