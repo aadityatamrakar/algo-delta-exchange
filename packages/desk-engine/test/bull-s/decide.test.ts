@@ -421,3 +421,93 @@ test('legs the state lost are adopted, so a short is never left without a stop',
   ])
   assert.deepEqual(closesOf(run.tick(80_090, T0 + 2 * S, { chain: asksAt(run, 80_000, 1.3) })), [sym(80_000, 'PE'), sym(80_000, 'CE')])
 })
+
+// ── an entry the exchange refused (demo, 3 Nov: OI cap → only_reduce_only_orders_allowed) ──
+
+test('a REFUSED entry does not step the size, and its level cools down for bs_level_cooldown_s', () => {
+  const run = new Run(dialsOf())
+  assert.equal(run.dials.bs_level_cooldown_s, 300, 'the default')
+  // Both wings refused: the package finishes with nothing held.
+  const sold = run.tick(80_090, T0, { refuse: ['PE', 'CE'] })
+  assert.deepEqual(opensOf(sold), ['Sell 80000PE x50', 'Sell 80000CE x50'])
+  // The next settled pass sees an entry that never opened.
+  const seen = run.tick(80_095, T0 + S)
+  assert.equal(run.state.bs.size, 50, 'the size is what it was before the refused entry')
+  assert.deepEqual(run.state.bs.groups, [])
+  assert.deepEqual(run.state.bs.cooldowns.map((c) => [c.strike, c.untilMs]), [[80_000, T0 + S + 300 * S]])
+  assert.match(seen.reason, /entry at 80000 was refused.*size stays 50/)
+  // Down through 80,000 and back up across it inside the 300 s: no re-entry.
+  run.tick(79_950, T0 + 10 * S)
+  const back = run.tick(80_050, T0 + 20 * S)
+  assert.deepEqual(back.actions, [])
+  assert.match(back.reason, /level 80000 cooling down after a refused entry/)
+  // Past the cooldown, its next crossing is traded — at the size that never stepped.
+  run.tick(79_950, T0 + 400 * S)
+  assert.deepEqual(opensOf(run.tick(80_050, T0 + 410 * S)), ['Sell 80000PE x50', 'Sell 80000CE x50'])
+  assert.equal(run.state.bs.cooldowns.length, 0, 'an expired cooldown is pruned')
+})
+
+test('an entry closed as a HALF straddle does not step the size and cools its level too', () => {
+  const run = new Run(dialsOf())
+  run.tick(80_090, T0, { refuse: ['CE'] }) // the PE filled, the CE was refused
+  const half = run.tick(80_095, T0 + S)
+  assert.deepEqual(closesOf(half), [sym(80_000, 'PE')], 'the naked PE is bought back')
+  assert.equal(run.state.bs.size, 50)
+  assert.match(half.reason, /entry at 80000 was refused.*only the PE filled/)
+  run.tick(79_950, T0 + 10 * S)
+  assert.match(run.tick(80_050, T0 + 20 * S).reason, /level 80000 cooling down after a refused entry \(only the PE filled\)/)
+})
+
+test('the refusal the host recorded is named in the cooldown — oi-cap reaches the book\'s reason', () => {
+  const run = new Run(dialsOf())
+  run.tick(80_090, T0, { refuse: ['PE', 'CE'] })
+  // The host writes the gateway's refusal onto the state when the package settles.
+  run.state = { ...run.state, bs: { ...run.state.bs, entryRefusal: 'oi-cap: 80000 PE open interest at the cap' } }
+  const seen = run.tick(80_095, T0 + S)
+  assert.match(seen.reason, /refused \(oi-cap: 80000 PE open interest at the cap\)/)
+  assert.equal(run.state.bs.entryRefusal, '', 'consumed once')
+  run.tick(79_950, T0 + 10 * S)
+  assert.match(
+    run.tick(80_050, T0 + 20 * S).reason,
+    /level 80000 cooling down after a refused entry \(oi-cap: 80000 PE open interest at the cap\)/,
+  )
+})
+
+test('bs_level_cooldown_s 0 is off: a refused level is retried on its next crossing, still at the old size', () => {
+  const run = new Run(dialsOf({ bs_level_cooldown_s: 0 }))
+  run.tick(80_090, T0, { refuse: ['PE', 'CE'] })
+  run.tick(80_095, T0 + S)
+  assert.deepEqual(run.state.bs.cooldowns, [])
+  // Its very next crossing (down through 80,000) sells it again.
+  assert.deepEqual(opensOf(run.tick(79_950, T0 + 10 * S)), ['Sell 80000PE x50', 'Sell 80000CE x50'])
+})
+
+test('a straddle that OPENED and was later stopped is not a refused entry: no cooldown, the size stays stepped', () => {
+  const run = new Run(dialsOf())
+  run.tick(80_090, T0)
+  run.tick(80_095, T0 + S)
+  assert.equal(run.state.bs.groups[0]?.filled, true, 'both legs seen held')
+  assert.equal(run.state.bs.size, 100)
+  const g = run.state.bs.groups[0]!
+  const rich = {
+    quotes: {
+      [key(80_000, 'CE')]: q(g.ceEntry * 1.4 - 4, g.ceEntry * 1.4, g.ceEntry * 1.4),
+      [key(80_000, 'PE')]: q(g.peEntry * 1.4 - 4, g.peEntry * 1.4, g.peEntry * 1.4),
+    },
+  }
+  run.tick(80_095, T0 + 2 * S, { chain: rich })
+  assert.equal(closesOf(run.tick(80_095, T0 + 6 * S, { chain: rich })).length, 2, 'stopped')
+  run.tick(80_095, T0 + 7 * S)
+  assert.deepEqual(run.state.bs.cooldowns, [])
+  assert.equal(run.state.bs.size, 100)
+})
+
+test('while a level cools, EVERY decision names it — the book\'s last-decision line carries the refusal', () => {
+  const run = new Run(dialsOf())
+  run.tick(80_090, T0, { refuse: ['PE', 'CE'] })
+  run.state = { ...run.state, bs: { ...run.state.bs, entryRefusal: 'oi-cap: open interest at the cap' } }
+  run.tick(80_095, T0 + S)
+  const quiet = run.tick(80_096, T0 + 60 * S)
+  assert.match(quiet.reason, /^no grid level crossed .*; level 80000 cooling down after a refused entry \(oi-cap: open interest at the cap\) — 241s left/)
+  assert.doesNotMatch(run.tick(80_096, T0 + 302 * S).reason, /cooling/, 'gone once it clears')
+})

@@ -28,6 +28,7 @@ const BS_DEFAULTS = {
   bs_no_entry_before_expiry_min: 0,
   bs_flat_before_expiry_min: 0,
   bs_ref_max_age_s: 10,
+  bs_level_cooldown_s: 300,
   bs_close_req: 0,
   bs_rearm_req: 0,
 }
@@ -79,6 +80,7 @@ test('an out-of-range bs_* dial is refused BY NAME and keeps its default', () =>
     [{ bs_no_entry_before_expiry_min: -1 }, 'bs_no_entry_before_expiry_min'],
     [{ bs_flat_before_expiry_min: -1 }, 'bs_flat_before_expiry_min'],
     [{ bs_ref_max_age_s: 0 }, 'bs_ref_max_age_s'],
+    [{ bs_level_cooldown_s: -1 }, 'bs_level_cooldown_s'],
     [{ bs_close_req: -1 }, 'bs_close_req'],
     [{ bs_rearm_req: 0.5 }, 'bs_rearm_req'],
   ]

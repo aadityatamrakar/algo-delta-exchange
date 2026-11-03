@@ -121,6 +121,8 @@ test('EMPTY_RULE_STATE spells out every zero-value', () => {
       pnlBaseline: 0,
       closeReqSeen: 0,
       rearmReqSeen: 0,
+      cooldowns: [],
+      entryRefusal: '',
     },
   })
   assert.equal(SUPERVISOR_NUDGE_PORT_DEFAULT, 8893)

@@ -35,6 +35,20 @@ export interface BullSGroup {
   readonly peOpen: boolean;
   /** When the summed exit price first stood at or past the stop. 0 = not breaching. */
   readonly breachSinceMs: number;
+  /**
+   * Both legs have been seen HELD at once — the straddle actually opened. Until
+   * then a group is only an entry that was sent: one that ends holding nothing
+   * or one leg was refused, and is undone (size) and cooled (level).
+   */
+  readonly filled: boolean;
+}
+
+/** A level whose last entry was refused, not to be sold again before `untilMs`. */
+export interface BullSCooldown {
+  readonly strike: number;
+  readonly untilMs: number;
+  /** Why, in words: the venue's refusal when the host recorded one. */
+  readonly reason: string;
 }
 
 export type BullSHaltReason = '' | 'target' | 'loss' | 'close' | 'flat' | 'expiry';
@@ -57,6 +71,14 @@ export interface BullSState {
   /** The `bs_close_req` / `bs_rearm_req` counters already acted on. */
   readonly closeReqSeen: number;
   readonly rearmReqSeen: number;
+  /** Levels cooling down after a refused entry (`bs_level_cooldown_s`). */
+  readonly cooldowns: ReadonlyArray<BullSCooldown>;
+  /**
+   * The refusal the HOST read off the last entry package's outcome (skips and
+   * route errors — the gateway's `oi-cap: …`, the exchange's own reason).
+   * '' = none. Consumed by the pass that finds the entry failed.
+   */
+  readonly entryRefusal: string;
 }
 
 export const BS_EMPTY: BullSState = {
@@ -70,6 +92,8 @@ export const BS_EMPTY: BullSState = {
   pnlBaseline: 0,
   closeReqSeen: 0,
   rearmReqSeen: 0,
+  cooldowns: [],
+  entryRefusal: '',
 };
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -93,13 +117,24 @@ function group(v: unknown): BullSGroup[] {
   const g = obj(v);
   if (g === null) return [];
   const { strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs } = g;
+  // A row from before the field: its size already stepped at the entry, so it
+  // reads as OPENED — never undone a second time.
+  const filled = typeof g['filled'] === 'boolean' ? g['filled'] : true;
   if (!finite(strike) || strike <= 0 || !finite(lots) || lots <= 0) return [];
   if (!finite(ceEntry) || !finite(peEntry) || !finite(openedMs) || !finite(breachSinceMs)) return [];
   if (typeof ceOpen !== 'boolean' || typeof peOpen !== 'boolean') return [];
   if (!ceOpen && !peOpen) return [];
-  // The eight fields and nothing else, in this order: `sameRuleState` is a
+  // The nine fields and nothing else, in this order: `sameRuleState` is a
   // `JSON.stringify` equality.
-  return [{ strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs }];
+  return [{ strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs, filled }];
+}
+
+function cooldown(v: unknown): BullSCooldown[] {
+  const c = obj(v);
+  if (c === null) return [];
+  const { strike, untilMs, reason } = c;
+  if (!finite(strike) || strike <= 0 || !finite(untilMs)) return [];
+  return [{ strike, untilMs, reason: typeof reason === 'string' ? reason : '' }];
 }
 
 /**
@@ -122,5 +157,7 @@ export function hydrateBullState(raw: unknown): BullSState {
     pnlBaseline: num(d['pnlBaseline'], E.pnlBaseline),
     closeReqSeen: num(d['closeReqSeen'], E.closeReqSeen),
     rearmReqSeen: num(d['rearmReqSeen'], E.rearmReqSeen),
+    cooldowns: Array.isArray(d['cooldowns']) ? d['cooldowns'].flatMap(cooldown) : [],
+    entryRefusal: typeof d['entryRefusal'] === 'string' ? d['entryRefusal'] : E.entryRefusal,
   };
 }

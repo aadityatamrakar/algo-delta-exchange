@@ -296,6 +296,14 @@ export interface EngineHostDeps {
    */
   onMark?(sample: MarkSample): void
   /**
+   * EVERY PASS'S REASON, for a BULL-S book only (`bs_enabled`). Its refusals
+   * (a level cooling down after the venue refused the entry, the gateway's
+   * `oi-cap: …`) are news the moment they happen; the mark journal's 5-minute
+   * cadence would leave the book page showing an older line. Other engines'
+   * last-decision line stays the mark's, exactly as before.
+   */
+  onDecision?(reason: string): void
+  /**
    * The contract's tick size, for flooring a maker quote onto the exchange's
    * grid. `null`/absent falls back to the venue's `defaultTick` — see `#quoteAt`.
    */
@@ -807,6 +815,18 @@ export class MarkClock {
     this.#mark = mark
     return { isNewMark, markIndexToday: Math.max(0, (mark - SESSION_OPEN_MIN) / MARK_STEP_MIN) }
   }
+}
+
+/**
+ * One line naming why a package's orders did not all trade — the distinct
+ * skip reasons, then the route errors, capped so a row stays a row.
+ */
+export function refusalText(outcome: DecisionResponse): string {
+  const seen = new Set<string>()
+  for (const s of outcome.skips) if (s.reason.trim() !== '') seen.add(s.reason.trim())
+  for (const e of outcome.routeErrors) if (e.trim() !== '') seen.add(e.trim())
+  const text = [...seen].join('; ')
+  return text.length > 240 ? `${text.slice(0, 239)}…` : text
 }
 
 /** A contract nothing has ever quoted: unpriced, and honest about it. */
@@ -1426,6 +1446,7 @@ export class EngineHost {
     const markCtx = this.#marks.next(nowMs)
     const decision = this.#decide(inputs, dials, state, markCtx)
     this.#journal(markCtx, inputs, dials, decision.reason)
+    this.#tellReason(dials, decision.reason)
 
     if (
       on === false &&
@@ -1617,6 +1638,7 @@ export class EngineHost {
     const markCtx = this.#marks.next(nowMs)
     const decision = this.#decide(inputs, dials, state, markCtx)
     this.#journal(markCtx, inputs, dials, decision.reason)
+    this.#tellReason(dials, decision.reason)
     // `markState`, never `stateAfter`: nothing is routed under a working
     // package, so the guard's streak and the anchor step are all that happened.
     await this.#persistRuleState(state, decision.markState)
@@ -1840,6 +1862,16 @@ export class EngineHost {
         'really holds',
       { ...ctx, why, cancelRequests: outcome.requested },
     )
+  }
+
+  /** The pass's reason to the page, for a BULL-S book (`EngineHostDeps.onDecision`). */
+  #tellReason(dials: Dials, reason: string): void {
+    if (!dials.bs_enabled) return
+    try {
+      this.#d.onDecision?.(reason)
+    } catch {
+      // The page's line is the least important thing here; never a decision's cost.
+    }
   }
 
   /** The flight is over: nothing it asked to cancel matters any more. */
@@ -3016,6 +3048,15 @@ export class EngineHost {
     // WHICH ENGINE OWNS THIS BOOK, read once for the `dlDayRealized` fold
     // below. `dials()` is the live resolved row, the same one `#pass` reads.
     const onDeltaLean = this.#d.dials().delta_lean_enabled;
+    /**
+     * WHY A BULL-S ENTRY DID NOT TRADE, as desk-api reports it: the plan's skips
+     * (the gateway's `oi-cap: …`, the venue's refusal, folded onto the decision
+     * by the paper fold) and any route error. Written onto `ruleState.bs` for
+     * `decideBullS` to name when it finds the entry failed; '' when there is
+     * nothing to say, and then the engine says what the book shows.
+     */
+    const entryRefusal =
+      this.#d.dials().bs_enabled && request.trigger === 'bs-entry' ? refusalText(outcome) : ''
     const folded = await this.#update((current) => {
       if (current.inFlight !== request.decisionId) return null
       const basis = new Map((current.workingPackage?.basis ?? []).map((b) => [b.instrument, b]))
@@ -3111,6 +3152,7 @@ export class EngineHost {
           ...(onDeltaLean
             ? { dlDayRealized: current.ruleState.dlDayRealized + banked }
             : {}),
+          ...(entryRefusal === '' ? {} : { bs: { ...current.ruleState.bs, entryRefusal } }),
         },
         inFlight: null,
         workingPackage: null,
