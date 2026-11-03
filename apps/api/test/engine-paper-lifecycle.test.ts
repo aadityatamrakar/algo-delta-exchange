@@ -697,6 +697,33 @@ itMongo('a REPLAY of the working package is answered, never refused by the guard
   assert.equal(await handle!.db.collection('desk-gateway-orders').countDocuments({}), 1)
 })
 
+itMongo('a REPLAY of a package the venue REFUSED answers 200 and names the refusal', async () => {
+  /**
+   * 3 Nov, demo: both legs of a BULL-S entry were refused (strike not listed
+   * on the testnet). `paper-fold.ts:claimOrder` pushed `{instrument, reason}`
+   * onto the decision's `skips`, and every replay then threw reading
+   * `s.action.ts` — HTTP 500 once a second for hours, the supervisor holding
+   * the id `inFlight` and the book frozen (no stop, no entry).
+   */
+  published = []
+  const req = request()
+  const first = await post(req)
+  assert.equal(first.body.status, 'WORKING')
+  await handle!.db.collection(COLLECTIONS.decisions).updateOne(
+    { decisionId: req.decisionId },
+    {
+      $set: { status: 'DONE', completedAt: NOW },
+      $push: { skips: { instrument: CONTRACT_SYMBOL, reason: 'not listed on the Delta testnet' } },
+    } as never,
+  )
+
+  const replayed = await post(req)
+  assert.equal(replayed.status, 200)
+  assert.equal(replayed.body.replayed, true)
+  assert.equal(replayed.body.status, 'DONE')
+  assert.deepEqual(replayed.body.skips, [{ instrument: CONTRACT_SYMBOL, reason: 'not listed on the Delta testnet' }])
+})
+
 itMongo('a CLOSE is never refused by the guard — it is opens that duplicate', async () => {
   published = []
   await post(request())

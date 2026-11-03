@@ -727,13 +727,21 @@ function wireSkips(
   result: ServiceDecisionResponse,
   instrumentByTag: ReadonlyMap<string, string>,
 ): { readonly instrument: string; readonly reason: string }[] {
-  return result.skips.map((s) => ({
+  return result.skips.map((s) => {
+    // A venue refusal the paper fold recorded (`paper-fold.ts:claimOrder`) is
+    // stored already in the WIRE shape — `{instrument, reason}`, no `action`.
+    // Reading `s.action.ts` on it threw on every replay (3 Nov: HTTP 500 once a
+    // second, the book frozen on an inFlight id it could never resolve).
+    const stored = s as { readonly action?: { readonly ts?: string }; readonly instrument?: unknown }
+    if (stored.action === undefined) {
+      return { instrument: typeof stored.instrument === 'string' ? stored.instrument : '', reason: s.reason }
+    }
+    const ts = stored.action.ts ?? ''
     // Every action this module emits carries a `ts`, so the lookup always hits.
     // The fallback is the tag itself rather than an empty string: a skip the
     // supervisor cannot attribute is a skip it cannot act on.
-    instrument: instrumentByTag.get(s.action.ts) ?? s.action.ts,
-    reason: s.reason,
-  }))
+    return { instrument: instrumentByTag.get(ts) ?? ts, reason: s.reason }
+  })
 }
 
 /**
