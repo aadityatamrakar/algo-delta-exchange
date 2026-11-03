@@ -13,6 +13,8 @@ export {
   toInstrumentRow,
   toInstrumentRows,
   opensAllowed,
+  oiCapStatus,
+  type OiCapStatus,
   spotInstrumentRow,
   quoteFromTicker,
   parseFrame,

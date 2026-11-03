@@ -68,6 +68,47 @@ export function opensAllowed(x: DxProduct | DxTicker): boolean {
   return specs?.oi_reduce_only_mode !== true && specs?.only_reduce_only_orders_allowed !== true
 }
 
+export interface OiCapStatus {
+  /** A new position here would be refused (`only_reduce_only_orders_allowed`). */
+  readonly capped: boolean
+  /** Delta has the product in reduce-only mode (product or ticker flag). */
+  readonly enforced: boolean
+  /** `oi_value_usd` from the ticker. */
+  readonly oiUsd: number | null
+  /** `product_specs.max_oi_usd`. */
+  readonly capUsd: number | null
+  /** capUsd − oiUsd; negative when over. */
+  readonly headroomUsd: number | null
+}
+
+/**
+ * The product's open-interest cap against its current OI.
+ *
+ * Capped when Delta ENFORCES it — `oi_reduce_only_mode` on the product's specs
+ * or its ticker, or `only_reduce_only_orders_allowed` — and the OI plus this
+ * order's notional is at or over the cap. With the flag on and a figure
+ * missing it is capped: Delta has said reduce-only, and nothing here can
+ * overrule that. Without the flag it is never capped (not enforced), but the
+ * figures are still reported.
+ */
+export function oiCapStatus(product: DxProduct, ticker: DxTicker | null, orderNotionalUsd = 0): OiCapStatus {
+  const specs = product.product_specs
+  const oiUsd = num(ticker?.oi_value_usd)
+  const capUsd = num(specs?.max_oi_usd)
+  const headroomUsd = oiUsd === null || capUsd === null ? null : Number((capUsd - oiUsd).toFixed(8))
+  const enforced =
+    specs?.oi_reduce_only_mode === true ||
+    ticker?.oi_reduce_only_mode === true ||
+    specs?.only_reduce_only_orders_allowed === true
+  const capped =
+    enforced &&
+    (specs?.only_reduce_only_orders_allowed === true ||
+      oiUsd === null ||
+      capUsd === null ||
+      oiUsd + Math.max(0, orderNotionalUsd) >= capUsd)
+  return { capped, enforced, oiUsd, capUsd, headroomUsd }
+}
+
 /** The `.DEXBTUSD` index as the chain's spot row (`OptionMaster` matches the INDICES segment). */
 export function spotInstrumentRow(idx: DxSpotIndexRef = { id: 14, symbol: DX_SPOT_SYMBOL, tick_size: '0.5' }): InstrumentRow {
   return {
