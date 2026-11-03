@@ -1,0 +1,639 @@
+/**
+ * Eye-comfort overrides for the astryx neutral theme.
+ *
+ * This is a screen someone stares at for a six-and-a-quarter-hour session, so
+ * the defaults are tuned for the wrong thing: they optimise for crispness in a
+ * screenshot, not for a person still reading it at 15:20.
+ *
+ * TWO SEPARATE PROBLEMS, and they need opposite corrections:
+ *
+ *   LIGHT was too bright. Cards were pure #ffffff — the maximum a monitor can
+ *   emit — on a #f1f1f1 body. Pure white at typical desk brightness is roughly
+ *   the luminance of paper held up to a window, and the near-zero card/body
+ *   contrast meant the surfaces did not separate either. Softened to a slightly
+ *   warm off-white, with the body dropped further so cards read as raised.
+ *
+ *   DARK was too CONTRASTY, which is the same complaint from the other side:
+ *   #fafafa text on #1b1b1b is about 17:1, and at that ratio light text
+ *   smears into the background on an LCD (halation) — the effect that makes
+ *   people say dark mode "vibrates". Text is pulled back off pure white and the
+ *   surfaces lifted off near-black, landing near 12:1: comfortably past WCAG AA
+ *   (4.5:1) with the glare gone.
+ *
+ * Every value keeps the RELATIVE relationships the theme is built on — body
+ * behind surface behind card, primary above secondary — so nothing that depends
+ * on those orderings changes. Only the absolute levels move.
+ *
+ * Imported AFTER the theme so these win, and scoped to both the explicit
+ * `[data-theme]` attribute and the system-preference fallback, because the app
+ * offers `system` as a mode and `light-dark()` resolves through the media query
+ * in that case.
+ */
+
+:root,
+[data-theme='light'] {
+  /* Was #ffffff / #f1f1f1 / #ffffff / #ffffff. */
+  --color-background-card: #fbfaf8;
+  --color-background-body: #eae8e4;
+  --color-background-surface: #fbfaf8;
+  --color-background-popover: #fdfcfb;
+  --color-background-muted: #f1efeb;
+
+  /* Was #171717 on white — pure-black-on-pure-white is the harshest pairing
+     available. Softened in step with the background so the ratio holds. */
+  --color-text-primary: #23211e;
+  --color-text-secondary: #6b6862;
+
+  /* The border has to gain a little weight, or the softer card edge disappears
+     into the softer body and the layout stops reading as panels. */
+  --color-border-emphasized: #d8d4cc;
+}
+
+[data-theme='dark'] {
+  /* Was #1b1b1b / #1b1b1b / #262626 — body and card identical, so nothing
+     separated. Lifted, and separated. */
+  --color-background-body: #16181a;
+  --color-background-card: #1d2023;
+  --color-background-surface: #23272b;
+  --color-background-popover: #23272b;
+  --color-background-muted: #1d2023;
+
+  /* Was #fafafa: near-maximum emission on near-black. This is the halation
+     fix — the single change that stops dark mode shimmering. */
+  --color-text-primary: #dfe2e4;
+  --color-text-secondary: #9aa0a6;
+
+  --color-border-emphasized: #343a3f;
+}
+
+/* ------------------------------------------------------------ P&L pills */
+
+/**
+ * The per-strategy P&L pills, on Positions.
+ *
+ * WHY THEY ARE IN THIS FILE. The pill's problem is the one this file exists
+ * for: `--color-background-green` is `#24BB5E33` — a 20% wash, identical in
+ * both themes — laid over a card that is already off-white in light and
+ * near-black in dark. In light it is a barely-there smear; in dark it is a
+ * grey. Neither says "this strategy is up" at the distance a row of eight is
+ * read from, and the tint IS the claim on these cards.
+ *
+ * THE MIX IS BUILT OUT OF TOKENS, WHICH IS WHAT KEEPS BOTH THEMES WORKING.
+ * `--color-icon-green` is the ramp step chosen to be legible against its own
+ * background (#0D8626 light, #26A756 dark) and `--color-background-card` is
+ * whatever the surface underneath currently is — including the softened values
+ * at the top of this file. Mixing one into the other therefore lands on a tint
+ * that is a fixed DISTANCE from the surface in either theme, rather than a
+ * fixed colour that happens to work in one of them. There is not a hex value
+ * in this section, by construction: swap the theme and the pills follow it.
+ *
+ * 18%: enough to read as a coloured surface at arm's length, low enough that
+ * `--color-text-primary` keeps its contrast on top of it — the tint must not
+ * cost the legibility of the tag it is behind.
+ *
+ * THE 1px RING IS THE OTHER HALF. A wash alone has no edge, so eight pills in a
+ * grid read as one mottled block; the border ramp draws the boundary. `inset
+ * box-shadow` rather than `border`, so the pill does not gain 2px of box and
+ * shift its neighbours by a pixel.
+ *
+ * THE CLASS IS ON THE LINK AND THE TINT LANDS ON THE CARD INSIDE IT, and the
+ * gap between the two is not decoration: astryx's `Link` wraps whatever it is
+ * given in a `Text` span, so the card is a GRANDCHILD of the anchor, not a
+ * child. `.astryx-card` is the design system's documented consumer hook (see
+ * utils/themeProps.ts) — it carries no shipped styles and exists to be targeted
+ * from here — so naming it depends on nothing generated.
+ */
+.pnl-pill {
+  /**
+   * astryx's Link is `display: inline-flex`, so the anchor hugged its text and
+   * every pill sat at the left of a grid track two to three times its width —
+   * the "gaps" between pills were empty track, not gap. Stretching the anchor,
+   * the Text span it wraps its children in, and the card inside that is what
+   * closes them.
+   */
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+.pnl-pill > *,
+.pnl-pill .astryx-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.pnl-pill-green .astryx-card {
+  background-color: color-mix(in srgb, var(--color-icon-green) 18%, var(--color-background-card));
+  box-shadow: inset 0 0 0 1px var(--color-border-green);
+}
+
+.pnl-pill-red .astryx-card {
+  background-color: color-mix(in srgb, var(--color-icon-red) 18%, var(--color-background-card));
+  box-shadow: inset 0 0 0 1px var(--color-border-red);
+}
+
+/**
+ * A NULL TOTAL IS GREY AND STAYS GREY. Green would assert a profit we do not
+ * have and red a loss; the pill gets the same edge as the others so it does not
+ * read as a rendering failure, and nothing more.
+ */
+.pnl-pill-gray .astryx-card {
+  background-color: color-mix(in srgb, var(--color-icon-gray) 12%, var(--color-background-card));
+  box-shadow: inset 0 0 0 1px var(--color-border-gray);
+}
+
+/* ---------------------------------------- the strategy page's two columns */
+
+/**
+ * Both tables on the strategy page used to render at the full width of the
+ * window. On a ~2000px monitor the data needs ~900px, and every column is a
+ * fixed `pixel()` width EXCEPT `Contract`, which is `proportional()` — and a
+ * proportional column absorbs all the space left over. So `Contract` grew by
+ * ~1000px and the reader's eye travelled that whole distance from the contract
+ * name to the numbers describing it. This is not padding, which is why
+ * tightening card padding (5ff9db55) did not touch it.
+ *
+ * WHY HAND-WRITTEN CSS AND NOT THE `Grid` COMPONENT. `Grid` takes
+ * `columns={{ minWidth, max }}` and produces columns of EQUAL width. Net
+ * positions carries eight columns against the order log's six and needs the
+ * larger share; an equal split recreates the cramping this rule exists to
+ * remove.
+ *
+ * THE ORDER LOG GETS THE RIGHT-HAND COLUMN because it is the only panel here
+ * that grows without bound — a busy strategy fills dozens of times a day,
+ * while the position book stays at a handful of rows. So the growing panel
+ * gets the column that can run long and the two bounded panels share the
+ * other. When the log outruns them the left column simply ends; that empty
+ * space is the price of the arrangement, and it is cheaper than a log squeezed
+ * into a full-width panel that pushes everything else off screen.
+ *
+ * DOM ORDER IS POSITIONS -> ORDER LOG -> CHART: what you hold, then what
+ * happened, then the shape of the day. That is the narrow-viewport order, and
+ * it deliberately does NOT read down the desktop columns (which would give
+ * Positions, Chart, Log) because that buries the longest and most-read panel
+ * behind a tall chart. The desktop arrangement comes from explicit placement
+ * below rather than from reordering the markup, so the narrow layout — and a
+ * screen reader, which follows the DOM and not the grid — both get the order
+ * that was actually chosen.
+ */
+.strategy-grid {
+  display: grid;
+  gap: var(--spacing-3, 12px);
+  grid-template-columns: minmax(0, 1fr);
+  /*
+    THIS IS WHAT KEEPS THE PAGE BODY FROM SCROLLING SIDEWAYS.
+
+    A grid item's default `min-width: auto` means "at least as wide as my
+    content", and each table declares a min-width summed from its column
+    widths. Without this the widest table would push its column, then the grid,
+    then the body wide, and the whole page — navbar included — would scroll
+    horizontally. Pinned to zero here and on every child so the overflow stays
+    inside each table's own scroll container, which the design system already
+    gives every `Table`. `minmax(0, …)` below does the same job for the tracks.
+  */
+  min-width: 0;
+}
+
+.strategy-grid > * {
+  min-width: 0;
+}
+
+@media (min-width: 1200px) {
+  .strategy-grid {
+    /*
+      50/50, at the operator's call. The original 58/42 gave the position book
+      the larger share on the theory that it carries more columns; in practice
+      the order log's Status column was the one being squeezed — a refusal
+      reason is variable-length and had nowhere to go, so even "COMPLETE" was
+      clipping. The `minmax(0, ...)` is not decoration: a grid track defaults
+      to a content-sized minimum, and each Table sets a min-width summed from
+      its columns, so without it the wider table pushes the document sideways
+      instead of scrolling inside its own wrapper.
+    */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    /*
+      Cards keep their natural height. Stretching is the grid default, and it
+      would blow the chart card up to the height of a long order log, leaving a
+      plot floating in the middle of an empty panel.
+    */
+    align-items: start;
+  }
+
+  .strategy-grid-positions {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  /*
+    Beside the book, SPANNING BOTH LEFT-COLUMN ROWS — so the trades can flow
+    long (operator's call 2026-08-18). The log is the panel with genuinely
+    unbounded content; giving it the full right column means fourteen days of
+    fills render without a scroll war against the two bounded cards opposite.
+    `align-items: start` still applies — the log renders at content height —
+    but with TWO cards stacked on the left the columns now balance instead of
+    leaving a half-page hole.
+  */
+  .strategy-grid-log {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+
+  /*
+    UNDER THE BOOK, AT THE BOOK'S WIDTH (operator's call 2026-08-18 — it was
+    briefly full-width on its own row, which pushed the log's tail below the
+    fold). The reasoning prose wraps more in a half column, and that is the
+    accepted price of the order log running tall beside it.
+  */
+  .strategy-grid-strategy {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  /*
+    FULL WIDTH, ON ITS OWN ROW, BELOW EVERYTHING.
+
+    The chart is the one panel that answers no question by itself — it is read
+    after the book and the log, not beside them — and it is also the one that
+    genuinely benefits from width: a day's P&L across a 42% column compresses
+    the very swings it exists to show. Its own row also means it can no longer
+    be dragged tall by whatever is opposite it.
+  */
+  .strategy-grid-chart {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+}
+
+/*
+  THE BROKER PAGE'S TWO COLUMNS — the same mechanism as `.strategy-grid` above,
+  and deliberately the same breakpoint.
+
+  ONE BREAKPOINT SCALE, USED EVERYWHERE (see responsive.css): >= 1200px is
+  where this desk puts panels side by side, and a page that split at 1100 or
+  1280 would make the whole app feel like several apps.
+
+  POSITIONS TAKES THE LARGER SHARE, 55/45. It is the tallest and the most-read
+  of the three — an eighteen-leg book, five columns, and the one Total anybody
+  checks — while Orders and Trades are usually a handful of rows and stack
+  happily in the narrower column beside it. The split is unequal on purpose,
+  unlike the strategy page's 50/50: there the two panels are a genuine pair read
+  across, here one panel is the page and the other two are context.
+
+  IT WAS 58/42, AND THE THREE POINTS BOUGHT THE ORDER BOOK ITS LAST COLUMN.
+  Orders and Trades declare a min-width summed from their columns, and below it
+  the card scrolls sideways — which is what the operator screenshotted on
+  2026-08-15, with Time off the right edge. At 1440px: 1440 − 32 (the page's
+  `padding={4}`) = 1408, less this grid's 12px gap = 1396 of track; 42% of that
+  is 586 and 45% is 628, and the card spends 16px a side either way. 596 of
+  usable width against the order set's 588 fits; 554 did not. Positions loses
+  32px it had spare and still clears its own 680.
+
+  PLACEMENT, NOT REORDERING. The markup is Positions → Orders → Trades and stays
+  that way, so below 1200px the single column collapses into exactly that order
+  and a screen reader gets it at every width.
+
+  `minmax(0, …)` and `min-width: 0` are not decoration: a grid track defaults to
+  a content-sized minimum and every `Table` here declares a min-width summed
+  from its columns, so without them the widest table pushes the document
+  sideways instead of scrolling inside its own wrapper.
+*/
+.broker-grid,
+.broker-grid-side {
+  display: grid;
+  gap: var(--spacing-3, 12px);
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.broker-grid > *,
+.broker-grid-side > * {
+  min-width: 0;
+}
+
+@media (min-width: 1200px) {
+  .broker-grid {
+    /* The side column is CONTENT-sized, not viewport-sized: a fixed-layout
+       table stretched into a huge track distributes the surplus across every
+       column — inflating even an empty Cancel slot — so Orders/Trades hold a
+       710px track (pixel columns 496 + the symbol's 170px one-line floor) and Positions absorbs
+       whatever the screen has to give. */
+    grid-template-columns: minmax(0, 1fr) 710px;
+    /*
+      Cards keep their natural height. Stretching is the grid default, and it
+      would blow a two-row Orders card up to the height of an eighteen-leg
+      position book, leaving a table floating in an empty panel.
+    */
+    align-items: start;
+  }
+
+  .broker-grid-positions {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  /* Orders over Trades, in their own single-column grid — the same order they
+     are read in, and the order they collapse back to. */
+  .broker-grid-side {
+    grid-column: 2;
+    grid-row: 1;
+    align-content: start;
+  }
+}
+
+/*
+  THE ORDER LOG SCROLLS INSIDE ITSELF INSTEAD OF SETTING THE PAGE'S HEIGHT.
+
+  An active tag prints one row per ORDER now rather than one per journal event,
+  which is roughly a sixth of the rows — but it is still unbounded, and the grid
+  row would still size to fit every one of them. Uncapped, a busy ladder day
+  stretches row 1 and drags the positions table's card down beside it, so the
+  panel that answers "what do I hold" stops being level with the panel that
+  answers "what happened".
+
+  Capping keeps the pair level and the log keeps every row, behind its own
+  scrollbar.
+
+  `min()` rather than a flat pixel height: on a laptop the viewport is the real
+  constraint, on a tall monitor a log that runs 1400px is a scroll to nowhere.
+  The heading and the date stay outside this box, so what is scrolling is
+  obvious.
+*/
+/*
+  THE ACTION LIST SCROLLS ON THE SAME TERMS AS THE ORDER LOG.
+
+  Both are unbounded lists — one row per fill, one entry per adjustment — and
+  both sit in a grid whose tracks would otherwise size to fit every row. The
+  order log has been capped since it moved into column 2; this list now sits
+  FULL WIDTH on row 2, so leaving it uncapped would just move the problem: a
+  book with a long adjustment history would push the chart off the bottom of
+  the viewport.
+
+  Shorter cap than the log's: full width fits more entries per unit of height,
+  and this is the panel a reader skims rather than searches.
+*/
+.strategy-actions-scroll {
+  max-height: min(38vh, 420px);
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.strategy-log-scroll {
+  max-height: min(72vh, 860px);
+  overflow-y: auto;
+  /* Same reasoning as `.strategy-grid > *`: a table's summed min-width must not
+     push this container, and through it the grid, sideways. */
+  min-width: 0;
+
+  /*
+    THE TABLE MUST NOT BLEED INSIDE A SCROLL BOX.
+
+    A design-system `Table` renders inside a wrapper that pulls itself out to
+    its container's padding edges, using the `--container-padding-*` variables
+    the padded container publishes — negative inline margins always, and
+    negative block margins when it is the first or last child. In the card that
+    is what you want: the rows run edge to edge under the heading.
+
+    In here it cramps the log. This box holds NOTHING BUT the table, so the
+    table is both first and last child and takes the block bleed at both ends:
+    the top 12px is dragged above the scroll origin, where `overflow-y` clips it
+    and no amount of scrolling can bring it back — the column headings lose
+    their ascenders — and the bottom margin eats the same again off the last
+    row. The inline bleed is no kinder: overflow on one axis makes the other
+    axis scrollable too, so the 12px hanging off each side would clip on the
+    left and raise a horizontal scrollbar on the right, over a table that
+    already has its own.
+
+    Zeroing the four variables for the subtree neutralises all of it — the
+    wrapper's `calc(-1 * 0px)` margins collapse to nothing and the table sits
+    squarely in the box. The log's rows now line up with the heading above them
+    rather than running to the card's edge. That is the visible cost, and it is
+    the honest look for a panel that scrolls: the fold reads as a fold instead
+    of as a row sliced by the card border.
+  */
+  --container-padding-block-start: 0px;
+  --container-padding-block-end: 0px;
+  --container-padding-inline-start: 0px;
+  --container-padding-inline-end: 0px;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* The `system` theme mode never sets [data-theme], so without this branch a
+     system-dark user keeps the untouched defaults and the fix silently does not
+     apply to them. */
+  :root:not([data-theme='light']) {
+    --color-background-body: #16181a;
+    --color-background-card: #1d2023;
+    --color-background-surface: #23272b;
+    --color-background-popover: #23272b;
+    --color-background-muted: #1d2023;
+    --color-text-primary: #dfe2e4;
+    --color-text-secondary: #9aa0a6;
+    --color-border-emphasized: #343a3f;
+  }
+}
+
+/*
+  ONE CARD OF DIVIDED CELLS, instead of a card per value.
+
+  The book header was eleven `Card`s in a wrapping grid — eleven borders,
+  eleven shadows and eleven lots of inset for eleven figures, which is most of
+  a screen spent on chrome before the positions table starts. Operator's call
+  (2026-08-14): "i see too many boxes ... can we compact this view".
+
+  FULL BLEED. The card carries no padding of its own and every cell carries its
+  own instead, so the rules run edge to edge and there is no border of dead
+  space around the grid ("remove padding as well ... full box").
+
+  VERTICAL RULES ONLY. Dividing both ways draws a lattice, and the horizontal
+  half of it separates rows that are already separated by being on different
+  rows — "remove excess lines". The one horizontal rule that stays is between
+  the two BANDS, where it carries a real distinction.
+
+  EVERY CELL IS LABEL + ONE VALUE, which is what keeps the rows the same
+  height. A qualifier that needs saying (the margin's age) goes in the LABEL
+  line beside its name; a second figure that deserves its own reading (each
+  breakeven, the steering delta) gets its own cell. Both were second lines
+  under a value before, and they made two cells taller than every neighbour,
+  which is the ragged bottom edge the operator was looking at.
+
+  A FIXED COLUMN COUNT PER BREAKPOINT, not `auto-fit`. The rule has to be
+  suppressed on whichever cell STARTS a row, and `nth-child` can only express
+  that against a known column count — with `auto-fit` the count is whatever the
+  container happens to be, so some rows would open with a stray leading rule.
+*/
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stat-grid > * {
+  min-width: 0;
+  padding: var(--spacing-2, 8px) var(--spacing-3, 12px);
+  border-left: 1px solid var(--color-border-gray);
+}
+
+.stat-grid > *:nth-child(2n + 1) {
+  border-left: none;
+}
+
+@media (min-width: 720px) {
+  .stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  /* Re-arm the 2-column rule before suppressing the 3-column one — same
+     specificity, so the later declaration is what lands. */
+  .stat-grid > *:nth-child(2n + 1) {
+    border-left: 1px solid var(--color-border-gray);
+  }
+  .stat-grid > *:nth-child(3n + 1) {
+    border-left: none;
+  }
+}
+
+@media (min-width: 1100px) {
+  /*
+    FIVE, so the header lands as a 5x2 block (operator's call 2026-08-14:
+    "breakeven down on next row so it is 5x2 table"). Six put every figure on
+    one long row and left the second row holding four — a ragged block that
+    read as an afterthought rather than a table.
+  */
+  .stat-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .stat-grid > *:nth-child(3n + 1) {
+    border-left: 1px solid var(--color-border-gray);
+  }
+  .stat-grid > *:nth-child(5n + 1) {
+    border-left: none;
+  }
+}
+
+/*
+  THE REPAIR MENU, THREE PLANS ABREAST.
+
+  A goal serves at most three plans (`PLANS_SHOWN` in payoff.tsx caps it there
+  and the engine's own `topN` is 3), and stacked full-width they filled a whole
+  screen per goal with two-thirds of every row empty — four goals of that is a
+  scroll nobody reads to the bottom of. Three columns is therefore an exact fit
+  rather than a guess: one plan per column, no ragged last row, and the four
+  goals read as four short blocks.
+
+  A FIXED COUNT PER BREAKPOINT, NOT `auto-fit`, for the reason `.stat-grid`
+  gives above and one more of its own: a card holds a divided stat block whose
+  own column rule is `nth-child`-based, so the card's width has to be
+  predictable rather than whatever the container happened to allow.
+
+  `align-items: start` because plans are not the same height — a two-move roll
+  card carries a line a one-move card does not, and stretching (the grid
+  default) would pad every card in the row up to the tallest, which is the
+  wasted space this arrangement exists to remove.
+*/
+.plan-grid {
+  display: grid;
+  gap: var(--spacing-2, 8px);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  /* Same rule as `.strategy-grid`: a track defaults to a content-sized minimum,
+     and one long move sentence would otherwise push the grid — and the page —
+     sideways instead of wrapping inside its own card. */
+  min-width: 0;
+}
+
+.plan-grid > * {
+  min-width: 0;
+}
+
+@media (min-width: 720px) {
+  .plan-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .plan-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/*
+  THE SAME DIVIDED CELLS AS `.stat-grid`, FIXED AT TWO COLUMNS.
+
+  The score figures are what a plan card is read FOR, so they get the header
+  tiles' treatment — small muted label, large tinted figure — rather than the
+  inline row of 11px text they used to be. What they cannot borrow is
+  `.stat-grid`'s column count: that widens with the VIEWPORT, and these cells
+  live inside a card that is one third of it, so at 1100px a five-column rule
+  would slice a 340px card into 68px columns and every figure would wrap.
+
+  Two columns, at every width, is the honest answer for a container that is
+  itself responsive: six figures fall out as a 2x3 block that reads down the
+  card. (Container queries would let this follow the card instead of the
+  window; nothing else in this stylesheet uses them, and a fixed two is not
+  a compromise here — it is the count that fits.)
+*/
+.plan-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.plan-stat-grid > * {
+  min-width: 0;
+  padding: var(--spacing-1, 4px) var(--spacing-2, 8px);
+  border-left: 1px solid var(--color-border-gray);
+}
+
+.plan-stat-grid > *:nth-child(2n + 1) {
+  border-left: none;
+}
+
+/*
+  GAMMA, VEGA, THETA AND NET TV are still demoted — "not that important while
+  monitoring" — but by TYPE SIZE alone now, inside the same grid. They used to
+  sit in a second grid under a rule, which forced the row above it to hold
+  everything else and put Breakeven down on a row of its own. One grid lets the
+  block fall out as 5x2 with the sizes still saying which figures lead.
+*/
+
+/*
+  THE CHART LEGEND AS A SWITCHBOARD — real buttons (keyboard, `aria-pressed`),
+  styled to read exactly like the recharts legend they replace: same size, same
+  muted ink, swatches drawn from the Line's own stroke and dash so they cannot
+  disagree with the plot. A hidden series keeps its swatch and strikes its name
+  — "hidden by you", never "not served".
+*/
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--spacing-1, 4px) var(--spacing-3, 12px);
+}
+
+.chart-legend-item {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 2px var(--spacing-1, 4px);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-text-secondary, #667);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.chart-legend-item:hover {
+  color: var(--color-text-primary, #112);
+}
+
+.chart-legend-item:focus-visible {
+  outline: 2px solid var(--color-border-focus, #4c6fff);
+  outline-offset: 1px;
+}
+
+.chart-legend-item-off span {
+  text-decoration: line-through;
+  opacity: 0.6;
+}

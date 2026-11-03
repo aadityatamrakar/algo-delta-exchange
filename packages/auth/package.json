@@ -1,0 +1,9 @@
+{
+  "name": "@algomaker/auth",
+  "version": "1.0.0",
+  "description": "Password hashing (argon2id), session token mint/expiry, and login lockout. Pure over injected time, zero deps, no database and no HTTP.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=24.9" }
+}

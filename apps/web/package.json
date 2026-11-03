@@ -1,0 +1,35 @@
+{
+  "name": "@algomaker/web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Desk dashboard: books, per-leg greeks, net delta, the bridge-vs-desk diff.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:traders": "vite --config vite.traders.config.ts",
+    "build": "tsc -b && vite build && vite build --config vite.traders.config.ts",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@algomaker/desk-engine": "*",
+    "@astryxdesign/core": "^0.1.8",
+    "@astryxdesign/theme-neutral": "^0.1.8",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "^0.1.8",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "jsdom": "^29.1.1",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.10"
+  }
+}

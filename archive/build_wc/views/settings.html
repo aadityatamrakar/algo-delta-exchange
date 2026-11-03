@@ -1,0 +1,30 @@
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=ABeeZee&display=swap');
+
+  .positions-font {
+    font-family: 'ABeeZee', sans-serif;
+  }
+
+</style>
+<!-- Content Header (Page header) -->
+<div class="content-header positions-font">
+  <div class="container">
+    <div class="row">
+      <h5 style="margin-left: -0.5rem; margin-bottom: 0;" class="text-dark text-bold">Settings</h5>&nbsp;
+      <!-- <button ng-disabled="loadingPositions" ng-click="getPositions()" class="btn btn-sm btn-outline-dark">{{loadingPositions ? 'Loading...': 'Refresh'}}</button> -->
+    </div>
+  </div>
+</div>
+<!-- /.content-header -->
+
+<!-- Main content -->
+<div class="content positions-font">
+  <form ng-submit="changePwd()">
+    <div class="form-group">
+      <label for="newPassword">New PIN</label>
+      <input type="tel" maxlength="4" minlength="4" class="form-control" id="newPassword" ng-model="newPassword">
+    </div>
+    <button type="submit" class="btn btn-primary">Update</button>
+  </form>
+</div>
+<!-- /.content -->

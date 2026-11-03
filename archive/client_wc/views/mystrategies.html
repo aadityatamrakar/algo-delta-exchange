@@ -1,0 +1,140 @@
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=ABeeZee&display=swap');
+
+  .positions-font {
+    font-family: 'ABeeZee', sans-serif;
+  }
+
+  .mobile_font {
+    font-size: 15px;
+  }
+
+</style>
+
+<!-- Main content -->
+<div class="content positions-font" style="margin-top: 30px;">
+  <div class="container">
+    <h5>MarketPlace
+      <a ng-show="!accountAdded && liveUser" class="btn btn-sm btn-outline-primary" data-toggle="modal"
+        data-target="#addAccount" href="javascript:;" role="button"><i class="fa fa-plus"></i> Zerodha Account Login</a>
+      <a ng-show="!accountAdded && !liveUser" class="btn btn-sm btn-outline-primary" href="https://pay.algomaker.in"
+        role="button">Pay to Add Zerodha Account</a>
+    </h5>
+
+    <div class="card" style="margin-top: 15px; background: url('/assets/{{strategy.wave}}.svg') no-repeat;"
+      ng-style="cardStyle" ng-repeat="strategy in strategies | orderBy: 'index'">
+      <div class="card-body">
+        <h5 class="card-title" style="margin-bottom: 10px; font-weight: bold;">{{strategy.title}}</h5>
+        <p class="card-text" style="margin: 0;">
+          <br ng-if="!isMobileDevice()">
+          {{strategy.description}}
+          <br>
+          <span ng-repeat="tag in strategy.tags" style="margin-right: 2px;" class="badge badge-secondary">{{tag}}</span>
+          <br ng-if="!isMobileDevice()">
+          <br>
+          <span style="margin-top: 3px;">Min. Capital: ₹ {{roundOff(strategy.capital)}}</span>
+          <br ng-show="currentSize[strategy.title]">
+          <span ng-show="currentSize[strategy.title]" style="margin-top: 3px;">Current Lot Size:
+            {{currentSize[strategy.title]}}</span>
+        </p>
+        <br ng-if="!isMobileDevice()">
+        <button style="border-radius: 9px; position: relative; z-index: 99;" ng-click="strategyReport(strategy.title)"
+          class="btn btn-md btn-primary">Performance</button>
+        <p ng-hide="accountAdded" class="text-danger">To Deploy {{strategy.title}} Strategy, Kindly Add Zerodha account.
+        </p>
+        <a ng-show="accountAdded" style="border-radius: 9px; position: relative; z-index: 99;" ng-click="changeQuantity(strategy)" href="javascript:;" class="btn btn-md btn-primary">Deploy</a>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- /.content -->
+
+<br><br><br><br><br>
+
+
+<!-- Modal -->
+<div class="modal fade" id="mutliplierModal" tabindex="-1" aria-labelledby="exampleModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="exampleModalLabel">{{strategy.title}} Lot Size</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form ng-submit="updateQuantity()">
+          <div class="form-group">
+            <label for="lotSize">Lot Size</label>
+            <input type="tel" min="0" minlength="1" class="form-control" ng-model="lotSize"
+              ng-change="marginReq = lotSize*strategy.capital" id="lotSize" maxlength="3">
+          </div>
+          <div class="form-group text-bold">
+            Required Margin: <span ng-show="marginReq">₹ {{roundOff(marginReq)}}</span>
+          </div>
+          <button type="submit" class="btn btn-primary">Submit</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- Modal -->
+<div class="modal fade" id="addAccount" data-backdrop="static" data-keyboard="false" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Zerodha Login Form</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <form>
+          <div class="form-group">
+            <label for="username">Your Name</label>
+            <input type="text" ng-model="account.username" class="form-control" id="username">
+          </div>
+          <div class="form-group">
+            <label for="loginId">Zerodha ID</label>
+            <input type="text" ng-model="account.credentials.user_id" maxlength="6" class="form-control" id="loginId">
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Zerodha Password</label>
+            <input type="text" ng-model="account.credentials.password" class="form-control" id="loginPassword">
+          </div>
+          <div class="form-group">
+            <label for="loginPin">Zerodha 2FA PIN</label>
+            <input type="tel" ng-model="account.credentials.answer" maxlength="6" class="form-control" id="loginPin">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button ng-click="saveAccount()" type="button" class="btn btn-primary">Submit</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal fade" id="strategyModal" data-backdrop="static" data-keyboard="false" tabindex="-1"
+  aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Strategy Performance</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="strategyPnlChart" style="width: 100%; height: 400px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

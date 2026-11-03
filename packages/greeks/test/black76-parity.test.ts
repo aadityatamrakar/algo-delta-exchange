@@ -1,0 +1,231 @@
+/**
+ * GOLDEN PARITY: the TS Black-76 answers the Python desk's own numbers.
+ *
+ * `black76.test.ts` next door checks that the pricer is internally coherent —
+ * put-call parity, a textbook ATM value, sane degenerate cases. That proves the
+ * formulas are consistent with THEMSELVES. It does not prove they agree with
+ * `sensibull_tools/gfdl/greeks.py`, which is the thing that actually matters:
+ * this desk runs a Python book and a TS bridge over the same positions, and a
+ * disagreement between them shows up as a phantom delta or a margin figure
+ * nobody can reconcile mid-session.
+ *
+ * So this file replays a 360-point grid — three price scales (a ~100 stock, a
+ * ~750 stock, a ~25k index) x five moneyness levels x four times to expiry x
+ * three vols x both wings — through the TS port and diffs against the values
+ * the Python printed. Regenerate the fixture with `scripts/gen-parity-fixtures.py`.
+ *
+ * Failures are COLLECTED, not thrown on sight: with 360 cases, "the first one
+ * that broke" is far less informative than "all 180 puts broke and no calls
+ * did".
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { b76Price, b76Greeks, b76ImpliedVol, type B76Inputs } from '../src/black76.ts'
+import { close, type Tolerance } from '../../payoff/test/helpers.ts'
+
+interface B76Fixture {
+  /**
+   * Which solver produced the `iv_roundtrip` column on the generating machine:
+   * `"opengreeks"` (the Rust wheel) or `"python"` (the bisection fallback).
+   * Provenance for the one machine-dependent value in the file.
+   */
+  readonly backend: string
+  readonly cases: readonly B76Case[]
+}
+
+interface B76Case {
+  readonly in: {
+    readonly opt_type: 'CE' | 'PE'
+    readonly F: number
+    readonly K: number
+    readonly t: number
+    readonly r: number
+    readonly sig: number
+  }
+  readonly price: number
+  readonly greeks: { readonly delta: number; readonly gamma: number; readonly theta: number; readonly vega: number }
+  /** The live Python desk's answer — its native solver when that wheel is present. */
+  readonly iv_roundtrip: number | null
+  /** The pure-Python bisection `b76ImpliedVol` is a port of. See the IV tests. */
+  readonly iv_roundtrip_bisect: number | null
+}
+
+const FIXTURE = new URL('../../payoff/test/fixtures/parity/black76.json', import.meta.url)
+const DATA = JSON.parse(readFileSync(FIXTURE, 'utf8')) as B76Fixture
+const CASES: readonly B76Case[] = DATA.cases
+
+/**
+ * PER-SHARE option price, in rupees. Both bounds are load-bearing, on opposite
+ * ends of the grid; the numbers below are measured against this fixture, not
+ * assumed.
+ *
+ * `abs` is one paisa — the NSE tick, i.e. the point below which a per-share
+ * price difference is not representable in a real quote. It is what carries the
+ * cheap end: 88 of the 360 grid options are worth under ₹1 and 53 under a
+ * paisa, and any relative bound there is meaningless (the worst relative
+ * deviation on the whole grid is 1.9e-2, on an option worth ~1e-7). The worst
+ * ABSOLUTE deviation anywhere on the grid is 3.4e-3, at the ATM index point
+ * (F=24800, t=0.3) — so a paisa is ~3x the worst observed, which is headroom
+ * without being a blank cheque.
+ *
+ * `rel` takes over above ₹100 and carries the expensive end, up to the ₹6441
+ * top of this grid, where the A&S normal CDF the TS uses (max error 1.5e-7,
+ * against Python's exact `math.erf`) is the entire source of the disagreement.
+ *
+ * NOT the same tolerance as a book-level rupee P&L cell (Tasks 4/5), which is
+ * a different quantity three orders of magnitude larger and keeps `abs: 1.0`.
+ */
+const PRICE: Tolerance = { abs: 0.01, rel: 1e-4 }
+/**
+ * Per-share greeks. `abs` cannot be zero, because the Python ROUNDS what it
+ * reports — delta/theta/vega to 8dp, gamma to 10dp — so a true gamma of 4.9e-11
+ * is recorded as exactly 0.0 and the relative deviation against it is 1.0 by
+ * construction. Measured worst absolute deviations across the grid: delta
+ * 7.3e-8, gamma 4.9e-11, theta 6.0e-7, vega 5.0e-9 — all under 1e-6, and the
+ * large thetas that approach it are carried by `rel` anyway (|theta| ~ 6 at the
+ * index points, so `rel` allows 6e-4 there).
+ *
+ * Sized against the smallest greek this grid produces rather than against the
+ * biggest: the median |gamma| in the F=24800 block is 5.2e-5, so 1e-6 is ~2% of
+ * a typical index gamma. At 1e-5 it would have been ~19% — enough slack to hide
+ * a real port error inside a passing assertion.
+ */
+const GREEK: Tolerance = { abs: 1e-6, rel: 1e-4 }
+const IV: Tolerance = { abs: 1e-3, rel: 0 }
+/** Exactly the solver's own contract: a returned vol reprices onto the quote. */
+const REPRICE: Tolerance = { abs: 1e-6, rel: 1e-6 }
+
+const GREEK_KEYS = ['delta', 'gamma', 'theta', 'vega'] as const
+
+const inputs = (c: B76Case): B76Inputs => ({
+  future: c.in.F,
+  strike: c.in.K,
+  t: c.in.t,
+  vol: c.in.sig,
+  rate: c.in.r,
+  type: c.in.opt_type,
+})
+
+const label = (c: B76Case): string =>
+  `${c.in.opt_type} F=${c.in.F} K=${c.in.K} t=${c.in.t} sig=${c.in.sig}`
+
+/** Report every mismatch, capped so a total port failure prints a page, not a book. */
+function reportAll(fails: readonly string[], what: string): void {
+  assert.equal(
+    fails.length,
+    0,
+    `${fails.length} ${what} mismatches vs the Python desk over ${CASES.length} cases:\n` +
+      fails.slice(0, 20).join('\n') +
+      (fails.length > 20 ? `\n… and ${fails.length - 20} more` : ''),
+  )
+}
+
+// A fixture that failed to load, or one someone truncated, would otherwise make
+// every test below pass by iterating nothing at all.
+//
+// Cardinality alone is too weak a guard: 360 cases of the SAME easy ATM point
+// would satisfy a length check while testing none of the scale, moneyness or
+// near-expiry behaviour this suite exists for. So assert the actual axes — a
+// regenerated fixture that quietly drops the index scale or the 0.7-day column
+// has to announce itself here rather than in a silently narrower suite.
+const distinct = (pick: (c: B76Case) => number): number[] =>
+  [...new Set(CASES.map(pick))].sort((a, b) => a - b)
+
+test('the fixture is the full generated grid, on all of its axes', () => {
+  assert.equal(CASES.length, 360)
+  assert.deepEqual(distinct((c) => c.in.F), [100, 750.5, 24800])
+  assert.deepEqual(distinct((c) => c.in.t), [0.002, 0.02, 0.08, 0.3])
+  assert.deepEqual(distinct((c) => c.in.sig), [0.12, 0.25, 0.6])
+  assert.deepEqual(distinct((c) => c.in.r), [0.065])
+  // Strike is recorded absolute; moneyness is the axis that was actually swept.
+  assert.deepEqual(
+    distinct((c) => Number((c.in.K / c.in.F).toFixed(6))),
+    [0.85, 0.95, 1, 1.05, 1.2],
+  )
+  assert.deepEqual([...new Set(CASES.map((c) => c.in.opt_type))].sort(), ['CE', 'PE'])
+  // 3 F x 5 moneyness x 4 t x 3 sig x 2 types = 360, so the axes above being
+  // right AND the count being right means every combination is present exactly
+  // once — no duplicates padding out a gap.
+  assert.equal(new Set(CASES.map((c) => JSON.stringify(c.in))).size, 360)
+  assert.ok(CASES.every((c) => typeof c.price === 'number' && Number.isFinite(c.price)))
+  // Provenance for the machine-dependent IV column must not go missing.
+  assert.ok(DATA.backend.length > 0, 'fixture records no solver backend')
+})
+
+test('b76Price matches the Python desk across the grid', () => {
+  const fails: string[] = []
+  for (const c of CASES) {
+    const got = b76Price(inputs(c))
+    if (!close(got, c.price, PRICE)) fails.push(`${label(c)}: py=${c.price} ts=${got}`)
+  }
+  reportAll(fails, 'price')
+})
+
+test('b76Greeks matches the Python desk across the grid', () => {
+  const fails: string[] = []
+  for (const c of CASES) {
+    const got = b76Greeks(inputs(c))
+    for (const k of GREEK_KEYS) {
+      if (!close(got[k], c.greeks[k], GREEK)) {
+        fails.push(`${label(c)} ${k}: py=${c.greeks[k]} ts=${got[k]}`)
+      }
+    }
+  }
+  reportAll(fails, 'greek')
+})
+
+// Null is a real answer, and the interesting one: a deep-ITM near-expiry quote
+// sits on discounted intrinsic and has NO recoverable vol. Both solvers agree
+// about that (they share the `px <= intrinsic + 1e-9` guard), so the TS must
+// return null on exactly the same cases — a port that returned 5.0 there would
+// feed a 500% IV into every downstream vega.
+test('b76ImpliedVol agrees with the Python about which quotes have no vol', () => {
+  const fails: string[] = []
+  for (const c of CASES) {
+    const got = b76ImpliedVol(c.price, inputs(c))
+    if ((got === null) !== (c.iv_roundtrip_bisect === null)) {
+      fails.push(`${label(c)}: py=${c.iv_roundtrip_bisect} ts=${got}`)
+    }
+    // The native-backend column has to agree about nullity too — the two
+    // solvers only ever differ on WHICH root they land on, never on whether one
+    // exists.
+    if ((got === null) !== (c.iv_roundtrip === null)) {
+      fails.push(`${label(c)} [native col]: py=${c.iv_roundtrip} ts=${got}`)
+    }
+  }
+  reportAll(fails, 'IV null-agreement')
+})
+
+// Compared against `iv_roundtrip_bisect`, NOT `iv_roundtrip`. `b76ImpliedVol` is
+// a line-for-line port of the pure-Python bisection, and on ~20 of these 360
+// points that bisection disagrees with the Rust `opengreeks` root-finder the
+// live desk prefers — always deep in a wing, where the option is worth ~nothing
+// or ~intrinsic and vega has collapsed, so the price is flat in vol and both
+// solvers "converge" to different vols that reprice to the same quote. Holding
+// the port to the native solver there would be testing the wheel, not the port;
+// the next test is what pins down that the TS answer is a legitimate root.
+test('b76ImpliedVol recovers the vol the Python bisection recovers', () => {
+  const fails: string[] = []
+  for (const c of CASES) {
+    const py = c.iv_roundtrip_bisect
+    if (py === null) continue
+    const got = b76ImpliedVol(c.price, inputs(c))
+    if (got === null) continue // covered by the null-agreement test above
+    if (!close(got, py, IV)) fails.push(`${label(c)}: py=${py} ts=${got}`)
+  }
+  reportAll(fails, 'IV value')
+})
+
+test('every recovered vol reprices onto the quote it came from', () => {
+  const fails: string[] = []
+  for (const c of CASES) {
+    const iv = b76ImpliedVol(c.price, inputs(c))
+    if (iv === null) continue
+    const reprice = b76Price({ ...inputs(c), vol: iv })
+    if (!close(reprice, c.price, REPRICE)) {
+      fails.push(`${label(c)}: quote=${c.price} iv=${iv} reprices to ${reprice}`)
+    }
+  }
+  reportAll(fails, 'IV repricing')
+})

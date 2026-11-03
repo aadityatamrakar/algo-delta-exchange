@@ -1,0 +1,44 @@
+[
+  {
+    "data": [
+      {
+        "_id": "66d71911be2f10fa7b342af4",
+        "CH_SYMBOL": "POSITRON",
+        "CH_SERIES": "SM",
+        "CH_MARKET_TYPE": "N",
+        "CH_TIMESTAMP": "2024-09-03",
+        "TIMESTAMP": "2024-09-02T18:30:00.000Z",
+        "CH_TRADE_HIGH_PRICE": 663,
+        "CH_TRADE_LOW_PRICE": 560,
+        "CH_OPENING_PRICE": 612,
+        "CH_CLOSING_PRICE": 574.7,
+        "CH_LAST_TRADED_PRICE": 578,
+        "CH_PREVIOUS_CLS_PRICE": 630.5,
+        "CH_TOT_TRADED_QTY": 238800,
+        "CH_TOT_TRADED_VAL": 144596310,
+        "CH_52WEEK_HIGH_PRICE": 668.2,
+        "CH_52WEEK_LOW_PRICE": 475,
+        "CH_TOTAL_TRADES": 380,
+        "CH_ISIN": "INE0S3H01017",
+        "createdAt": "2024-09-03T14:11:29.271Z",
+        "updatedAt": "2024-09-03T14:11:29.271Z",
+        "__v": 0,
+        "SLBMH_TOT_VAL": null,
+        "VWAP": 605.51,
+        "mTIMESTAMP": "03-Sep-2024"
+      }
+    ],
+    "meta": {
+      "series": [
+        "SM"
+      ],
+      "fromDate": "04-08-2024",
+      "toDate": "03-09-2024",
+      "symbols": [
+        "POSITRON",
+        "AAECP5492Q",
+        "POSITRON"
+      ]
+    }
+  }
+]

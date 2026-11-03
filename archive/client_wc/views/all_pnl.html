@@ -1,0 +1,88 @@
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=ABeeZee&display=swap');
+
+  .positions-font {
+    font-family: 'ABeeZee', sans-serif;
+  }
+
+  .mobile_font {
+    font-size: 15px;
+  }
+
+  .no-wrap {
+    white-space: nowrap;
+  }
+
+  .dash-btn {
+    height: 20px;
+    font-size: 15px;
+    line-height: 15px;
+    padding: 0 5px;
+  }
+
+  td {
+    vertical-align: middle;
+  }
+</style>
+
+<!-- Content Header (Page header) -->
+<div class="content-header positions-font" style="padding: 5px .5rem;">
+  <div class="container">
+    <div class="row">
+      <h5 ng-hide="isMobileDevice()" style="margin-left: -0.5rem; margin-bottom: 0;" class="text-dark">Dashboard</h5>
+      <h6 ng-show="isMobileDevice()" style="margin-left: -0.5rem; margin-bottom: 0;" class="text-bold text-dark">
+        Dashboard</h6>
+      &nbsp;
+      <button ng-if="execRights" class="btn dash-btn btn-outline-dark" ng-click="cashout()">Cash Out</button>
+      &nbsp;
+      <button ng-disabled="loadingDash" class="btn dash-btn"
+        ng-class="{'btn-outline-dark': currentView == 'ALL', 'btn-outline-success': currentView == 'XTS Only' , 'btn-outline-primary': currentView == 'Zerodha Only'}"
+        ng-click="changeView()">{{loadingDash?'Loading...':currentView}}</button>
+      &nbsp;
+      <button ng-if="execRights" class="btn dash-btn" ng-class="{'btn-success': liveData, 'btn-warning':!liveData}"
+        ng-click="cacheConfig()">{{liveData? 'Live': 'Delayed'}}</button>
+    </div>
+  </div>
+</div>
+<!-- /.content-header -->
+
+<!-- Main content -->
+<div class="content positions-font">
+  <div class="">
+
+    <table class="table table-hover table-sm table-striped">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th colspan="2" class="no-wrap text-right"
+            ng-class="{'text-success': total_pnl >0, 'text-danger': total_pnl<0}">MTM:₹{{roundOff(total_pnl)}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr ng-class="{'mobile_font': isMobileDevice()}" ng-repeat="account in accounts | orderBy: 'name'"
+          ng-hide="account.total == 0">
+          <td>{{account.name}}</td>
+          <td>{{account.fullname}}</td>
+          <td class="text-right" ng-class="{'text-success': account.total >0, 'text-danger': account.total<0}">
+            {{roundOff(account.total)}}
+          </td>
+          <td class="text-right">
+            <button class="btn btn-sm btn-outline-dark"
+              ui-sref="app.positions({platform:account.platform, name: account.name, accountId: account.accountId, full_name: account.fullname, ts: 0})">View</button>
+          </td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2" class="text-bold">Total PNL</td>
+          <td class="text-right text-bold" ng-class="{'text-success': total_pnl >0, 'text-danger': total_pnl<0}">
+            {{roundOff(total_pnl)}}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+
+  </div><!-- /.container-fluid -->
+</div>
+<!-- /.content -->

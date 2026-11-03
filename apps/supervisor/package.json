@@ -1,0 +1,17 @@
+{
+  "name": "@algomaker/supervisor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The recenter supervisor: leases each book, turns feed ticks into engine inputs, and routes the engine's decisions at desk-api. Replaces the Python desk supervisor.",
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "_comment:dependencies": "EVERY workspace package this app imports is declared here, including the ones that already resolve. npm hoists the workspace symlinks into the root node_modules, so an undeclared @algomaker/* import resolves anyway — right up until the day the package is not installed at the root, or this app is built on its own, and then it is a MODULE_NOT_FOUND in the process that steers live books. @algomaker/bus and @algomaker/instruments were the two missing (found by the same audit that caught them in order-gateway); both are imported by src/, not only by tests.",
+  "dependencies": {
+    "@algomaker/bus": "1.0.0",
+    "@algomaker/core": "1.0.0",
+    "@algomaker/desk-engine": "0.1.0",
+    "@algomaker/greeks": "1.0.0",
+    "@algomaker/instruments": "1.0.0"
+  }
+}

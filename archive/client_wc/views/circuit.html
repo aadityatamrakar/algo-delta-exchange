@@ -1,0 +1,69 @@
+<style>
+    .no-wrap {
+        white-space: nowrap;
+    }
+</style>
+
+<div class="content-header">
+    <div class="container">
+        <div class="row">
+            <h5 style="margin-left: -0.5rem; margin-bottom: 0;" class="text-dark">Circuit Stocks: BSE</h5>
+            <div class="form-group">
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="circuit_type" id="circuit_type_1" value="all" ng-model="circuit_type">
+                    <label class="form-check-label" for="circuit_type">None</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="circuit_type" id="circuit_type_1" value="lc" ng-model="circuit_type">
+                    <label class="form-check-label" for="circuit_type">LC</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="circuit_type" id="circuit_type_2" value="uc" ng-model="circuit_type">
+                    <label class="form-check-label" for="circuit_type">UC</label>
+                </div>
+            </div>        
+        </div>
+    </div>
+</div>
+
+<div class="content">
+    <table ng-class="{'table-responsive': isMobileDevice()}" id="screenerTbl" fixed-column-table fixed-columns="1"
+        class="table table-bordered table-hover table-striped table-sm" ng-style="tableStyle">
+        <thead>
+            <tr class="no-wrap">
+                <th style="width: 5rem;" class="text-bold bg-light"><input id="searchType" ng-model="searchStock.type"
+                        style="width: 5rem;" class="form-control form-control-sm" style="width: 20px;"
+                        placeholder="Search"></th>
+                <th class="text-bold bg-light"><input id="searchStock" ng-model="searchStock.s"
+                        class="form-control form-control-sm" placeholder="Search"></th>
+                <th class="text-center" style="vertical-align: middle;">LTP</th>
+                <th class="text-center" style="vertical-align: middle;">VOL</th>
+                <th class="text-center" style="vertical-align: middle;">LC</th>
+                <th class="text-center" style="vertical-align: middle;">UC</th>
+                <th class="text-center" style="vertical-align: middle;">BQ</th>
+                <th class="text-center" style="vertical-align: middle;">SQ</th>
+                <!-- <th class="text-center" style="vertical-align: middle;">Time</th> -->
+            </tr>
+        </thead>
+
+        <tbody class="no-wrap">
+            <tr ng-repeat="stock in stocks | orderBy:'-v' | filter: searchStock">
+                <td class="bg-light">{{stock.type}}</td>
+                <td style="z-index: 10;" class="bg-light text-bold">{{stock.s}}</td>
+                <td class="text-center text-bold"
+                    ng-class="{'text-success': (stock.p===stock.uc), 'text-danger': (stock.p===stock.lc)}">
+                    {{stock.p}}
+                    <i class="fa"
+                        ng-class="{'fa-arrow-down text-danger': (stock.p===stock.lc), 'fa-arrow-up text-success': (stock.p===stock.uc)}"></i>
+                    </span>
+                </td>
+                <td class="text-center text-bold">{{stock.v}}</td>
+                <td class="text-center text-bold">{{stock.lc}}</td>
+                <td class="text-center text-bold">{{stock.uc}}</td>
+                <td class="text-center text-bold">{{stock.bq}}</td>
+                <td class="text-center text-bold">{{stock.sq}}</td>
+                <!-- <td class="text-center text-bold">{{stock.ts}}</td> -->
+            </tr>
+        </tbody>
+    </table>
+</div>

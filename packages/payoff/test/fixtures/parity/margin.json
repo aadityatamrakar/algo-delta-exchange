@@ -1,0 +1,188 @@
+[
+  {
+    "date": "2026-08-19",
+    "kwargs": {
+      "default_iv": 0.35,
+      "exposure_pct": 0.05,
+      "min_short_pct": 0.05,
+      "price_scan_pct": 0.21,
+      "r": 0.065,
+      "vol_scan": 0.25
+    },
+    "legs": [
+      {
+        "entry": 8.4,
+        "expiry": "2026-08-25",
+        "id": "s_ce_700",
+        "instrument": "option",
+        "iv": 0.28,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "CE",
+        "side": "Sell",
+        "strike": 700.0
+      },
+      {
+        "entry": 6.1,
+        "expiry": "2026-08-25",
+        "id": "s_pe_620",
+        "instrument": "option",
+        "iv": 0.31,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 620.0
+      }
+    ],
+    "name": "strangle",
+    "out": {
+      "exposure": 132000.0,
+      "n_short_lots": 4,
+      "short_notional": 2640000.0,
+      "span": 194731.09,
+      "total": 326731.09,
+      "worst_scenario": {
+        "price_move_pct": 21.0,
+        "vol_mult": 1.25
+      }
+    },
+    "spot": 660.0
+  },
+  {
+    "date": "2026-08-19",
+    "kwargs": {
+      "default_iv": 0.35,
+      "exposure_pct": 0.05,
+      "min_short_pct": 0.05,
+      "price_scan_pct": 0.21,
+      "r": 0.065,
+      "vol_scan": 0.25
+    },
+    "legs": [
+      {
+        "entry": 8.4,
+        "expiry": "2026-08-25",
+        "id": "s_ce_700",
+        "instrument": "option",
+        "iv": 0.28,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "CE",
+        "side": "Sell",
+        "strike": 700.0
+      },
+      {
+        "entry": 6.1,
+        "expiry": "2026-08-25",
+        "id": "s_pe_620",
+        "instrument": "option",
+        "iv": 0.31,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 620.0
+      },
+      {
+        "entry": 2.1,
+        "expiry": "2026-08-25",
+        "id": "b_ce_730",
+        "instrument": "option",
+        "iv": 0.26,
+        "lot_size": 1000,
+        "lots": 1,
+        "opt_type": "CE",
+        "side": "Buy",
+        "strike": 730.0
+      },
+      {
+        "entry": 3.3,
+        "expiry": "2026-08-25",
+        "id": "s_pe_600",
+        "instrument": "option",
+        "iv": 0.33,
+        "lot_size": 1000,
+        "lots": 1,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 600.0
+      }
+    ],
+    "name": "repaired",
+    "out": {
+      "exposure": 165000.0,
+      "n_short_lots": 5,
+      "short_notional": 3300000.0,
+      "span": 273151.29,
+      "total": 438151.29,
+      "worst_scenario": {
+        "price_move_pct": -21.0,
+        "vol_mult": 1.25
+      }
+    },
+    "spot": 660.0
+  },
+  {
+    "date": "2026-08-19",
+    "kwargs": {
+      "default_iv": 0.35,
+      "exposure_pct": 0.05,
+      "min_short_pct": 0.05,
+      "price_scan_pct": 0.21,
+      "r": 0.065,
+      "vol_scan": 0.25
+    },
+    "legs": [
+      {
+        "entry": 8.4,
+        "expiry": "2026-08-25",
+        "id": "s_ce_700",
+        "instrument": "option",
+        "iv": 0.28,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "CE",
+        "side": "Sell",
+        "strike": 700.0
+      },
+      {
+        "entry": 6.1,
+        "expiry": "2026-08-25",
+        "id": "s_pe_620",
+        "instrument": "option",
+        "iv": 0.31,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 620.0
+      },
+      {
+        "entry": 662.0,
+        "expiry": "2026-08-25",
+        "id": "b_fut",
+        "instrument": "future",
+        "iv": null,
+        "lot_size": 1000,
+        "lots": 1,
+        "opt_type": null,
+        "side": "Buy",
+        "strike": null
+      }
+    ],
+    "name": "with-future",
+    "out": {
+      "exposure": 165000.0,
+      "n_short_lots": 4,
+      "short_notional": 2640000.0,
+      "span": 333302.6,
+      "total": 498302.6,
+      "worst_scenario": {
+        "price_move_pct": -21.0,
+        "vol_mult": 1.25
+      }
+    },
+    "spot": 660.0
+  }
+]

@@ -1,0 +1,253 @@
+<style>
+  .no-wrap {
+    white-space: nowrap;
+  }
+
+  .badge {
+    cursor: pointer;
+  }
+
+</style>
+<!-- Content Header (Page header) -->
+<div class="content-header">
+  <div class="container">
+    <div class="row">
+      <h5 style="margin-left: -0.5rem; margin-bottom: 0;" class="text-dark">Combo Builder</h5>
+      &nbsp;&nbsp;
+      <button class="btn btn-dark btn-xs" ui-sref="app.combo_list">View List</button>
+    </div>
+  </div>
+</div>
+<!-- /.content-header -->
+
+<!-- Main content -->
+<div class="content">
+  <form class="form-inline" ng-submit="updateExpiry()">
+    <label class="my-1 mr-2" for="symbol_select">Symbol</label>
+
+    <select id="symbol_select" class="custom-select my-1 mr-sm-2" ng-change="updateExpiry()"
+      ng-model="selectedInstrument">
+      <option value="BANKNIFTY">BANKNIFTY</option>
+      <option value="NIFTY">NIFTY</option>
+      <option value="{{symbol}}" ng-repeat="(symbol,val) in instruments">{{symbol}}</option>
+    </select>
+
+    <label class="my-1 mr-2" for="expiry_select">Expiry</label>
+    <select class="custom-select my-1 mr-sm-2" id="expiry_select" ng-model="expirySelected">
+      <option value="{{dt}}" ng-repeat="dt in expiry_available">{{dt}}</option>
+    </select>
+
+    <label class="my-1 mr-2" for="strikeLimit">Limit Strikes</label>
+    <input type="number" class="form-control my-1 mr-sm-2" id="strikeLimit" ng-model="limitStrikes">
+
+    <button type="submit" class="btn btn-primary my-1"
+      ng-disabled="loadingBtn">{{loadingBtn ? 'Loading...': 'Submit'}}</button>
+  </form>
+
+  <h5 ng-click="showFutTbl=!showFutTbl" ng-show="futureInstruments.length > 0">Futures <span
+      ng-show="selectedInstrument">(Underlying:
+      {{selectedInstrument}} LTP: {{instruments[selectedInstrument].last_price}})</span> <i class="fa"
+      ng-class="{'fa-chevron-down': showFutTbl, 'fa-chevron-right':!showFutTbl}"></i></h5>
+  <table ng-show="showFutTbl && futureInstruments.length > 0"
+    class="table table-responsive table-sm table-bordered table-striped">
+    <thead>
+      <tr>
+        <th>Expiry</th>
+        <th>Symbol</th>
+        <th>Price</th>
+        <th>Trade</th>
+        <th>Volume</th>
+        <th>OI Current</th>
+        <th>OI Change</th>
+        <th>Max Pain</th>
+        <th>PCR</th>
+        <th>IV</th>
+        <th>Prev IV</th>
+        <th>ATM Strike</th>
+        <th>PE OI</th>
+        <th>PE Price</th>
+        <th>CE OI</th>
+        <th>CE Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr ng-repeat="row in futureInstruments" ng-show="row.future_symbol">
+        <td class="no-wrap">{{row.expiry}}</td>
+        <td>{{row.future_symbol}}</td>
+        <td class="text-right no-wrap">{{row.futurePrice}}</td>
+        <td><span ng-click="addToTrade(row, 'future', 'Buy')" class="badge badge-success">B</span>&nbsp;<span
+            ng-click="addToTrade(row, 'future', 'Sell')" class="badge badge-danger">S</span></td>
+        <td class="text-right no-wrap">{{shortCurrency(row.future_volume)}}</td>
+        <td class="text-right no-wrap">{{shortCurrency(row.fut_oi_current_level)}}</td>
+        <td class="text-right no-wrap">{{shortCurrency(row.fut_oi_change)}}</td>
+        <td>{{row.max_pain}}</td>
+        <td>{{row.pcr.toFixed(2)}}</td>
+        <td>{{row.impliedVolatility.toFixed(2)}}</td>
+        <td>{{row.prev_iv.toFixed(2)}}</td>
+        <td>{{row.strike}}</td>
+        <td class="text-right no-wrap">{{shortCurrency(row.put_oi)}}</td>
+        <td class="text-right no-wrap">{{row.putPrice}}</td>
+        <td class="text-right no-wrap">{{shortCurrency(row.call_oi)}}</td>
+        <td class="text-right no-wrap">{{row.callPrice}}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h5 ng-click="showOptTbl=!showOptTbl" ng-show="optionInstruments.strikes.length > 0">Options <i class="fa"
+      ng-class="{'fa-chevron-down': showOptTbl, 'fa-chevron-right':!showOptTbl}"></i></h5>
+  <table ng-show="showOptTbl && optionInstruments.strikes.length > 0"
+    class="table table-sm table-bordered table-striped">
+    <thead>
+      <tr>
+        <th class="text-right">Vega</th>
+        <th class="text-right">Theta</th>
+        <th class="text-right">Delta</th>
+        <th class="text-right">CE OI</th>
+        <th class="text-right">CE Vol</th>
+        <th class="text-right">CE Price</th>
+        <th class="text-center">Strike</th>
+        <th class="text-center">IV</th>
+        <th class="text-right">PE Price</th>
+        <th class="text-right">PE Vol</th>
+        <th class="text-right">PE OI</th>
+        <th class="text-right">Delta</th>
+        <th class="text-right">Theta</th>
+        <th class="text-right">Vega</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr ng-repeat="strike in optionInstruments.strikes">
+
+
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price > strike}">
+          {{optionInstruments[expirySelected][strike + 'CE'].greeks.vega}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price > strike}">
+          {{optionInstruments[expirySelected][strike + 'CE'].greeks.theta}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price > strike}">
+          {{optionInstruments[expirySelected][strike + 'CE'].greeks.delta}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price > strike}">
+          {{shortCurrency(optionInstruments[expirySelected][strike + 'CE'].oi)}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price > strike}">
+          {{shortCurrency(optionInstruments[expirySelected][strike + 'CE'].volume)}}</td>
+        <td class="no-wrap" ng-class="{'table-warning': instruments[selectedInstrument].last_price > strike}">
+          <span ng-click="addToTrade(optionInstruments[expirySelected][strike + 'CE'], 'option', 'Buy')"
+            class="badge badge-success">B</span>&nbsp;<span
+            ng-click="addToTrade(optionInstruments[expirySelected][strike + 'CE'], 'option', 'Sell')"
+            class="badge badge-danger">S</span>
+
+          <span class="float-right">{{optionInstruments[expirySelected][strike + 'CE'].last_price}}</span></td>
+
+        <td class="text-center text-bold">{{strike}}</td>
+        <td class="text-center text-bold">{{optionInstruments[expirySelected][strike + 'CE'].greeks.iv}}</td>
+
+
+        <td class="no-wrap" ng-class="{'table-warning': instruments[selectedInstrument].last_price < strike}">
+          <span ng-click="addToTrade(optionInstruments[expirySelected][strike + 'PE'], 'option', 'Buy')"
+            class="badge badge-success">B</span>&nbsp;<span
+            ng-click="addToTrade(optionInstruments[expirySelected][strike + 'PE'], 'option', 'Sell')"
+            class="badge badge-danger">S</span>
+          <span class="float-right">{{optionInstruments[expirySelected][strike + 'PE'].last_price}}</span></td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price < strike}">
+          {{shortCurrency(optionInstruments[expirySelected][strike + 'PE'].volume)}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price < strike}">
+          {{shortCurrency(optionInstruments[expirySelected][strike + 'PE'].oi)}}</td>
+
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price < strike}">
+          {{optionInstruments[expirySelected][strike + 'PE'].greeks.delta}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price < strike}">
+          {{optionInstruments[expirySelected][strike + 'PE'].greeks.theta}}</td>
+        <td class="text-right no-wrap"
+          ng-class="{'table-warning': instruments[selectedInstrument].last_price < strike}">
+          {{optionInstruments[expirySelected][strike + 'PE'].greeks.vega}}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <div class="row" ng-show="strategy.trades.length > 0">
+    <div class="col-5">
+      <h5 id="trades">Trades ({{strategy.trades.length}})</h5>
+      <table class="table table-hover table-sm table-striped">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th class="text-right">Qty</th>
+            <th class="text-right">Side</th>
+            <th class="text-right">LTP</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr ng-repeat="trade in strategy.trades">
+            <td class="text-left no-wrap">{{tokenToSymbol[trade.instrument_token]}}</td>
+            <td class="text-right no-wrap">{{trade.quantity}} <i ng-click="updateQty($index)"
+                class="fa fa-edit text-muted"></i></td>
+            <td ng-click="trade.trade_action = trade.trade_action == 'BUY'?'SELL':'BUY'" class="text-right"
+              ng-class="{'text-success': trade.trade_action == 'BUY', 'text-danger': trade.trade_action == 'SELL'}">
+              {{trade.trade_action}}</td>
+            <td class="text-right">{{ instrumentsLtp[trade.instrument_token] }}<i ng-click="removeTrade($index)"
+                class="fa fa-trash text-muted"></i></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col-7">
+      <form>
+        <div class="row">
+
+          <div class="form-group col-4">
+            <label for="ltp">Current Price</label>
+            <input type="tel" readonly ng-model="strategy.last_price" class="form-control" id="ltp">
+          </div>
+          <div class="form-group col-4">
+            <label for="entry">Entry Price</label>
+            <input type="tel" ng-model="strategy.entry_price" class="form-control" id="entry">
+          </div>
+          <div class="form-group col-4">
+            <label for="exit">Exit Price</label>
+            <input type="tel" ng-model="strategy.exit_price" class="form-control" id="exit">
+          </div>
+          <div class="form-group col-4">
+            <label for="total_lots">Total Lots</label>
+            <input type="tel" ng-model="strategy.total_quantity" class="form-control" id="total_lots">
+          </div>
+          <div class="form-group col-4">
+            <label for="leap">Leap&Jump</label>
+            <input type="tel" ng-model="strategy.leap" ng-readonly="strategy.total_quantity < 2" class="form-control" id="leap">
+          </div>
+          <div class="form-group col-4">
+            <label for="per_trade_lots">Per Trade Lots</label>
+            <input type="tel" ng-model="strategy.per_trade" ng-readonly="strategy.total_quantity < 2" class="form-control" id="per_trade_lots">
+          </div>
+          <div class="form-group col-6">
+            <label for="strategyName">Strategy Name</label>
+            <input type="text" ng-model="strategy.name" class="form-control" id="strategyName">
+          </div>
+          <div class="form-group col-6">
+            <label for="strategyType">Type</label>
+            <select name="strategyType" id="strategyType" ng-model="strategy.type" class="form-control">
+              <option value="mis">Intraday</option>
+              <option value="nrml">Positional</option>
+            </select>
+          </div>
+
+          <div class="form-group col-6">
+            
+            <button ng-click="saveStrategy()" class="btn btn-sm btn-dark">Save</button>
+            <button ng-click="resetStrategy()" class="btn btn-sm btn-dark">Reset</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>

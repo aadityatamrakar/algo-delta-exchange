@@ -1,0 +1,202 @@
+[
+  {
+    "dates": [
+      "2026-08-19",
+      "2026-08-22",
+      "2026-08-25"
+    ],
+    "kwargs": {
+      "band": 0.1,
+      "r": 0.065,
+      "steps": 10
+    },
+    "legs": [
+      {
+        "entry": 8.4,
+        "expiry": "2026-08-25",
+        "id": "s_ce_700",
+        "instrument": "option",
+        "iv": 0.28,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "CE",
+        "side": "Sell",
+        "strike": 700.0
+      },
+      {
+        "entry": 6.1,
+        "expiry": "2026-08-25",
+        "id": "s_pe_620",
+        "instrument": "option",
+        "iv": 0.31,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 620.0
+      }
+    ],
+    "name": "strangle",
+    "out": {
+      "breakevens": [
+        605.5,
+        714.5
+      ],
+      "delta": 6.182,
+      "gamma": -17.584993,
+      "max_loss": -23000.0,
+      "max_profit": 29000.0,
+      "net_credit": 29000.0,
+      "pop": 0.9709385868053861,
+      "theta": 912.5018,
+      "vega": -370.9257,
+      "worst_shock": -27077.04
+    },
+    "spot": 660.0
+  },
+  {
+    "dates": [
+      "2026-08-19",
+      "2026-08-22",
+      "2026-08-25"
+    ],
+    "kwargs": {
+      "band": 0.1,
+      "r": 0.065,
+      "steps": 10
+    },
+    "legs": [
+      {
+        "entry": 8.4,
+        "expiry": "2026-08-25",
+        "id": "s_ce_700",
+        "instrument": "option",
+        "iv": 0.28,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "CE",
+        "side": "Sell",
+        "strike": 700.0
+      },
+      {
+        "entry": 6.1,
+        "expiry": "2026-08-25",
+        "id": "s_pe_620",
+        "instrument": "option",
+        "iv": 0.31,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 620.0
+      },
+      {
+        "entry": 2.1,
+        "expiry": "2026-08-25",
+        "id": "b_ce_730",
+        "instrument": "option",
+        "iv": 0.26,
+        "lot_size": 1000,
+        "lots": 1,
+        "opt_type": "CE",
+        "side": "Buy",
+        "strike": 730.0
+      },
+      {
+        "entry": 3.3,
+        "expiry": "2026-08-25",
+        "id": "s_pe_600",
+        "instrument": "option",
+        "iv": 0.33,
+        "lot_size": 1000,
+        "lots": 1,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 600.0
+      }
+    ],
+    "name": "repaired",
+    "out": {
+      "breakevens": [
+        604.9,
+        715.1
+      ],
+      "delta": 18.9747,
+      "gamma": -18.463996,
+      "max_loss": -27800.0,
+      "max_profit": 30200.0,
+      "net_credit": 30200.0,
+      "pop": 0.9726492362226278,
+      "theta": 974.454,
+      "vega": -392.683,
+      "worst_shock": -38542.91
+    },
+    "spot": 660.0
+  },
+  {
+    "dates": [
+      "2026-08-19",
+      "2026-08-22",
+      "2026-08-25"
+    ],
+    "kwargs": {
+      "band": 0.1,
+      "r": 0.065,
+      "steps": 10
+    },
+    "legs": [
+      {
+        "entry": 8.4,
+        "expiry": "2026-08-25",
+        "id": "s_ce_700",
+        "instrument": "option",
+        "iv": 0.28,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "CE",
+        "side": "Sell",
+        "strike": 700.0
+      },
+      {
+        "entry": 6.1,
+        "expiry": "2026-08-25",
+        "id": "s_pe_620",
+        "instrument": "option",
+        "iv": 0.31,
+        "lot_size": 1000,
+        "lots": 2,
+        "opt_type": "PE",
+        "side": "Sell",
+        "strike": 620.0
+      },
+      {
+        "entry": 662.0,
+        "expiry": "2026-08-25",
+        "id": "b_fut",
+        "instrument": "future",
+        "iv": null,
+        "lot_size": 1000,
+        "lots": 1,
+        "opt_type": null,
+        "side": "Buy",
+        "strike": null
+      }
+    ],
+    "name": "with-future",
+    "out": {
+      "breakevens": [
+        633.0
+      ],
+      "delta": 1006.182,
+      "gamma": -17.584993,
+      "max_loss": -91000.0,
+      "max_profit": 66600.0,
+      "net_credit": 29000.0,
+      "pop": 0.8611365416588166,
+      "theta": 912.5018,
+      "vega": -370.9257,
+      "worst_shock": -94398.11
+    },
+    "spot": 660.0
+  }
+]

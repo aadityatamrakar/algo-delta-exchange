@@ -1,0 +1,28 @@
+{
+  "name": "@algomaker/api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Desk bridge: accepts the Python desk's actions, routes them (paper or live), marks the book and computes greeks, exposes positions/trades/diff.",
+  "type": "module",
+  "_comment:mongodb": "Declared in dependencies below, not only at the root: `src/mongo.ts` is the ONE file in the tree that `require('mongodb')`s and it lives in this workspace, so a workspace that owns the driver adapter without declaring the driver is one `npm install --workspace` away from a boot-time MODULE_NOT_FOUND. The exact pin is deliberate — see the header of `src/mongo.ts`.",
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@algomaker/auth": "1.0.0",
+    "@algomaker/brokers": "1.0.0",
+    "@algomaker/core": "1.0.0",
+    "@algomaker/desk-engine": "*",
+    "@algomaker/greeks": "1.0.0",
+    "@algomaker/instruments": "1.0.0",
+    "@algomaker/order-bus": "1.0.0",
+    "@algomaker/payoff": "1.0.0",
+    "@algomaker/bus": "1.0.0",
+    "@algomaker/pnl": "1.0.0",
+    "@algomaker/secrets": "1.0.0",
+    "mongodb": "3.7.3"
+  }
+}

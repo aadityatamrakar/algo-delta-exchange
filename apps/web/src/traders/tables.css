@@ -1,0 +1,63 @@
+/*
+ * The traders pages' tables (see table.tsx for why). Layout only: colours are
+ * theme tokens, so light and dark both follow.
+ */
+
+/* Its own scroll box, both ways: the header row can then stay at its top. */
+.traders-table .astryx-table-scroll-wrapper {
+  max-height: min(75vh, 760px);
+  overflow: auto;
+  overscroll-behavior-x: contain;
+}
+
+.traders-table table {
+  font-variant-numeric: tabular-nums;
+}
+
+.traders-table th,
+.traders-table td {
+  white-space: nowrap;
+}
+
+/* The header row stays at the top of the box; pinned header cells (z 3, astryx) stay above it. */
+.traders-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background-color: var(--table-sticky-background, var(--color-background-card));
+}
+
+/* No widths given: each column as wide as its widest cell, the table as wide as that makes it.
+   astryx's cells carry max-width: 0 + overflow: hidden (its ellipsis trick for a fixed layout) and its table a
+   min-width, both outranking a plain selector: in an auto layout those collapse every column to its padding
+   (seen in Chromium 20 Oct: 26 columns of 16px). Hence !important, here only. */
+.traders-table-auto table {
+  table-layout: auto !important;
+  width: max-content !important;
+  min-width: 100% !important;
+}
+.traders-table-auto th,
+.traders-table-auto td {
+  max-width: none !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+/* A control in a cell is never wider than the cell, and a long one shrinks instead of spilling. */
+.traders-table td .astryx-field,
+.traders-table th .astryx-field {
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.traders-table td input,
+.traders-table td select,
+.traders-table td textarea {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+/* Buttons and ticks in one cell sit on one line. */
+.traders-table td .astryx-button {
+  flex-shrink: 0;
+}

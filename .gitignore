@@ -1,0 +1,94 @@
+*.csv
+*.dat
+*.iml
+*.log
+*.out
+*.pid
+*.seed
+*.sublime-*
+*.swo
+*.swp
+*.tgz
+*.xml
+.DS_Store
+.idea
+.project
+.strong-pm
+coverage
+node_modules
+npm-debug.log
+userdata/*
+sftp.json
+historical/*
+
+# Documentation sheets are deliverables — exempt from the blanket *.csv rule above
+!context/sheets/*.csv
+# Local secrets — never commit
+.env
+.env.local
+
+# Already tracked (committed with real secrets in history) — this entry does
+# NOT untrack them, it only stops the CURRENT contents from being amended/
+# recommitted and stops a future `git add -A` from picking up local edits.
+# See server/datasources.example.json for the shape without the secrets, and
+# .superpowers/sdd/2026-07-25-phase-a-node24-upgrade/final-review-findings.md
+# (Security Posture) for why these still need rotating and a real untrack.
+server/datasources.json
+totp.js
+
+# Broker credentials — never commit. The repo has leaked 4 credential sets
+# this way already (totp.js, finvasia.js, the Atlas strings, candlestrategy*.js).
+*-creds.txt
+test-zerodha-creds.txt
+.env
+.env.*
+
+# Broker session cookie jars written by server/lib/zerodha.js at login.
+# NOTE: VV0124/XV7910/YO8965.json are already tracked from before this rule —
+# they hold session cookies and should be removed from the index and rotated.
+server/userdata/*.json
+
+# Vendored broker cookie jars (session state, never commit).
+packages/marketdata-core/userdata/*.json
+
+# Dashboard env (token). Example is committed; the real one is not.
+apps/web/.env.local
+
+# Built by `npm run build --workspace @algomaker/web`. Nothing serves it from the
+# repo, and a tracked dist goes stale silently: its index.html kept pointing at
+# an old bundle while the source moved on, so what was committed was not what
+# the code did.
+apps/web/dist/
+
+# tsc -b incremental state. Machine-local, changes on every build, and tells
+# nobody anything — the same trap apps/web/dist was.
+*.tsbuildinfo
+.claude/
+
+# Written into the repo root by legacy archive/server tools (seen 2026-09-15).
+# Nothing live reads them; they are scratch output, never source.
+optionConfig_*.json
+cancelledOrders.json
+rejectedOrders.json
+
+# Real trader data supplied for analysis (ODIN OnLineBackup, screenshots) — holds client codes, never commit
+trader-data-sample/
+
+# Traders parser fixtures are samples of ODIN files; the repo-wide *.csv/*.log/*.dat rules would hide them
+!apps/traders/test/fixtures/**
+# Watcher build output
+apps/watcher/dist/
+apps/web/dist-traders/
+
+# SPAN/exposure/bhavcopy parser fixtures; the repo-wide *.csv rules would hide them
+!packages/span/test/**
+# The NSE jobs' fixtures (scripts/test_*.py): bhavcopy and CMVOLT samples the *.csv rule would hide
+!scripts/fixtures/**
+
+# NSE SPAN/exposure/bhavcopy downloads and the span job venv
+/data/
+/.venv-nse/
+
+# Python bytecode
+__pycache__/
+*.pyc

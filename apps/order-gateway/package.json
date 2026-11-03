@@ -1,0 +1,23 @@
+{
+  "name": "@algomaker/order-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Consumes desk orders, splits under the exchange freeze limit, places via XTS, and writes real fills back.",
+  "type": "module",
+  "_comment:desk-engine": "Declared for the WIRE CONTRACT only — `ORDER_NUDGE_TOPIC`/`NudgePayload`, which `src/queue.ts` re-exports. The topic is a string this process and desk-api must AGREE on; it used to be declared here alone, which is exactly why desk-api never published it and every order waited out the idle sweep. Declared once in the contract module both sides import, and declared here as a dependency because an undeclared workspace import is one `npm install --workspace` away from a boot-time MODULE_NOT_FOUND.",
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@algomaker/brokers": "1.0.0",
+    "@algomaker/bus": "1.0.0",
+    "@algomaker/core": "1.0.0",
+    "@algomaker/desk-engine": "*",
+    "@algomaker/instruments": "1.0.0",
+    "@algomaker/order-bus": "1.0.0",
+    "socket.io-client": "^2.4.0"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "algomaker",
+  "version": "1.0.0",
+  "main": "apps/api/src/main.ts",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "npm run test:node && npm run test:web",
+    "test:node": "node --test 'packages/*/test/**/*.test.ts' 'apps/*/test/**/*.test.ts'",
+    "_comment:test:web": "The dashboard suite is vitest+jsdom, not node:test — node --test cannot run JSX, which is why every web test that touches the DOM is .test.tsx and is NOT matched by the glob above (a plain .test.ts in apps/web/test IS matched, and runs under test:node — see apps/web/vitest.config.ts). Running only test:node reports green while the dashboard is untested.",
+    "test:web": "npm run test --workspace @algomaker/web",
+    "_comment:typecheck": "Two projects, because the root tsconfig excludes apps/web (its own JSX/DOM setup). Running only the first reports green while the dashboard is unchecked.",
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck --workspace @algomaker/web"
+  },
+  "_comment:dependencies": "The four legacy packages here (authenticator, debug, request, tough-cookie-filestore) exist for ONE file: packages/marketdata-core/vendor/zerodha.js, the vendored Kite web login. They are kept only while the native-fetch login carries a DESK_LEGACY_ZERODHA_LOGIN=1 fallback to it; when that fallback retires, all four go with it. `kiteconnect` was removed (2026-08-16): the only mention of it left in the tree is a usage example inside a comment in the vendored KiteTicker. See the devDependencies note for why async/moment/cron did NOT go with it.",
+  "dependencies": {
+    "authenticator": "^1.1.5",
+    "debug": "^2.6.9",
+    "mongodb": "3.7.3",
+    "pm2": "^7.0.3",
+    "request": "^2.88.2",
+    "tough-cookie-filestore": "0.0.1",
+    "ws": "^8.18.1"
+  },
+  "_comment:devDependencies": "async/cron/moment are here for the GOLDEN PARITY SUITES, not for any code in packages/ or apps/: `legacy-shadow-runner` executes `archive/server/slive/*.js` UNMODIFIED to prove a ported strategy still matches the legacy one tick for tick, and those files open with `require('cron')/require('async')/require('moment')`. Removing them (2026-08-16) turned 15 golden tests into MODULE_NOT_FOUND — the archive is not dead weight while it is the reference implementation. They retire when the golden suites do.",
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "async": "^3.2.6",
+    "cron": "^1.8.2",
+    "moment": "^2.30.1",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "",
+    "url": ""
+  },
+  "license": "UNLICENSED",
+  "description": "Algomaker portal"
+}

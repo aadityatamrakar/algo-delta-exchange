@@ -1,0 +1,243 @@
+[
+    {
+        "name": "Hedge-3K",
+        "module": "hedge",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "AudiB1",
+        "module": "strangle_st14",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "AudiB3",
+        "module": "strangle_st16",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiB4",
+        "module": "strangle_st17",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiB5",
+        "module": "strangle_st17_2",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiPC-800",
+        "module": "strangle_st18",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiPC-800m",
+        "module": "strangle_st18_2",
+        "autostart": false,
+        "delay_start": "0917"
+    },
+    {
+        "name": "AudiPS-600",
+        "module": "strangle_st19",
+        "autostart": false,
+        "delay_start": "0917"
+    },
+    {
+        "name": "Hedge-2K",
+        "module": "hedge2",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Hedge-5",
+        "module": "hedge5",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Hedge-N3",
+        "module": "hedge-n3",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Hedge-N5",
+        "module": "hedge-n5",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiB4-C",
+        "module": "strangle_st172",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "AudiB5-C",
+        "module": "strangle_st172_2",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiB4-300",
+        "module": "strangle_st173",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "AudiN4",
+        "module": "strangle_nst14",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Audi-NF",
+        "module": "audi-nf",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Audi-NF4",
+        "module": "audi-nf4",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Audi-NF800-50",
+        "module": "audi-nf-800-50",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Audi-NF800-100",
+        "module": "audi-nf-800-100",
+        "autostart": false,
+        "delay_start": "0917"
+    },
+    {
+        "name": "BMW-M40",
+        "module": "bmw-m1",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-M40dST",
+        "module": "bmw-m1dst",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-F40",
+        "module": "bmw-f1",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-40",
+        "module": "bmw-1",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-40d",
+        "module": "bmw-1d",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-40dS",
+        "module": "bmw-1ds",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-40dST",
+        "module": "bmw-1dst",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "BMW-25",
+        "module": "bmw-2",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "BMW-i25",
+        "module": "bmw-3",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "BMW-i25d",
+        "module": "bmw-3d",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "BMW-N25",
+        "module": "bmwn-3d",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "BMW-N40",
+        "module": "bmwn-1d",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "Audi-NF800-e100",
+        "module": "audi-nf-800-e100",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "BMW-e40d",
+        "module": "bmw-e1d",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "BMW-eN40",
+        "module": "bmwn-e1d",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "AudiPC-e800m",
+        "module": "strangle_st18_e2",
+        "autostart": false,
+        "delay_start": false
+    },
+    {
+        "name": "Audi-800F",
+        "module": "audi-800F",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "Audi-800M",
+        "module": "audi-800M",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "Audi-B4M",
+        "module": "audi-b4m",
+        "autostart": false,
+        "delay_start": "0916"
+    },
+    {
+        "name": "Audi-B4F",
+        "module": "audi-b4m",
+        "autostart": false,
+        "delay_start": "0916"
+    }
+]
+

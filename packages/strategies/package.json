@@ -1,0 +1,15 @@
+{
+  "name": "@algomaker/strategies",
+  "version": "1.0.0",
+  "description": "The 4 strategy classes + the ExternalSignalMirror adapter that the 15 active strategies port onto.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/core": "1.0.0",
+    "@algomaker/order-bus": "1.0.0",
+    "@algomaker/strategy-config": "1.0.0",
+    "@algomaker/strategy-kit": "1.0.0"
+  }
+}

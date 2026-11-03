@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>Dashboard</title>
+  <link href="https://getbootstrap.com/docs/4.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background: #000;
+      /* background-image: linear-gradient(140deg, #212629, #395467); */
+      color: #ddd;
+      margin-left: 10px;
+    }
+
+    .p3 {
+      /* padding-top: 10px;
+      padding-bottom: 10px; */
+      margin: 0;
+      color: #999;
+    }
+
+    .box {
+      height: 60px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid #111;
+      margin-bottom: 5px;
+      padding: 5px;
+    }
+
+    .label {
+      position: absolute;
+      left: 10;
+      margin: 0;
+    }
+
+    .gauge-container {
+      padding: 5px;
+      /* margin-top: 80px; */
+      display: flex;
+      justify-content: space-around;
+    }
+
+    .color-red {
+      stop-color: #e23131;
+    }
+
+    .color-yellow {
+      stop-color: #fbe500;
+    }
+
+    .color-green {
+      stop-color: #25cd6b;
+    }
+
+    .gauge {
+      height: 160px;
+      width: 100%;
+    }
+
+    .gauge .dxg-range.dxg-background-range {
+      fill: url(#gradientGauge);
+    }
+
+    .gauge .dxg-line {
+      transform: scaleX(1.04) scaleY(1.03) translate(-4px, -4px);
+    }
+
+    .gauge .dxg-line path:first-child,
+    .gauge .dxg-line path:last-child {
+      display: none;
+    }
+
+    .gauge .dxg-line path:nth-child(2),
+    .gauge .dxg-line path:nth-child(6) {
+      stroke: #ed811c;
+    }
+
+    .gauge .dxg-line path:nth-child(3),
+    .gauge .dxg-line path:nth-child(5) {
+      stroke: #a7db29;
+    }
+
+    .gauge .dxg-line path:nth-child(4) {
+      stroke: #25cd6b;
+    }
+
+    .gauge .dxg-elements text:first-child {
+      transform: translate(19px, 13px);
+    }
+
+    .gauge .dxg-elements text:last-child {
+      transform: translate(-27px, 14px);
+    }
+
+    .gauge .dxg-value-indicator path {
+      transform: scale(1.2) translate(0, -5px);
+      transform-origin: center center;
+    }
+
+    .gauge .dxg-value-indicator .dxg-title {
+      text-transform: uppercase;
+    }
+
+    .gauge .dxg-value-indicator .dxg-title text:first-child {
+      transform: translateY(5px);
+    }
+
+    .gauge .dxg-value-indicator .dxg-spindle-border:nth-child(4),
+    .gauge .dxg-value-indicator .dxg-spindle-hole:nth-child(5) {
+      transform: translate(0, -109px);
+    }
+
+    .gauge .dxg-value-indicator .dxg-spindle-hole {
+      fill: #26323a;
+    }
+
+  </style>
+</head>
+
+<body onload="init()">
+  <div class="row" style="margin-top: 15px;">
+    <div class="col-2 text-center" id="tickLabel">
+      <div class="gauge-container">
+        <div class="gauge" id="pcr"></div>
+      </div>
+      <div class="box">
+        <p class="label">Spot Price</p>
+        <br>
+        <h4 class="p3 text-info text-right" id="indexPrice"></h4>
+      </div>
+      <div class="box">
+        <p class="label">Future Price</p>
+        <br>
+        <h4 class="p3 text-info text-right" id="futurePrice"></h4>
+      </div>
+      <div class="box">
+        <p class="label">ATM CE Price / Short Signal</p>
+        <br>
+        <h4 class="p3 text-right">
+          <span id="ce_price"></span>&nbsp;
+          (<span id="ce_signal"></span>%)
+        </h4>
+      </div>
+      <div class="box">
+        <p class="label">ATM PE Price / Short Signal</p>
+        <br>
+        <h4 class="p3 text-right">
+          <span id="pe_price"></span>&nbsp;
+          (<span id="pe_signal"></span>%)
+        </h4>
+      </div>
+      <div class="box">
+        <p class="label">CE OI</p>
+        <br>
+        <h4 class="p3 text-right text-danger" id="ce_oi"></h4>
+      </div>
+      <div class="box">
+        <p class="label">PE OI</p>
+        <br>
+        <h4 class="p3 text-success text-right" id="pe_oi"></h4>
+      </div>
+      <div class="box">
+        <p class="label">CE / PE Volume</p>
+        <br>
+        <h5 class="p3 text-right">
+          <span id="ce_vol"></span> /
+          <span id="pe_vol"></span>
+        </h5>
+      </div>
+    </div>
+    <div class="col-10" id="chartArea"></div>
+  </div>
+
+  <svg width="0" height="0" version="1.1" class="gradient-mask" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="gradientGauge">
+        <stop class="color-red" offset="0%" />
+        <stop class="color-yellow" offset="17%" />
+        <stop class="color-green" offset="40%" />
+        <stop class="color-yellow" offset="87%" />
+        <stop class="color-red" offset="100%" />
+      </linearGradient>
+    </defs>
+  </svg>
+</body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js" crossorigin="anonymous"></script>
+<script>
+  function connect() {
+    console.log(window.location);
+
+    function roundOff(amount) {
+      return String(parseInt(amount)).replace(/(\d)(?=(\d\d)+\d$)/g, "$1,")
+    }
+
+    function shortCurrency(num) {
+      var val = Math.abs(num);
+      if (val >= 10000000) {
+        val = (val / 10000000).toFixed(2) + ' Cr';
+      } else if (val >= 100000) {
+        val = (val / 100000).toFixed(1) + ' L';
+      } else {
+        val = (val / 1000).toFixed(0) + ' K';
+      }
+      return val;
+    }
+
+    let markerData = [],
+      lastTrend = 'na',
+      ce_ma = {},
+      pe_ma = {},
+      price_ma = {},
+      ma_len = 200,
+      lastSignal = {
+        pe: 0,
+        ce: 0
+      };;
+
+    let access_token = window.localStorage.getItem('$LoopBack$accessTokenId');
+    let userId = window.localStorage.getItem('$LoopBack$currentUserId');
+    let socketUrl = window.location.origin;
+
+    const socket = io(socketUrl, {
+      transports: ['websocket'],
+      query: {
+        token: access_token ? access_token : false,
+        userId: userId ? userId : false
+      },
+      pingInterval: 3000,
+      timeout: 30000,
+    });
+    socket.on("connect", function () {
+      console.log('Connected to Server');
+    });
+    socket.on('history', function (history) {
+
+      let ce_vol = history.map(c => c.ce_vol);
+      let pe_vol = history.map(c => c.pe_vol);
+
+      price_ma = movingAvg(history.map(c => c.index), ma_len);
+      let ce_vol_ma = movingAvg(ce_vol, ma_len);
+      let pe_vol_ma = movingAvg(pe_vol, ma_len);
+      price_ma.arr = price_ma.lenArr;
+      price_ma.sum = price_ma.sumArr;
+      ce_ma = {
+        arr: ce_vol_ma.lenArr,
+        sum: ce_vol_ma.sumArr
+      };
+      pe_ma = {
+        arr: pe_vol_ma.lenArr,
+        sum: pe_vol_ma.sumArr
+      };
+      ce_vol_ma = ce_vol_ma.result;
+      pe_vol_ma = pe_vol_ma.result;
+      let len_diff = ce_vol.length - ce_vol_ma.length;
+      seriesData4 = history.slice(len_diff).map((c, i) => ({
+        time: c.time + 19800,
+        value: ce_vol_ma[i]
+      }));
+      seriesData5 = history.slice(len_diff).map((c, i) => ({
+        time: c.time + 19800,
+        value: pe_vol_ma[i]
+      }));
+      seriesData1 = history.slice(len_diff).map((c, i) => ({
+        time: c.time + 19800,
+        value: price_ma.result[i]
+      }));
+
+      seriesData2 = history.map(c => ({
+        time: c.time + 19800,
+        value: c.ce_vol
+      }));
+      seriesData3 = history.map(c => ({
+        time: c.time + 19800,
+        value: c.pe_vol
+      }));
+      seriesData = history.map(c => ({
+        time: c.time + 19800,
+        value: c.index
+      }));
+
+      let signal_data = history.reduce((s, a) => {
+        if (a.pe_signal > a.ce_signal && s.lastTrend != 'Bullish') {
+          s.signal.push({
+            time: a.time + 19800,
+            position: 'belowBar',
+            color: 'green',
+            size: 2,
+            shape: 'arrowUp',
+          });
+          s.lastTrend = 'Bullish';
+        } else if (a.pe_signal < a.ce_signal && s.lastTrend != 'Bearish') {
+          s.signal.push({
+            time: a.time + 19800,
+            position: 'aboveBar',
+            color: 'red',
+            size: 2,
+            shape: 'arrowDown',
+          });
+          s.lastTrend = 'Bearish';
+        }
+
+        s.last = {
+          ce: a.ce_signal,
+          pe: a.pe_signal
+        };
+        return s;
+      }, {
+        signal: [],
+        lastTrend: 'na',
+        last: {
+          ce: 0,
+          pe: 0
+        }
+      });
+
+      lineSeries.setMarkers(signal_data.signal);
+      markerData = markerData.concat(signal_data.signal);
+      lastTrend = signal_data.lastTrend;
+      lineSeries.setData(seriesData);
+      lineSeries1.setData(seriesData1);
+      lineSeries2.setData(seriesData2);
+      lineSeries3.setData(seriesData3);
+      lineSeries4.setData(seriesData4);
+      lineSeries5.setData(seriesData5);
+    });
+
+    socket.on("tick", function (data) {
+      let currentKey = parseInt(moment().milliseconds(0).add(330, 'minutes').format('X'));
+      // console.log(currentKey);
+      document.getElementById('indexPrice').innerHTML = roundOff(data.index);
+      document.getElementById('futurePrice').innerHTML = roundOff(data.future);
+      document.getElementById('ce_price').innerHTML = data.atm_ce_price;
+      document.getElementById('pe_price').innerHTML = data.atm_pe_price;
+      document.getElementById('ce_oi').innerHTML = shortCurrency(data.ce_oi);
+      document.getElementById('pe_oi').innerHTML = shortCurrency(data.pe_oi);
+      updateGauge(data.pcr);
+      document.getElementById('ce_vol').innerHTML = shortCurrency(data.ce_vol);
+      document.getElementById('pe_vol').innerHTML = shortCurrency(data.pe_vol);
+      document.getElementById('ce_signal').innerHTML = (data.ce_signal * 100).toFixed(0);
+      document.getElementById('pe_signal').innerHTML = (data.pe_signal * 100).toFixed(0);
+
+      if (currentKey != lastKey) {
+        lastKey = currentKey;
+
+        if (ce_ma && ce_ma.arr) {
+          let r_ce_1 = ce_ma.arr.shift();
+          ce_ma.arr.push(data.atm_ce_vol);
+          ce_ma.sum = (ce_ma.sum - r_ce_1) + data.atm_ce_vol;
+          let r_pe_1 = pe_ma.arr.shift();
+          pe_ma.arr.push(data.atm_pe_vol);
+          pe_ma.sum = (pe_ma.sum - r_pe_1) + data.atm_pe_vol;
+          let r_index_1 = price_ma.arr.shift();
+          price_ma.arr.push(data.index);
+          price_ma.sum = (price_ma.sum - r_index_1) + data.index;
+
+          seriesData1.push({
+            time: currentKey,
+            value: price_ma.sum / ma_len
+          });
+          seriesData4.push({
+            time: currentKey,
+            value: ce_ma.sum / ma_len
+          });
+          seriesData5.push({
+            time: currentKey,
+            value: pe_ma.sum / ma_len
+          });
+
+          lineSeries1.setData(seriesData1);
+          lineSeries4.setData(seriesData4);
+          lineSeries5.setData(seriesData5);
+        }
+
+
+        if (data.pe_signal > data.ce_signal && lastTrend == 'Bearish') {
+          markerData.push({
+            time: currentKey,
+            position: 'belowBar',
+            color: 'green',
+            size: 2,
+            shape: 'arrowUp',
+          });
+          lastTrend = 'Bullish';
+          lineSeries.setMarkers(markerData);
+        } else if (data.pe_signal < data.ce_signal && lastTrend == 'Bullish') {
+          markerData.push({
+            time: currentKey,
+            position: 'aboveBar',
+            color: 'red',
+            size: 2,
+            shape: 'arrowDown',
+          });
+          lastTrend = 'Bearish';
+          lineSeries.setMarkers(markerData);
+        }
+
+        lastSignal = {
+          ce: data.ce_signal,
+          pe: data.pe_signal
+        };
+
+        seriesData2.push({
+          time: currentKey,
+          value: data.atm_ce_vol
+        });
+        seriesData3.push({
+          time: currentKey,
+          value: data.atm_pe_vol
+        });
+        seriesData.push({
+          time: currentKey,
+          value: data.index
+        });
+        lineSeries.setData(seriesData);
+        lineSeries2.setData(seriesData2);
+        lineSeries3.setData(seriesData3);
+      } else {
+        lineSeries.update({
+          time: currentKey,
+          value: data.index
+        });
+        lineSeries2.update({
+          time: currentKey,
+          value: data.atm_ce_vol
+        });
+        lineSeries3.update({
+          time: currentKey,
+          value: data.atm_pe_vol
+        });
+      }
+    });
+  }
+
+  let lastKey, chart, lineSeries, lineSeries2, lineSeries3, seriesData = [],
+    seriesData1 = [],
+    seriesData2 = [],
+    seriesData3 = [],
+    seriesData4 = [],
+    seriesData5 = [];
+
+  function init() {
+    let options = {
+      width: document.getElementById('chartArea').clientWidth - 40,
+      height: window.innerHeight - 35,
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: true,
+        borderVisible: true,
+      },
+      layout: {
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        textColor: '#ddd',
+      },
+      grid: {
+        horzLines: {
+          color: '#333',
+          visible: false,
+        },
+        vertLines: {
+          color: '#222',
+          visible: false,
+        },
+      },
+      crosshair: {
+        horzLine: {
+          visible: false,
+          labelVisible: false
+        },
+        vertLine: {
+          visible: true,
+          labelVisible: true,
+        }
+      },
+    };
+
+    if (window.innerWidth < 768) {
+      options.width = window.innerWidth;
+      document.getElementById('tickLabel').classList.remove('col-3');
+      document.getElementById('tickLabel').classList.add('d-none');
+    }
+
+    chart = LightweightCharts.createChart(document.getElementById('chartArea'), options);
+
+    lineSeries = chart.addLineSeries({
+      color: '#ccc',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceScaleId: 'c',
+      scaleMargins: {
+        top: 0.25,
+        bottom: 0.25,
+      },
+      priceFormat: {
+        type: 'price',
+        precision: 0,
+        minMove: 1,
+      }
+    });
+    lineSeries1 = chart.addLineSeries({
+      color: '#777',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceScaleId: 'c',
+      scaleMargins: {
+        top: 0.25,
+        bottom: 0.25,
+      },
+      priceFormat: {
+        type: 'price',
+        precision: 0,
+        minMove: 1,
+      }
+    });
+    lineSeries2 = chart.addLineSeries({
+      color: 'green',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceScaleId: 'a',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+      scaleMargins: {
+        top: 0.0,
+        bottom: 0.75,
+      }
+    });
+    lineSeries3 = chart.addLineSeries({
+      color: 'red',
+      lineWidth: 1,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceScaleId: 'b',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+      scaleMargins: {
+        top: 0.75,
+        bottom: 0.0,
+      }
+    });
+    lineSeries4 = chart.addLineSeries({
+      color: '#ccc',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceScaleId: 'a',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+      scaleMargins: {
+        top: 0.0,
+        bottom: 0.75,
+      }
+    });
+    lineSeries5 = chart.addLineSeries({
+      color: '#ccc',
+      lineWidth: 2,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceScaleId: 'b',
+      priceFormat: {
+        type: 'price',
+        precision: 2,
+        minMove: 0.01,
+      },
+      scaleMargins: {
+        top: 0.75,
+        bottom: 0.0,
+      }
+    });
+
+    connect();
+  }
+
+  function movingAvg(data, len = 200) {
+    let result = [],
+      lenArr = [],
+      sumArr = 0;
+    if (data.length > (len + 10)) {
+      lenArr = data.slice(0, len);
+      sumArr = lenArr.reduce((s, a) => (s += a, s), 0);
+      for (let r, a, i = len; i < data.length; i++) {
+        r = lenArr.shift();
+        a = data[i];
+        lenArr.push(a);
+        sumArr = (sumArr - r) + a;
+        result.push(sumArr / len);
+      }
+    }
+    return {
+      result,
+      lenArr,
+      sumArr
+    };
+  }
+
+  function movingAvg(data, len = 200) {
+    let result = [],
+      lenArr = [],
+      sumArr = 0;
+    if (data.length > (len + 10)) {
+      lenArr = data.slice(0, len);
+      sumArr = lenArr.reduce((s, a) => (s += a, s), 0);
+      for (let r, a, i = len; i < data.length; i++) {
+        r = lenArr.shift();
+        a = data[i];
+        lenArr.push(a);
+        sumArr = (sumArr - r) + a;
+        result.push(sumArr / len);
+      }
+    }
+    return {
+      result,
+      lenArr,
+      sumArr
+    };
+  }
+
+</script>
+<script src="https://code.jquery.com/jquery-3.6.0.slim.min.js"></script>
+<script src="https://cdn3.devexpress.com/jslib/17.1.6/js/dx.all.js"></script>
+<script>
+  $(function () {
+
+    class GaugeChart {
+      constructor(element, params) {
+        this._element = element;
+        this._initialValue = params.initialValue;
+        this._higherValue = params.higherValue;
+        this._title = params.title;
+        this._subtitle = params.subtitle;
+      }
+
+      _buildConfig() {
+        let element = this._element;
+
+        return {
+          value: this._initialValue,
+          valueIndicator: {
+            color: '#fff'
+          },
+          geometry: {
+            startAngle: 180,
+            endAngle: 360
+          },
+          scale: {
+            startValue: 0,
+            endValue: this._higherValue,
+            customTicks: [0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
+            tick: {
+              length: 8
+            },
+            label: {
+              font: {
+                color: '#87959f',
+                size: 12,
+                family: '"Open Sans", sans-serif'
+              }
+            }
+          },
+          title: {
+            verticalAlignment: 'bottom',
+            text: this._title,
+            font: {
+              family: '"Open Sans", sans-serif',
+              color: '#fff',
+              size: 0
+            },
+            subtitle: {
+              text: this._subtitle,
+              font: {
+                family: '"Open Sans", sans-serif',
+                color: '#fff',
+                weight: 700,
+                size: 16
+              }
+            }
+          },
+          onInitialized: function () {
+            let currentGauge = $(element);
+            let circle = currentGauge.find('.dxg-spindle-hole').clone();
+            let border = currentGauge.find('.dxg-spindle-border').clone();
+
+            currentGauge.find('.dxg-title text').first().attr('y', 48);
+            currentGauge.find('.dxg-title text').last().attr('y', 28);
+            currentGauge.find('.dxg-value-indicator').append(border, circle);
+          }
+
+        }
+      }
+
+      init() {
+        $(this._element).dxCircularGauge(this._buildConfig());
+      }
+    }
+
+    $(document).ready(function () {
+      let params = {
+        initialValue: 0,
+        higherValue: 2,
+        title: `Put Call Ratio`,
+        subtitle: 'PCR'
+      };
+
+      let gauge = new GaugeChart($('#pcr'), params);
+      gauge.init();
+    });
+
+  });
+
+  function updateGauge(val) {
+    let gauge = $('#pcr').dxCircularGauge('instance');
+    gauge.value(val);
+  }
+
+</script>
+
+</html>

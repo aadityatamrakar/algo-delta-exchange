@@ -1,0 +1,150 @@
+<style>
+  .no-wrap {
+    white-space: nowrap;
+  }
+
+  .badge {
+    cursor: pointer;
+  }
+
+</style>
+<!-- Content Header (Page header) -->
+<div class="content-header">
+  <div class="container">
+    <div class="row">
+      <h5 style="margin-left: -0.5rem; margin-bottom: 0;" class="text-dark">Option Spreads</h5>
+    </div>
+  </div>
+</div>
+<!-- /.content-header -->
+
+<!-- Main content -->
+<div class="content">
+  <form class="form-inline" ng-submit="makeSpreads()">
+    <label class="my-1 mr-2" for="symbol_select">Symbol</label>
+
+    <select id="symbol_select" class="custom-select my-1 mr-sm-2" ng-change="updateExpiry()"
+      ng-model="selectedInstrument">
+      <option value="BANKNIFTY">BANKNIFTY</option>
+      <option value="NIFTY">NIFTY</option>
+      <option value="{{symbol}}" ng-repeat="(symbol,val) in instruments">{{symbol}}</option>
+    </select>
+
+    <label class="my-1 mr-2" for="expiry_select">Expiry</label>
+    <select class="custom-select my-1 mr-sm-2" id="expiry_select" ng-change="updateExpiry()" ng-model="expirySelected">
+      <option value="{{dt}}" ng-repeat="dt in expiry_available">{{dt}}</option>
+    </select>
+
+    <label class="my-1 mr-2" for="spread_type">Type</label>
+    <select class="custom-select my-1 mr-sm-2" id="spread_type" ng-model="spreadType">
+      <option value="Debit">Debit</option>
+      <option value="Credit">Credit</option>
+    </select>
+
+    <label class="my-1 mr-2" for="spreadRange">Spread Range&nbsp;&nbsp;<input type="checkbox" class="form-control"
+        ng-model="filterSpd"></label>
+
+    <input placeholder="Min" type="number" class="form-control my-1 mr-sm-2 col-1" id="spreadRange"
+      ng-model="spreadMinRange">
+    <input placeholder="Max" type="number" class="form-control my-1 mr-sm-2 col-1" id="spreadRange"
+      ng-model="spreadMaxRange">
+
+    <label class="my-1 mr-2" for="strikeDistance">Distance Range (S1)</label>
+    <input placeholder="Min" type="number" class="form-control my-1 mr-sm-2 col-1" id="strikeDistance"
+      ng-model="strikeMinDistance">
+    <input placeholder="Max" type="number" class="form-control my-1 mr-sm-2 col-1" id="strikeDistance"
+      ng-model="strikeMaxDistance">
+
+    <label class="my-1 mr-2" for="strikeGap">Gap Range</label>
+    <input placeholder="Min" type="number" class="form-control my-1 mr-sm-2 col-1" id="strikeLimit"
+      ng-model="strikeMinGap">
+    <input placeholder="Max" type="number" class="form-control my-1 mr-sm-2 col-1" id="strikeLimit"
+      ng-model="strikeMaxGap">
+
+
+    <button type="submit" class="btn btn-primary my-1"
+      ng-disabled="loadingBtn">{{loadingBtn ? 'Loading...': 'Submit'}}</button>
+
+    &nbsp;&nbsp;
+    <label class="my-1 mr-2">{{selectedInstrument}}: {{ticksCache[instruments[selectedInstrument].instrument_token]}}</label>
+  </form>
+
+  <table class="table table-striped table-bordered table-hover">
+    <thead>
+      <tr>
+        <th>Option</th>
+        <th>Strike 1</th>
+        <!-- <th>Bid 1</th>
+        <th>Ask 1</th> -->
+        <th>LTP</th>
+        <th>Strike 2</th>
+        <!-- <th>Bid 2</th>
+        <th>Ask 2</th> -->
+        <th>LTP</th>
+        <!-- <th>Entry</th>
+        <th>Exit</th> -->
+        <!-- <th>Slippage</th> -->
+        <th>Spread Price</th>
+        <th>Dist.</th>
+        <th>Gap</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr ng-repeat="row in user_spreads"
+        ng-class="{'table-success': row.type == 'Call', 'table-danger': row.type == 'Put'}">
+        <td>{{row.type}}</td>
+        <td class="text-right text-bold">{{row.strike_1}}{{row.type =='Call'?'CE':'PE'}}</td>
+        <td class="text-right">{{row.bid_1}}</td>
+        <!-- <td class="text-right">{{row.ask_1}}</td> -->
+        <td class="text-right text-bold">{{row.strike_2}}{{row.type =='Call'?'CE':'PE'}}</td>
+        <td class="text-right">{{row.bid_2}}</td>
+        <!-- <td class="text-right">{{row.ask_2}}</td> -->
+        <td class="text-right text-bold">{{row.entry}}</td>
+        <!-- <td class="text-right">{{row.exit}}</td> -->
+        <!-- <td class="text-right">{{row.slippage}}</td> -->
+        <td class="text-right">{{row.distance}}</td>
+        <td class="text-right">{{row.gap}}</td>
+      </tr>
+      <tr ng-show="!filterSpd || row.visible" ng-repeat="row in spreads"
+        ng-class="{'table-success': row.type == 'Call', 'table-danger': row.type == 'Put'}">
+        <td>{{row.type}}</td>
+        <td class="text-right text-bold">{{row.strike_1}}{{row.type =='Call'?'CE':'PE'}}</td>
+        <td class="text-right">{{row.bid_1}}</td>
+        <!-- <td class="text-right">{{row.ask_1}}</td> -->
+        <td class="text-right text-bold">{{row.strike_2}}{{row.type =='Call'?'CE':'PE'}}</td>
+        <td class="text-right">{{row.bid_2}}</td>
+        <!-- <td class="text-right">{{row.ask_2}}</td> -->
+        <td class="text-right text-bold">{{row.entry}}</td>
+        <!-- <td class="text-right">{{row.exit}}</td> -->
+        <!-- <td class="text-right">{{row.slippage}}</td> -->
+        <td class="text-right">{{row.distance}}</td>
+        <td class="text-right">{{row.gap}}</td>
+      </tr>
+    </tbody>
+    <tfoot>
+      <tr>
+        <td>
+          <select ng-model="watchlist.type" class="form-control">
+            <option>Call</option>
+            <option>Put</option>
+          </select>
+        </td>
+        <td class="text-right text-bold">
+          <select class="form-control" ng-model="watchlist.strike_1">
+            <option ng-repeat="strike in optionInstruments.strikes">{{strike}}</option>
+          </select>
+        </td>
+        <td colspan="2"></td>
+        <td class="text-right text-bold">
+          <select class="form-control" ng-model="watchlist.strike_2">
+            <option ng-repeat="strike in optionInstruments.strikes">{{strike}}</option>
+          </select>
+        </td>
+        <td colspan="6" class="text-right">
+          <button class="btn btn-sm btn-outline-dark" ng-click="addWatch()">Add</button>
+        </td>
+      </tr>
+    </tfoot>
+  </table>
+
+</div>

@@ -1,0 +1,95 @@
+[
+  {
+    "data": [
+      {
+        "_id": "66cde2ae518659f3060a1c74",
+        "CH_SYMBOL": "AHIMSA",
+        "CH_SERIES": "ST",
+        "CH_MARKET_TYPE": "N",
+        "CH_TIMESTAMP": "2024-08-27",
+        "TIMESTAMP": "2024-08-26T18:30:00.000Z",
+        "CH_TRADE_HIGH_PRICE": 31.85,
+        "CH_TRADE_LOW_PRICE": 31.85,
+        "CH_OPENING_PRICE": 31.85,
+        "CH_CLOSING_PRICE": 31.85,
+        "CH_LAST_TRADED_PRICE": 31.85,
+        "CH_PREVIOUS_CLS_PRICE": 30.35,
+        "CH_TOT_TRADED_QTY": 6000,
+        "CH_TOT_TRADED_VAL": 191100,
+        "CH_52WEEK_HIGH_PRICE": 31.85,
+        "CH_52WEEK_LOW_PRICE": 15.1,
+        "CH_TOTAL_TRADES": 1,
+        "CH_ISIN": "INE136T01014",
+        "createdAt": "2024-08-27T14:29:02.407Z",
+        "updatedAt": "2024-08-27T14:29:02.407Z",
+        "__v": 0,
+        "SLBMH_TOT_VAL": null,
+        "VWAP": 31.85,
+        "mTIMESTAMP": "27-Aug-2024"
+      },
+      {
+        "_id": "66c7285fa6c9947ff6c34307",
+        "CH_SYMBOL": "AHIMSA",
+        "CH_SERIES": "ST",
+        "CH_MARKET_TYPE": "N",
+        "CH_TIMESTAMP": "2024-08-22",
+        "TIMESTAMP": "2024-08-21T18:30:00.000Z",
+        "CH_TRADE_HIGH_PRICE": 30.35,
+        "CH_TRADE_LOW_PRICE": 30.35,
+        "CH_OPENING_PRICE": 30.35,
+        "CH_CLOSING_PRICE": 30.35,
+        "CH_LAST_TRADED_PRICE": 30.35,
+        "CH_PREVIOUS_CLS_PRICE": 28.95,
+        "CH_TOT_TRADED_QTY": 6000,
+        "CH_TOT_TRADED_VAL": 182100,
+        "CH_52WEEK_HIGH_PRICE": 30.35,
+        "CH_52WEEK_LOW_PRICE": 15.1,
+        "CH_TOTAL_TRADES": 1,
+        "CH_ISIN": "INE136T01014",
+        "createdAt": "2024-08-22T12:00:31.785Z",
+        "updatedAt": "2024-08-22T12:00:31.785Z",
+        "__v": 0,
+        "SLBMH_TOT_VAL": null,
+        "VWAP": 30.35,
+        "mTIMESTAMP": "22-Aug-2024"
+      },
+      {
+        "_id": "66b0bee024ac63aa548e5636",
+        "CH_SYMBOL": "AHIMSA",
+        "CH_SERIES": "ST",
+        "CH_MARKET_TYPE": "N",
+        "CH_TIMESTAMP": "2024-08-05",
+        "TIMESTAMP": "2024-08-04T18:30:00.000Z",
+        "CH_TRADE_HIGH_PRICE": 28.95,
+        "CH_TRADE_LOW_PRICE": 28.95,
+        "CH_OPENING_PRICE": 28.95,
+        "CH_CLOSING_PRICE": 28.95,
+        "CH_LAST_TRADED_PRICE": 28.95,
+        "CH_PREVIOUS_CLS_PRICE": 27.6,
+        "CH_TOT_TRADED_QTY": 6000,
+        "CH_TOT_TRADED_VAL": 173700,
+        "CH_52WEEK_HIGH_PRICE": 28.95,
+        "CH_52WEEK_LOW_PRICE": 15.1,
+        "CH_TOTAL_TRADES": 1,
+        "CH_ISIN": "INE136T01014",
+        "createdAt": "2024-08-05T12:00:32.338Z",
+        "updatedAt": "2024-08-05T12:00:32.338Z",
+        "__v": 0,
+        "SLBMH_TOT_VAL": null,
+        "VWAP": 28.95,
+        "mTIMESTAMP": "05-Aug-2024"
+      }
+    ],
+    "meta": {
+      "series": [
+        "ST"
+      ],
+      "fromDate": "04-08-2024",
+      "toDate": "03-09-2024",
+      "symbols": [
+        "AHIMSA",
+        "AHIMSA"
+      ]
+    }
+  }
+]

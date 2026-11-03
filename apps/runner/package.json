@@ -1,0 +1,19 @@
+{
+  "name": "@algomaker/runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hosts the intraday strategies: loads enabled hosted registry rows, injects the ports, and drives start / delay-start / day-end square-off as state transitions.",
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/core": "1.0.0",
+    "@algomaker/instruments": "1.0.0",
+    "@algomaker/marketdata-core": "1.0.0",
+    "@algomaker/order-bus": "1.0.0",
+    "@algomaker/strategies": "1.0.0",
+    "@algomaker/strategy-kit": "1.0.0",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": { "@types/ws": "^8.18.1" }
+}

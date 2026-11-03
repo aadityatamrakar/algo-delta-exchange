@@ -1,0 +1,408 @@
+/**
+ * Making the desk usable on a phone, a tablet and a monitor — layout only.
+ *
+ * SEPARATE FROM comfort.css ON PURPOSE. That file is about COLOUR and contrast
+ * for a six-hour session; this one is about WIDTH. Keeping them apart means the
+ * eye-comfort palette can be re-tuned without anyone reading a media query, and
+ * a breakpoint can be moved without anyone re-deciding a background token.
+ *
+ * ONE BREAKPOINT SCALE, USED EVERYWHERE, so the app behaves as one system
+ * rather than as seven pages that each guessed:
+ *
+ *   >= 1200px   wide     Two-column panel layouts. Owned by the strategy page
+ *                        (see docs/superpowers/specs/2026-07-28-strategy-page-
+ *                        layout-design.md); this file does not restate it.
+ *   >= 1024px   desktop  The navbar is one row: SMPv2, seven links, the
+ *                        paper/live switch, theme and sign-out.
+ *   <  1024px   compact  The seven links move into a drawer behind a Menu
+ *                        button. Measured, not guessed: the eight controls in
+ *                        that row need ~1140px, so the row overflows on a
+ *                        narrow laptop long before it reaches a phone.
+ *   <= 719px    phone    Tighter page padding, 44px touch targets, dialogs at
+ *                        the width of the screen.
+ *   <= 479px    narrow   The word "Showing" beside the paper/live switch goes.
+ *
+ * WHY max-width AND NOT min-width QUERIES for the phone rules: the desktop
+ * layout is the one that already works and the one every existing test and
+ * screenshot describes. Writing the small-screen rules as overrides means a
+ * mistake in this file degrades the phone, never the desk — and it keeps the
+ * diff to "what changes when the window gets narrow".
+ *
+ * EVERY RULE HERE IS UNLAYERED, and that is what makes it win. astryx ships its
+ * whole stylesheet inside `@layer astryx-base`, so unlayered declarations beat
+ * it regardless of specificity — no `!important` anywhere in this file, and
+ * none should ever be added. The `.astryx-*` class names are the design
+ * system's documented consumer hooks (see utils/themeProps.ts): they carry no
+ * shipped styles of their own and exist precisely to be targeted from here.
+ *
+ * NOTHING IN THIS FILE TOUCHES COLOUR, so both themes keep working by
+ * construction: there is not one hex value or one --color-* override below.
+ */
+
+/* -------------------------------------------------------------- the frame */
+
+/**
+ * THE PAGE BODY NEVER SCROLLS SIDEWAYS.
+ *
+ * `clip`, not `hidden`: `hidden` creates a scroll container that can still be
+ * scrolled programmatically and by a stray focus() — the sideways jump comes
+ * back, just without a scrollbar to explain it. `clip` creates no scroll
+ * container at all. Vertical scrolling is untouched, because `overflow-x: clip`
+ * is the one non-visible value CSS lets pair with an unchanged `overflow-y`.
+ *
+ * THIS IS THE BACKSTOP, NOT THE MECHANISM. The mechanism is below and in the
+ * components: every wide table scrolls inside its own container, and every
+ * toolbar wraps. If this line is ever the thing doing the work, something is
+ * overflowing that should have been made to fit — and the symptom will be a
+ * truncated label, which is findable, rather than a document that slides.
+ */
+html {
+  overflow-x: clip;
+}
+
+/**
+ * A long unbroken token — an order id, a broker error, a URL in a banner — is
+ * allowed to break rather than to set the width of the page.
+ *
+ * `break-word` and not `anywhere`: `anywhere` also shrinks a box's intrinsic
+ * min-content size, which would let flex siblings squeeze ordinary prose into a
+ * one-word column. `break-word` only ever acts on a word that genuinely cannot
+ * fit on a line of its own.
+ */
+#root {
+  overflow-wrap: break-word;
+}
+
+/**
+ * A table's scroll container must be allowed to be NARROWER than the table
+ * inside it.
+ *
+ * astryx already wraps every `<table>` in an `overflow-x: auto` container and
+ * gives the table a computed min-width from the column definitions — the
+ * order log needs ~960px. That container only scrolls if its parent refuses
+ * to grow to 960px, and a flex item's automatic minimum size is exactly the
+ * rule that makes a parent grow instead. Pinning it back to 0/100% is what
+ * turns "the page is 960px wide" into "the table scrolls".
+ */
+.astryx-table-scroll-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/**
+ * THE BOOK TABS SCROLL INSIDE THEIR OWN BOX INSTEAD OF SETTING THE WIDTH OF THE
+ * PAGE.
+ *
+ * THIS IS THE FIX FOR "the phone renders the desk in the left ~55% of the screen
+ * with white space beside it", and the mechanism is worth writing down at length
+ * because the symptom looks nothing like the cause — every panel on the page was
+ * suspected of being the wrong width, and not one of them ever was.
+ *
+ * The tabs are labelled `<symbol> · <tag>` — `DLF · DLF-2026-08-25-hold-recycle-r`
+ * — which measures ~385px each and cannot be made narrower: astryx's Tab is
+ * `white-space: nowrap` and its `endContent` (the partial badge and the Δ) is
+ * `flex-shrink: 0`. `TabList` caps its OWN box at `max-width: 100%` but has no
+ * overflow, so two tabs laid out at 385 + 385 spilled out of the 366px strip
+ * VISIBLY, and `document.scrollWidth` measured 723px on a 390px viewport.
+ *
+ * A mobile browser answers a document wider than the viewport by ZOOMING THE
+ * PAGE OUT until the whole scroll width fits: `initial-scale=1` sets the initial
+ * scale, it does not set a minimum. So the desk was painted at ~0.54, and
+ * because `html`, `body` and every card are correctly 390px wide, they filled the
+ * left 390 of 723 and the other 46% was empty screen.
+ *
+ * `html { overflow-x: clip }` above does NOT prevent it, which is the other
+ * thing worth recording. Overflow on the ROOT element is propagated to the
+ * viewport, and a viewport cannot be `clip` — it is treated as `hidden`, which
+ * still leaves a scrollable overflow region and still reports the 723px
+ * `scrollWidth` the shrink-to-fit reads. That backstop suppresses the
+ * SCROLLBAR; it does not suppress the overflow.
+ *
+ * WHY THE SCROLL IS ON A WRAPPER AND NOT ON `.astryx-tab-list` ITSELF. The
+ * selected tab's underline is an absolutely positioned child sitting 5px below
+ * the tab, and `hasDivider` reserves exactly 4px of padding plus a 1px border
+ * for it — so the indicator's last pixel lands in the nav's BORDER area, which
+ * is outside its padding box. Putting `overflow-x: auto` on the nav (which
+ * forces the block axis to `auto` too) therefore clips 1px off the underline and
+ * raises a vertical scrollbar over it. One level out, the nav's whole border box
+ * is inside the wrapper's content box, so nothing is clipped and the rail stays
+ * a fixed line with the tabs scrolling over it.
+ *
+ * NOT INSIDE A MEDIA QUERY, unlike the rest of this file: ten books overflow the
+ * strip on a monitor as well, and the desk is precisely where the document must
+ * not start sliding either. `auto` keeps the rule inert until the tabs genuinely
+ * do not fit, so no width at which they already fit is changed.
+ */
+.desk-book-tabs {
+  overflow-x: auto;
+  /* Same reasoning as `.astryx-table-scroll-wrapper`: a flex item's automatic
+     minimum size is its content, so without this the wrapper refuses to be
+     narrower than the tabs and the overflow lands back on the page. */
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* -------------------------------------------------------------- navigation */
+
+/**
+ * The two halves of the navbar, swapped at the compact breakpoint.
+ *
+ * ONLY `display: none` IS EVER SET, never a display that restores one — so at
+ * the other breakpoint each element keeps whatever display its component chose
+ * (flex for a Stack, inline-flex for a Button). A rule that "restores"
+ * `display: flex` is how a button silently becomes a block.
+ */
+@media (max-width: 1023px) {
+  .desk-nav-wide {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .desk-nav-compact {
+    display: none;
+  }
+}
+
+/**
+ * The word "Showing" in front of PAPER/LIVE.
+ *
+ * Dropped below 480px and nothing else about the switch changes: the two words
+ * PAPER and LIVE, their fill and the 3px rule under the bar all survive, so
+ * what is lost is a label for a control that already labels itself. The switch
+ * governs what every page shows and stays in the bar at every width — it is
+ * never behind the Menu button.
+ */
+@media (max-width: 479px) {
+  .desk-mode-label {
+    display: none;
+  }
+}
+
+/**
+ * The drawer's own links are full-width rows, not a column of hugged buttons.
+ *
+ * A 90px-wide "Positions" floating in a 320px drawer is a target you have to
+ * aim at; a full-width row is one you cannot miss. `justify-content` rather
+ * than `text-align` because the label sits inside the Button's own flex box.
+ */
+.desk-drawer-link {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* ------------------------------------------------------------ page padding */
+
+/**
+ * 20px of padding on each side of a 390px screen spends a tenth of the viewport
+ * on nothing. Dropped to 12px, which still separates the cards from the edge.
+ */
+@media (max-width: 719px) {
+  .desk-page {
+    padding-inline: var(--spacing-3);
+    padding-block: var(--spacing-3);
+  }
+
+  .desk-topbar {
+    padding-inline: var(--spacing-3);
+    padding-block: var(--spacing-2);
+  }
+}
+
+/* ----------------------------------------------------------- touch targets */
+
+/**
+ * 44px minimum on anything you tap. That is the figure both platform guidelines
+ * land on, and this dashboard's buttons ship at 28-32px — fine for a mouse,
+ * under half the area of a fingertip.
+ *
+ * `min-height` rather than `height`, so nothing here has to out-specify the
+ * design system's own sizing: a min-height clamps a smaller height by the box
+ * model, with no cascade involved at all.
+ *
+ * `height: auto` and `white-space: normal` come as a pair with it. astryx
+ * buttons are fixed-height and no-wrap, and this app has labels like "Engage
+ * kill switch — both rails" and "Close all — fast (MARKET), paper" — at 390px
+ * a nowrap label makes the BUTTON wider than the screen, which is one of the
+ * things that used to push the document sideways. Letting the label wrap inside
+ * a taller button is the fix; without `height: auto` the second line would spill
+ * out of a 32px box.
+ *
+ * `min-width` matters for exactly one case and is harmless everywhere else:
+ * astryx's ICON-ONLY buttons — the drawer's close button is the only one on
+ * this desk — are square by `aspect-ratio` derived from their height, and a
+ * height raised by `min-height` is not fed back into the width. Stating the
+ * floor on both axes keeps them square. No labelled button here is narrower
+ * than 44px to begin with, so nothing else moves.
+ */
+@media (max-width: 719px) {
+  .astryx-button {
+    min-height: 44px;
+    min-width: 44px;
+    height: auto;
+    white-space: normal;
+  }
+
+  .astryx-tab {
+    min-height: 44px;
+  }
+
+  .astryx-selector,
+  .astryx-text-input,
+  .astryx-number-input,
+  .astryx-date-input {
+    min-height: 44px;
+  }
+}
+
+/* ------------------------------------------------------------------ dialogs */
+
+/**
+ * Every dialog on this desk is sized for a monitor — 460px to 520px — and
+ * astryx caps them at 90vw, which on a 390px phone leaves a 39px gutter around
+ * a form that is already short of room. The width becomes the screen less one
+ * padding step on each side.
+ *
+ * `100%` AND NOT `100vw`: a dialog is `position: fixed`, so a percentage
+ * resolves against the initial containing block, which excludes a classic
+ * scrollbar. `100vw` includes it, and on a narrow desktop window that is a
+ * dialog a scrollbar's width too wide — pushed off centre by exactly the thing
+ * the rule was supposed to fit inside.
+ */
+@media (max-width: 719px) {
+  .astryx-dialog {
+    width: calc(100% - 2 * var(--spacing-3));
+    max-width: calc(100% - 2 * var(--spacing-3));
+  }
+
+  /**
+   * The dialog's own scroll region, which is capped separately.
+   *
+   * `max-height` on the `<dialog>` is not the number that matters: the height
+   * is really set by `--container-max-height` on the single wrapper inside it,
+   * which the component fixes at 75vh. Overriding the dialog and not the
+   * wrapper would move nothing, so this moves the wrapper.
+   *
+   * `dvh` rather than `vh`, and this is the whole point of the rule: `vh` on a
+   * phone measures the viewport with the browser chrome COLLAPSED, so 75vh is
+   * measured against a screen taller than the one currently visible whenever
+   * the address bar is showing. `dvh` tracks what is actually on screen. 88 of
+   * it leaves the dialog visibly inset rather than edge to edge.
+   */
+  .astryx-dialog > * {
+    --container-max-height: 88dvh;
+  }
+}
+
+/**
+ * A dialog footer's buttons stack instead of overflowing.
+ *
+ * `column-reverse`, deliberately: it puts the SAFE action at the bottom, which
+ * on a phone is where the thumb rests and where a mis-tap lands. The flatten
+ * dialog's row is Cancel / Flatten — limit / Flatten — fast, and stacking it in
+ * DOM order would put "Flatten — fast" — a market order into a live book — in
+ * exactly that spot. Reversed, the bottom row is Cancel and a fumbled tap costs
+ * nothing.
+ *
+ * Targeted at the footer's horizontal Stack rather than at each dialog, so
+ * every dialog on the desk — flatten, settings, add strategy, broker
+ * credentials, the re-auth prompt — gets it without any of them being edited.
+ */
+@media (max-width: 559px) {
+  .astryx-dialog .astryx-layout-footer .astryx-stack[data-direction='horizontal'] {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+}
+
+/* ----------------------------------------------------------- the top bar */
+
+/**
+ * SMPv2 | PAPER LIVE | Menu, on one row, at 390px.
+ *
+ * The bar is built for the desk — `gap={4}` (16px) between everything and a
+ * `Heading level={3}` wordmark — and on a phone it carries four controls in
+ * roughly 340px of usable width. At the desk gaps it did not fit, so the row
+ * wrapped: the wordmark on one line and PAPER/LIVE/Menu shoved under it, which
+ * is the "cramped" look. Halving the gaps buys ~24px, which is the difference.
+ *
+ * `nowrap` IS SAFE HERE AND ONLY HERE. The wide half of the bar — the seven
+ * links, theme, sign-out — is `display: none` below 1024px, so what is left is
+ * four items measured at ~300px. The wrap on the desk bar is untouched (it is
+ * what keeps 1024-1140px from overflowing); this only says that at phone width
+ * there is nothing left to wrap.
+ *
+ * THE PAPER/LIVE SWITCH IS NOT TOUCHED BY ANY OF THIS. It is in the bar at
+ * every width by design — see NavDrawer in App.tsx — and the only thing that
+ * ever goes is the word "Showing" in front of it, below 480px.
+ */
+@media (max-width: 719px) {
+  .desk-topbar {
+    gap: var(--spacing-2);
+    flex-wrap: nowrap;
+  }
+
+  .desk-topbar-left,
+  .desk-topbar-right {
+    /* `min-width: 0` so the wordmark side yields first if anything ever has to:
+       a flex item's automatic minimum is its content, and without this the
+       overflow would land on the switch. */
+    gap: var(--spacing-2);
+    min-width: 0;
+  }
+
+  /**
+   * The wordmark, one step down the scale.
+   *
+   * A token, not a number: `--text-heading-4-size` is the theme's own next step
+   * (14px against heading-3's 17px), so a themed build that rescales its
+   * typography rescales this with it. It stays a `<h3>` — the outline is not a
+   * font size.
+   */
+  .desk-topbar h3 {
+    font-size: var(--text-heading-4-size);
+  }
+}
+
+/* ------------------------------------------------- the strategy's header */
+
+/**
+ * "BULL_SNX_1 PAPER running 8 open Bull SNX-1 SENSEX straddle Settings".
+ *
+ * That whole line was one non-wrapping row at 390px. It ran off the side, and
+ * because the row still had to fit somewhere the squeeze landed on the last
+ * item — `Settings` broke a character at a time into "Se/tti/ngs", which is
+ * what a button gets when it is allowed to wrap (see the touch-target rules
+ * above, which is the trade that makes long labels like "Engage kill switch"
+ * survive) and then given less width than one word.
+ *
+ * Three rules, no new markup:
+ *
+ *   the DESCRIPTION takes its own line. `flex-basis: 100%` in a wrapping flex
+ *   row is the one-liner for "this item starts a line": the tag, the mode badge
+ *   and the runtime state — the things you identify the page by — keep the
+ *   first line, and the sentence describing the strategy wraps freely below
+ *   them instead of competing for the same 390px.
+ *
+ *   the BUTTON does not shrink and does not wrap. Those two together are the
+ *   fix for the shattered word: nowrap makes "Settings" one unbreakable box,
+ *   and flex-shrink 0 stops the row squeezing that box below its own width, so
+ *   it wraps to a line of its own — whole — rather than fragmenting in place.
+ *   This rule comes AFTER `.astryx-button { white-space: normal }` above and
+ *   has the same specificity, so source order settles it; no `!important`.
+ */
+@media (max-width: 719px) {
+  .desk-strategy-headline {
+    min-width: 0;
+  }
+
+  .desk-strategy-label {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .desk-strategy-settings {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+}

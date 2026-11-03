@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["vite/client"]
+  },
+  // The tests are typechecked with the app, deliberately: they stand in for the
+  // network with hand-written response bodies, and a body that has drifted from
+  // the client's types is a test asserting on a shape the server no longer
+  // sends. That is the one failure a green suite would hide.
+  // BOTH test extensions. `test/**/*.tsx` alone left every plain `.ts` test
+  // typechecked by NOTHING (audit F-53): `entry-plan.test.ts` is DOM-free, so it
+  // is a `.ts`, so it fell outside this include and outside the root project's
+  // too (which excludes apps/web entirely) — a suite that runs but whose types
+  // nobody verifies, which is the one gap this comment claims does not exist.
+  "include": [
+    "src/**/*.ts", "src/**/*.tsx",
+    "test/**/*.ts", "test/**/*.tsx",
+    "vite.config.ts", "vite.traders.config.ts", "vitest.config.ts"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@algomaker/pnl",
+  "version": "1.0.0",
+  "description": "P&L from our own fills on an average-cost basis: positions, realised, unrealised against live marks. Pure, zero deps, gross of costs unless costs are supplied.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" }
+}

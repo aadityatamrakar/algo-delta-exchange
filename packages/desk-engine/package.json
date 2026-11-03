@@ -1,0 +1,16 @@
+{
+  "name": "@algomaker/desk-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The recenter supervisor's decision engine: canonical two-sided market/leg/state types, the desk-api wire contract, the NSE session grid and the dial schema. Pure, no clock, no IO.",
+  "type": "module",
+  "_comment:exports": "The two leaf modules are exported on their own path FOR THE BROWSER. apps/web renders the dials panel from DIAL_SECTIONS and prefills from PRESETS, and importing those through '.' would drag the whole engine — marking, shed, shift and @algomaker/greeks — into the dashboard bundle for one metadata table. dials.ts imports nothing and presets.ts imports one type from it, so these two paths carry no graph at all. Every server-side consumer keeps importing '.'.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./dials": "./src/dials.ts",
+    "./presets": "./src/presets.ts"
+  },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": { "@algomaker/greeks": "*" }
+}

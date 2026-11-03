@@ -1,0 +1,9 @@
+{
+  "name": "@algomaker/greeks",
+  "version": "1.0.0",
+  "description": "Black-Scholes greeks and implied vol for NSE European options, plus book-level delta aggregation. Pure, zero deps.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" }
+}

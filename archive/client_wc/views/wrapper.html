@@ -1,0 +1,152 @@
+<!-- Navbar -->
+<style>
+  /* Extra small devices (phones, 600px and down) */
+  @media (max-width: 768px) {
+    .main-header .nav-link {
+      height: 2.25rem;
+      position: relative;
+    }
+  }
+
+  /* Medium devices (landscape tablets, 768px and up) */
+  @media (min-width: 768px) {
+    .main-header .nav-link {
+      height: 2.5rem;
+      position: relative;
+    }
+  }
+
+  .bg-mynav {
+    background: #134E5E;
+    /* fallback for old browsers */
+    background: -webkit-linear-gradient(to left, #71B280, #134E5E);
+    /* Chrome 10-25, Safari 5.1-6 */
+    background: linear-gradient(to left, #71B280, #134E5E);
+    /* W3C, IE 10+/ Edge, Firefox 16+, Chrome 26+, Opera 12+, Safari 7+ */
+  }
+
+  .collapsing {
+    position: relative;
+    height: 0;
+    overflow: hidden;
+    -webkit-transition-property: height, visibility;
+    transition-property: height, visibility;
+    -webkit-transition-duration: 0.2s;
+    transition-duration: 0.2s;
+    -webkit-transition-timing-function: ease;
+    transition-timing-function: ease;
+  }
+
+  .collapsing.width {
+    -webkit-transition-property: width, visibility;
+    transition-property: width, visibility;
+    width: 0;
+    height: auto;
+  }
+  
+  .nav-link {
+    font-size: 15px;
+  }
+
+</style>
+
+<nav class="main-header fixed-top navbar navbar-expand-md navbar-dark bg-mynav">
+  <div class="container">
+    <a href="javascript:;" class="navbar-brand" ng-click="gotoHome()">
+      <span class="brand-text">SMP</span>
+    </a>
+
+    <button class="navbar-toggler order-1" type="button" data-toggle="collapse" data-target="#navbarCollapse"
+      aria-controls="navbarCollapse" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+
+    <div class="collapse navbar-collapse order-3" id="navbarCollapse">
+      <!-- Left navbar links -->
+      <ul class="navbar-nav">
+        <li class="nav-item active" ng-show="superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.papertrading"
+            class="nav-link">Dashboard</a>
+        </li>
+        <!-- <li class="nav-item active" ng-show="superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.positional"
+            class="nav-link">Positional</a>
+        </li> -->
+        <li class="nav-item active" ng-show="superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.circuit"
+            class="nav-link">Circuits</a>
+        </li>
+        <li class="nav-item active" ng-show="execRights && superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.allpnl"
+            class="nav-link">PNL</a>
+        </li>
+        <li class="nav-item active" ng-show="execRights && superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.strategies"
+            class="nav-link">Live Strategy</a>
+        </li>
+        <li class="nav-item active" ng-show="execRights && superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.manager"
+            class="nav-link">Manage</a>
+        </li>
+        <li class="nav-item active" ng-show="execRights && superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.allorders"
+            class="nav-link">Orderbook</a>
+        </li>
+        <li class="nav-item active" ng-hide="superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.mysummary"
+            class="nav-link">Dashboard</a>
+        </li>
+        <li class="nav-item active" ng-hide="superadmin" ng-if="accountMapped">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.mysummary"
+            class="nav-link">PNL</a>
+        </li>
+        <li class="nav-item active" ng-hide="superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.screener"
+            class="nav-link">Watchlist</a>
+        </li>
+        <li class="nav-item active" ng-show="execRights && superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.users"
+            class="nav-link">Users</a>
+        </li>
+        <li class="nav-item active" ng-show="execRights && superadmin">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.accounts"
+            class="nav-link">Broker</a>
+        </li>
+        <!-- <li class="nav-item active">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.performance"
+            class="nav-link">Performance</a>
+        </li> -->
+        <li class="nav-item active">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.reports"
+            class="nav-link">Reports</a>
+        </li>
+        <li class="nav-item active">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ui-sref="app.settings"
+            class="nav-link">Settings</a>
+        </li>
+        <li class="nav-item active">
+          <a data-toggle="collapse" data-target="#navbarCollapse" href="javascript:;" ng-click="logout()"
+            class="nav-link">Logout</a>
+        </li>
+      </ul>
+    </div>
+</nav>
+<!-- /.navbar -->
+
+<!-- Content Wrapper. Contains page content -->
+<div class="content-wrapper" style="padding-top: 60px;">
+  <div ui-view class="container"></div>
+</div>
+<!-- /.content-wrapper -->
+
+<!-- Main Footer -->
+<footer class="main-footer" style="font-size: 13px;">
+  <div class="container">
+    <!-- To the right -->
+    <div class="float-right">
+      SMP 1.0
+    </div>
+    <!-- Default to the left -->
+    <strong>Copyright &copy; 2020</strong> All rights reserved.
+  </div>
+</footer>

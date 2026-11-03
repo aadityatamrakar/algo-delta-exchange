@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Data Pivot Table</title>
+    <!-- Include PivotTable.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pivottable@2.23.0/dist/pivot.css">
+    <style>
+        #output {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Stock Data Pivot Table</h1>
+    <div id="output">Loading...</div>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pivottable@2.23.0/dist/pivot.js"></script>
+    <script>
+        // Function to fetch data from the server
+        function fetchData() {
+            fetch('/stocks_sme_data')
+                .then(response => response.json())
+                .then(data => {
+                    displayPivotTable(data);
+                })
+                .catch(error => console.error('Error fetching stock data:', error));
+        }
+
+        // Function to display the pivot table
+        function displayPivotTable(data) {
+            const formattedData = data.map(stock => ({
+                'Stock': stock.symbol,
+                'Open': stock.open,
+                'High': stock.high,
+                'Low': stock.low,
+                'Close': stock.close,
+                'VWAP': stock.vwap,
+                'Trades': stock.trades,
+                'Turnover': stock.turnover,
+                'Quantity': stock.qty,
+                'Year High': stock.year_high,
+                'Year Low': stock.year_low
+            }));
+
+            $('#output').pivotUI(
+                formattedData,
+                {
+                    rows: ['Stock'],
+                    cols: [],
+                    aggregatorName: 'Average',
+                    vals: ['VWAP'],
+                    rendererName: 'Table',
+                    sorters: {
+                        'Stock': (a, b) => a.localeCompare(b)
+                    }
+                }
+            );
+        }
+        window.onload = fetchData;
+    </script>
+</body>
+
+</html>

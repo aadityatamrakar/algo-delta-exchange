@@ -1,0 +1,12 @@
+{
+  "name": "@algomaker/instruments",
+  "version": "1.0.0",
+  "description": "InstrumentUniverse — underlyings as DATA so adding stocks is config, not code. OptionMaster — contract resolution from the exchange dump, incl. stock options.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/order-bus": "1.0.0"
+  }
+}

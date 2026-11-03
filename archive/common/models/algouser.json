@@ -1,0 +1,24 @@
+{
+  "name": "algouser",
+  "base": "PersistedModel",
+  "idInjection": true,
+  "options": {
+    "validateUpsert": true
+  },
+  "properties": {},
+  "validations": [],
+  "relations": {
+    "algopapers": {
+      "type": "hasMany",
+      "model": "algopaper",
+      "foreignKey": ""
+    },
+    "client": {
+      "type": "belongsTo",
+      "model": "client",
+      "foreignKey": ""
+    }
+  },
+  "acls": [],
+  "methods": {}
+}

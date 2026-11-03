@@ -1,0 +1,355 @@
+/**
+ * The traders page's frame (shell.tsx): top bar, sidebar, page. Layout only; every colour is a theme token, so light
+ * and dark both work by construction. Unlayered, so it wins over astryx's `@layer astryx-base` without !important
+ * (see ../responsive.css).
+ */
+
+.traders-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.traders-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--color-background-body);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* The stock tabs take the room between the ☰ and the bell, and scroll sideways when there are many. */
+.traders-stocktabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.traders-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.traders-sidebar {
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-background-body);
+  position: sticky;
+  top: 49px;
+  align-self: flex-start;
+  /* the full height under the top bar, so its background and border run to the bottom of the screen */
+  height: calc(100vh - 49px);
+  overflow-y: auto;
+}
+
+.traders-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.traders-nav .astryx-button,
+.traders-nav button {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.traders-sidebar-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.traders-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 16px 20px 32px;
+}
+
+/* The bell: its pill, the count on its corner, and the panel under it. */
+.traders-bell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.traders-bell-button {
+  position: relative;
+  display: inline-flex;
+}
+
+.traders-bell-count {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+  color: var(--color-background-body);
+  background: var(--color-icon-gray);
+}
+
+.traders-bell[data-state='alert'] .traders-bell-count {
+  background: var(--color-icon-red);
+}
+
+.traders-bell[data-state='alert'] .traders-bell-button {
+  color: var(--color-icon-red);
+}
+
+.traders-bell-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background-popover);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+
+.traders-bell-alert {
+  color: var(--color-icon-red);
+}
+
+/* A phone: the sidebar opens over the page, under a scrim that closes it. */
+@media (max-width: 719px) {
+  .traders-sidebar {
+    position: fixed;
+    top: 49px;
+    bottom: 0;
+    left: 0;
+    z-index: 25;
+    width: min(280px, 85vw);
+    max-height: none;
+  }
+
+  .traders-scrim {
+    position: fixed;
+    inset: 49px 0 0 0;
+    z-index: 24;
+    background: rgb(0 0 0 / 35%);
+  }
+
+  .traders-main {
+    padding: 12px 12px 24px;
+  }
+}
+
+/* The shortcut list (shortcuts.tsx). */
+.traders-shortcuts {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.traders-shortcuts td {
+  padding: 4px 8px;
+  vertical-align: top;
+}
+
+.traders-shortcuts td:first-child {
+  white-space: nowrap;
+}
+
+.traders-shortcuts kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-background-muted);
+}
+
+/* Folds and ⓘ (fold.tsx): explanations and breakdowns one key or click away from a page's front. */
+.traders-fold {
+  border-top: 1px solid var(--color-border);
+  padding-top: 6px;
+}
+
+.traders-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.traders-fold-mark {
+  width: 1em;
+  color: var(--color-text-secondary);
+}
+
+.traders-fold-badge {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.traders-fold-key {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 400;
+  padding: 0 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+}
+
+.traders-fold-body {
+  padding: 8px 0 4px;
+}
+
+.traders-info {
+  position: relative;
+  display: inline-flex;
+}
+
+.traders-info-button {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.traders-info-button[aria-expanded='true'] {
+  color: var(--color-text-accent);
+}
+
+.traders-info-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 15;
+  width: max-content;
+  max-width: min(360px, 80vw);
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-background-popover);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 15%);
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.traders-strip {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background-card);
+}
+
+/* The sidebar's text-size control: A− label A+ on one line. */
+.traders-text-size {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Light theme, traders page only: secondary text one step darker (#6b6862 → #55524d) so small figures and labels
+   read at a glance; comfort.css (shared with the desk) is left as it is. */
+[data-theme='light'] .traders-body,
+.traders-body[data-theme='light'] {
+  --color-text-secondary: #55524d;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) .traders-body {
+    --color-text-secondary: #55524d;
+  }
+}
+
+/* The Analysis line: the figures, what differs from the market, then Adjust and Edit layout at its right end. */
+.traders-controls-end {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.traders-active-changes {
+  font-size: var(--font-size-xs);
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-warning, #c58a00) 18%, transparent);
+  white-space: nowrap;
+}
+.traders-adjust {
+  padding: 4px;
+}
+
+/* The Scenario strip: a thin rule between its groups; Vol's + and − as two small buttons. */
+.traders-sep {
+  width: 1px;
+  align-self: stretch;
+  min-height: 20px;
+  background: var(--color-border);
+  margin: 0 4px;
+}
+.traders-nudge {
+  display: inline-flex;
+  gap: 2px;
+}
+.traders-nudge .astryx-button {
+  min-width: 24px;
+  padding: 0 6px;
+}
+
+/* A tab strip wider than its column scrolls inside itself. */
+.traders-tab-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+/* The book's live pill on its title line: a green "● Live" while the stream ticks, amber "Delayed" while it is down. */
+.traders-live-pill {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.traders-live-on {
+  color: var(--color-text-success, #1a7f37);
+  background: color-mix(in srgb, var(--color-text-success, #1a7f37) 14%, transparent);
+}
+.traders-live-delayed {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-warning, #c58a00) 22%, transparent);
+  cursor: help;
+}

@@ -1,0 +1,17 @@
+{
+  "db": {
+    "name": "db",
+    "connector": "memory"
+  },
+  "cloud": {
+    "host": "",
+    "port": 0,
+    "url": "mongodb+srv://admin:REbKZM4TXg58f5IY@cluster0.k2pue.mongodb.net/algo?retryWrites=true&w=majority",
+    "database": "algo",
+    "password": "REbKZM4TXg58f5IY",
+    "name": "cloud",
+    "user": "admin",
+    "useNewUrlParser": true,
+    "connector": "mongodb"
+  }
+}

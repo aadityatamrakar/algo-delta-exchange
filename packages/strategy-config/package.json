@@ -1,0 +1,12 @@
+{
+  "name": "@algomaker/strategy-config",
+  "version": "1.0.0",
+  "description": "Shared strategy config schema: the five policy axes (underlying, strike, exit, sizing, rail) plus session/expiry/risk. Types only, plus load-time assertions.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/strategy-kit": "1.0.0"
+  }
+}

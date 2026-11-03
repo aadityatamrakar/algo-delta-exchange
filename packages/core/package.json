@@ -1,0 +1,9 @@
+{
+  "name": "@algomaker/core",
+  "version": "1.0.0",
+  "description": "Shared primitives: IST clock, ids, money/tick rounding, Result. Zero dependencies.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" }
+}

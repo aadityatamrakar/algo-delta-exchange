@@ -1,0 +1,12 @@
+{
+  "name": "@algomaker/brokers",
+  "version": "1.0.0",
+  "description": "One BrokerAdapter interface, three implementations: zerodha-data (market data only), xts-live (orders + fills), simulator (paper).",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/order-bus": "1.0.0"
+  }
+}

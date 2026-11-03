@@ -1,0 +1,12 @@
+{
+  "name": "@algomaker/payoff",
+  "version": "1.0.0",
+  "description": "Expiry and mark-to-market payoff of an options+futures book: signed-share legs priced Black-76 off the future, exact piecewise-linear expiry P&L and breakevens. Pure, no clock, no IO.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/greeks": "1.0.0"
+  }
+}

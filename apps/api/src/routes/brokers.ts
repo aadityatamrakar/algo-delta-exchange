@@ -1,0 +1,309 @@
+/**
+ * Broker credentials — stored sealed, never returned.
+ *
+ * THE ONE INVARIANT: no response from this module contains a secret field, at
+ * any status, ever. Not on the error paths, not in an echoed `meta`, not in a
+ * broker's own error message. `BrokerStore` enforces it on both sides of the
+ * database and `test/brokers.test.ts` asserts it over the full JSON of every
+ * response this file can produce.
+ *
+ * `test` performs a REAL login (spec §5). That is the whole point of it: "are my
+ * credentials right?" is otherwise answerable only by restarting a process and
+ * reading its logs. A failed login is `200 {ok:false}`, not a 5xx — the request
+ * succeeded and its body says exactly what the broker replied; a 5xx would tell
+ * the dashboard that OUR service is broken when it is the credentials that are.
+ */
+
+import { XtsRestClient } from '@algomaker/brokers'
+import { zerodhaLogin } from '../../../marketdata/src/zerodha-login.ts'
+import { BrokerStore, isBrokerKind, requireMasterKey, type BrokerKind } from '../brokerstore.ts'
+import { auditLog } from '../audit.ts'
+import { isObject, suffixOf, type ApiDeps, type Route, type RouteCtx } from './kit.ts'
+
+const PREFIX = '/v1/desk/brokers'
+
+export function brokerRoutes(deps: ApiDeps): Route {
+  // Spec §7: fails at BOOT, not on the first request. `main.ts` calls this
+  // factory before it listens, so a bad key stops the process instead of
+  // producing an inexplicable broker error mid-session.
+  const store = new BrokerStore(deps.db, requireMasterKey())
+  void store.ensureIndexes().catch((err: unknown) => {
+    deps.log('broker index creation failed', { error: err instanceof Error ? err.message : String(err) })
+  })
+  /**
+   * WHO CHANGED THE CREDENTIALS (roadmap 17), and the module's one invariant
+   * applied to the audit log as well as to the responses: NO SECRET VALUE GOES
+   * IN, EVER. Every `detail` below is key names and booleans — never a value,
+   * never the body, never `meta`. `audit.ts` redacts on the way in as a second
+   * line, but the first line is here: nothing sensitive is handed over at all.
+   */
+  const audit = auditLog(deps)
+
+  return async (ctx: RouteCtx): Promise<boolean> => {
+    const { path, method, send } = ctx
+
+    if (path === PREFIX && method === 'GET') {
+      send(200, { brokers: await store.list() })
+      return true
+    }
+
+    const rest = suffixOf(path, `${PREFIX}/`)
+    if (rest === null) return false
+    const [kindRaw, action, ...extra] = rest.split('/')
+    if (extra.length > 0) return false
+    if (!isBrokerKind(kindRaw)) {
+      send(404, { error: `unknown broker "${String(kindRaw)}" — known brokers are xts and zerodha` })
+      return true
+    }
+    const kind: BrokerKind = kindRaw
+
+    if (action === undefined && method === 'PUT') {
+      const body = await ctx.readJson()
+      if (!isObject(body)) {
+        send(400, { error: 'body must be an object' })
+        return true
+      }
+      const label = body['label']
+      const meta = body['meta']
+      const secret = body['secret']
+      if (label !== undefined && typeof label !== 'string') {
+        send(400, { error: 'label must be a string' })
+        return true
+      }
+      if (meta !== undefined && !isObject(meta)) {
+        send(400, { error: 'meta must be an object' })
+        return true
+      }
+      if (secret !== undefined && !isObject(secret)) {
+        send(400, { error: 'secret must be an object' })
+        return true
+      }
+      await store.save(
+        kind,
+        {
+          ...(label === undefined ? {} : { label }),
+          ...(meta === undefined ? {} : { meta }),
+          ...(secret === undefined ? {} : { secret }),
+        },
+        deps.now(),
+      )
+      // Never echoes what was stored. The response says which broker was
+      // written and nothing else, so there is no path by which a PUT can hand a
+      // credential back to a page that might log it.
+      const secretChanged = isObject(secret) && Object.keys(secret).length > 0
+      ctx.log('broker credentials saved', { kind, secretChanged })
+      await audit.record({
+        principal: ctx.principal,
+        source: `${PREFIX}/:kind`,
+        action: 'saved broker credentials',
+        // WHICH FIELDS MOVED, never what they moved to. `secretChanged` is the
+        // one that matters — a session that stops working at 09:16 is usually
+        // one whose secret was rewritten at 09:15, and that is now answerable.
+        detail: {
+          kind,
+          labelChanged: label !== undefined,
+          metaChanged: meta !== undefined,
+          secretChanged,
+        },
+      })
+      send(200, { ok: true, kind })
+      return true
+    }
+
+    if (action === 'test' && method === 'POST') {
+      const read = await store.readSecret(kind)
+      if (read.kind === 'absent') {
+        send(200, { ok: false, error: `no ${kind} credentials configured` })
+        return true
+      }
+      if (read.kind === 'unreadable') {
+        // Not a login failure and not a 5xx: the row exists, we simply cannot
+        // open it. Re-entering credentials IS the fix here, which is why the
+        // reason is stated rather than reported as a broker rejection.
+        send(200, { ok: false, error: read.reason })
+        return true
+      }
+
+      const row = await store.get(kind)
+      const result =
+        kind === 'xts'
+          ? await testXts(read.secret, row.meta)
+          : await testZerodha(read.secret, row.meta)
+
+      // Recording the verdict is OUR job; failing to record it is our bug and a
+      // 5xx. Failing to log in is the broker's answer and a 200.
+      await store.recordTest(kind, result.ok ? { ok: true } : { ok: false, error: result.error }, deps.now())
+      ctx.log('broker credential test', { kind, ok: result.ok })
+      await audit.record({
+        principal: ctx.principal,
+        source: `${PREFIX}/:kind/test`,
+        action: 'tested broker credentials',
+        // A REAL LOGIN happens on this path (spec §5) — XTS invalidates the
+        // previous session on each one — so it belongs in the record even
+        // though it changes nothing. The error is the ALREADY-REDACTED text
+        // (`redact` above), never the raw broker reply.
+        detail: { kind, ok: result.ok, ...(result.ok ? {} : { error: result.error }) },
+      })
+      if (result.ok) {
+        send(200, { ok: true, verifiedAt: deps.now(), ...(result.note === undefined ? {} : { note: result.note }) })
+      } else {
+        send(200, { ok: false, error: result.error })
+      }
+      return true
+    }
+
+    return false
+  }
+}
+
+type TestResult = { ok: true; note?: string } | { ok: false; error: string }
+
+function str(...values: unknown[]): string {
+  for (const v of values) {
+    if (typeof v === 'string' && v !== '') return v
+    if (typeof v === 'number') return String(v)
+  }
+  return ''
+}
+
+/**
+ * A real XTS Interactive login over `packages/brokers/src/xts-rest.ts` — direct
+ * REST, no SDK, the same client the order gateway trades through. Testing
+ * through a different code path than the one that places orders would verify
+ * something nobody uses.
+ *
+ * `baseUrl` is read from `meta` first (contract §2 puts the base URL there) and
+ * from the sealed blob second, so a credential set entered as one JSON object
+ * still works.
+ */
+async function testXts(
+  secret: Record<string, unknown>,
+  meta: Record<string, string | number | boolean>,
+): Promise<TestResult> {
+  const baseUrl = str(meta['baseUrl'], secret['baseUrl'])
+  const appKey = str(secret['appKey'])
+  const secretKey = str(secret['secretKey'])
+  if (baseUrl === '') return { ok: false, error: 'meta.baseUrl is required to reach the XTS host' }
+  if (appKey === '' || secretKey === '') {
+    return { ok: false, error: 'secret.appKey and secret.secretKey are required' }
+  }
+  const uniqueKey = str(secret['uniqueKey'])
+  const hostLookupUrl = str(meta['hostLookupUrl'], secret['hostLookupUrl'])
+  const prefix = str(meta['prefix'], secret['prefix'])
+  const source = str(meta['source'], secret['source'])
+
+  const client = new XtsRestClient({
+    baseUrl,
+    appKey,
+    secretKey,
+    ...(uniqueKey === '' ? {} : { uniqueKey }),
+    ...(hostLookupUrl === '' ? {} : { hostLookupUrl }),
+    ...(prefix === '' ? {} : { prefix }),
+    ...(source === '' ? {} : { source }),
+    // Shorter than the gateway's 15s: an operator is watching this one, and a
+    // broker that has not answered in 10 seconds is the answer.
+    timeoutMs: 10_000,
+  })
+  try {
+    const session = await client.login()
+    // Logging straight back out. XTS invalidates the previous session on each
+    // login, so a test that KEPT its token would silently kill the session the
+    // order gateway is holding — testing credentials must not stop trading.
+    await client.logout().catch(() => {})
+    return {
+      ok: true,
+      ...(session.userID === '' ? {} : { note: `logged in as ${session.userID}` }),
+    }
+  } catch (err) {
+    return { ok: false, error: redact(err instanceof Error ? err.message : String(err), secret) }
+  }
+}
+
+/**
+ * A real Zerodha login: user id, password and TOTP straight through to the
+ * enctoken, with NO browser step — `apps/marketdata/src/zerodha-login.ts` is the
+ * same path the market-data feed authenticates with every morning.
+ *
+ * ONE HONEST CAVEAT, stated in the response rather than hidden. The underlying
+ * `login()` reuses a LIVE session from the shared cookie jar when there is one,
+ * and only performs the password+TOTP dance when there is not. That is the
+ * behaviour we want — a test must not invalidate the session the feed is
+ * holding — but it means a success sometimes proves "this account has a working
+ * session" rather than "this password is correct". Saying so in `note` is
+ * better than reporting a login we did not observe.
+ *
+ * It is read-only by construction (spec D1): the module never touches an order
+ * endpoint, so testing these credentials cannot place anything.
+ */
+async function testZerodha(
+  secret: Record<string, unknown>,
+  meta: Record<string, string | number | boolean>,
+): Promise<TestResult> {
+  const user_id = str(secret['userId'], secret['user_id'], meta['userId'])
+  const password = str(secret['password'])
+  const authkey = str(secret['totpSecret'], secret['authkey'], secret['totp_secret'])
+  if (user_id === '' || password === '' || authkey === '') {
+    return {
+      ok: false,
+      error: 'secret.password and secret.totpSecret are required, with the user id in meta.userId or secret.userId',
+    }
+  }
+  try {
+    await zerodhaLogin({ user_id, password, authkey })
+    return {
+      ok: true,
+      note:
+        `Kite session verified for ${user_id}. A live session is reused when one exists, ` +
+        'so this confirms the account is reachable; the password and TOTP are re-proved only ' +
+        'when the session has lapsed.',
+    }
+  } catch (err) {
+    return { ok: false, error: redact(err instanceof Error ? err.message : String(err), secret) }
+  }
+}
+
+/**
+ * Strip any stored credential value out of a broker's error text before it
+ * becomes a response.
+ *
+ * Brokers do echo what you sent them — XTS returns the request body in some
+ * error descriptions, and the legacy Zerodha module puts the payload in its
+ * message. Forwarding that verbatim would break the module's one invariant
+ * through the one field nobody thinks of as ours.
+ */
+/**
+ * Strip every stored credential value out of a broker's own error text.
+ *
+ * WALKS THE WHOLE BLOB. The previous version did `Object.values(secret)` and
+ * skipped anything that was not a string of 4+ characters — but the blob is
+ * free-form JSON with no shape check, so a nested `{legacy:{password:"..."}}`
+ * or a numeric PIN passed straight through. That mattered because XTS echoes
+ * the request payload in some error descriptions, and the unredacted text goes
+ * to TWO places: the response body, and `lastError`, which `GET /v1/desk/brokers`
+ * then returns on every poll, forever.
+ *
+ * Numbers are stringified before matching — a 6-digit PIN is exactly the kind
+ * of short value the old length guard waved through.
+ */
+function redact(text: string, secret: Record<string, unknown>): string {
+  let out = text
+  const seen = new Set<unknown>()
+  const walk = (value: unknown): void => {
+    if (value === null || value === undefined) return
+    if (typeof value === 'object') {
+      // Cycles are possible in a hand-repaired document; a redactor that hangs
+      // is a redactor that never runs.
+      if (seen.has(value)) return
+      seen.add(value)
+      for (const v of Object.values(value as Record<string, unknown>)) walk(v)
+      return
+    }
+    const s = String(value)
+    // 3 rather than 4: a short PIN is still a secret. Below that the risk is
+    // mangling unrelated text, which is worse than useless output.
+    if (s.length < 3) return
+    out = out.split(s).join('***')
+  }
+  walk(secret)
+  return out
+}

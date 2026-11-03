@@ -1,0 +1,42 @@
+/*
+ * The traders figure lists (FigureList in figures.tsx; the class is on MetadataList's root, around its <dl>): label and value on one baseline, rows close together.
+ * astryx's MetadataList spaces rows 8px apart at 24px each and sizes its labels as body text; the Analysis
+ * sections read as a column of figures instead. Its own rules are atomic classes that outrank a plain selector,
+ * hence !important on the few properties changed here. Tokens only, so light and dark both follow.
+ */
+.traders-figures > dl {
+  row-gap: var(--spacing-0-5) !important;
+  column-gap: var(--spacing-3) !important;
+  align-items: baseline !important;
+}
+
+.traders-figures > dl > dt,
+.traders-figures > dl > dd {
+  min-height: 0 !important;
+  align-items: baseline !important;
+  line-height: 1.5 !important;
+}
+
+.traders-figures > dl > dt {
+  font-size: var(--font-size-sm) !important;
+}
+
+/* The "Notes (N)" fold: small and muted — it is there if wanted, never competing with a figure. */
+.traders-notes-toggle .astryx-button {
+  min-height: 0;
+  height: auto;
+  padding: 1px 4px;
+  gap: 3px;
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+}
+.traders-notes-toggle .astryx-button:hover,
+.traders-notes-toggle .astryx-button[aria-expanded='true'] {
+  opacity: 1;
+}
+.traders-notes-toggle svg {
+  width: 12px;
+  height: 12px;
+}

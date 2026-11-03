@@ -1,0 +1,12 @@
+{
+  "tag": "BAJFINANCE-2026-08-25-recenter-r",
+  "symbol": "BAJFINANCE",
+  "expiry": "2026-08-25",
+  "mode": "paper",
+  "legs": [
+    { "strike": 1070, "type": "CE", "qty": -3000, "rate": 28 },
+    { "strike": 1030, "type": "PE", "qty": -3000, "rate": 26 },
+    { "strike": 1150, "type": "CE", "qty": 3000, "rate": 7 },
+    { "strike": 960, "type": "PE", "qty": 3000, "rate": 7 }
+  ]
+}

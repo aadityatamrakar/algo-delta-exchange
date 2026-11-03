@@ -1,0 +1,286 @@
+<style>
+  .loginbody {
+    margin: 0;
+    color: #edf3ff;
+    background: #134E5E;
+    /* fallback for old browsers */
+    background: -webkit-linear-gradient(to left, #71B280, #134E5E);
+    /* Chrome 10-25, Safari 5.1-6 */
+    background: linear-gradient(to left, #71B280, #134E5E);
+    /* W3C, IE 10+/ Edge, Firefox 16+, Chrome 26+, Opera 12+, Safari 7+ */
+    background-size: 256px, cover;
+    background-position: center, center;
+    background-repeat: repeat, no-repeat;
+    background-size: cover;
+    font: 600 16px/18px 'Open Sans', sans-serif;
+  }
+
+  :after,
+  :before {
+    box-sizing: border-box
+  }
+
+  .clearfix:after,
+  .clearfix:before {
+    content: '';
+    display: table
+  }
+
+  .clearfix:after {
+    clear: both;
+    display: block
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none
+  }
+
+  .login-wrap {
+    width: 100%;
+    margin: auto;
+    max-width: 510px;
+    min-height: 510px;
+    position: relative;
+    /* background: url(https://images.unsplash.com/photo-1585504256855-6718f7a693ae?ixlib=rb-1.2.1&ixid=MXwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHw%3D&auto=format&fit=crop&w=634&q=80) no-repeat center; */
+    background: rgba(0, 0, 0, 0.3);
+    background-image: url("/public/bg.svg");
+    background-size: cover;
+    background-position: top;
+    background-repeat: no-repeat;
+    -moz-transition: -moz-filter 0.5s ease, opacity 1s ease;
+    -webkit-transition: -webkit-filter 0.5s ease, opacity 1s ease;
+    -ms-transition: -ms-filter 0.5s ease, opacity 1s ease;
+    transition: filter 0.5s ease, opacity 1s ease;
+    box-shadow: 0 12px 15px 0 rgba(0, 0, 0, .24), 0 17px 50px 0 rgba(0, 0, 0, .19);
+  }
+
+  .login-html {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    /* backdrop-filter: blur(3px);
+    -ms-backdrop-filter: blur(3px);
+    -o-backdrop-filter: blur(3px);
+    -moz-backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px); */
+    padding: 90px 70px 50px 70px;
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  .login-html .sign-in-htm,
+  .login-html .for-pwd-htm {
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    position: absolute;
+    -webkit-transform: rotateY(180deg);
+    transform: rotateY(180deg);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    -webkit-transition: all .4s linear;
+    transition: all .4s linear;
+  }
+
+  .login-html .sign-in,
+  .login-html .for-pwd,
+  .login-form .group .check {
+    display: none;
+  }
+
+  .login-html .tab,
+  .login-form .group .label,
+  .login-form .group .button {
+    text-transform: uppercase;
+  }
+
+  .login-html .tab {
+    font-size: 22px;
+    margin-right: 15px;
+    padding-bottom: 5px;
+    margin: 0 15px 10px 0;
+    display: inline-block;
+    border-bottom: 2px solid transparent;
+  }
+
+  .login-html .sign-in:checked+.tab,
+  .login-html .for-pwd:checked+.tab {
+    color: #fff;
+    border-color: #1161ee;
+  }
+
+  .login-form {
+    min-height: 345px;
+    position: relative;
+    -webkit-perspective: 1000px;
+    perspective: 1000px;
+    -webkit-transform-style: preserve-3d;
+    transform-style: preserve-3d;
+  }
+
+  .login-form .group {
+    margin-bottom: 15px;
+  }
+
+  .login-form .group .label,
+  .login-form .group .input,
+  .login-form .group .button {
+    width: 100%;
+    color: #fff;
+    display: block;
+  }
+
+  .login-form .group .input,
+  .login-form .group .button {
+    border: none;
+    padding: 15px 20px;
+    border-radius: 25px;
+    background: rgba(255, 255, 255, .1);
+  }
+
+  .login-form .group input[data-type="password"] {
+    text-security: circle;
+    -webkit-text-security: circle;
+  }
+
+  .login-form .group .label {
+    color: #aaa;
+    font-size: 12px;
+  }
+
+  .login-form .group .button {
+    background: #1161ee;
+  }
+
+  .login-form .group label .icon {
+    width: 15px;
+    height: 15px;
+    border-radius: 2px;
+    position: relative;
+    display: inline-block;
+    background: rgba(255, 255, 255, .1);
+  }
+
+  .login-form .group label .icon:before,
+  .login-form .group label .icon:after {
+    content: '';
+    width: 10px;
+    height: 2px;
+    background: #fff;
+    position: absolute;
+    -webkit-transition: all .2s ease-in-out 0s;
+    transition: all .2s ease-in-out 0s;
+  }
+
+  .login-form .group label .icon:before {
+    left: 3px;
+    width: 5px;
+    bottom: 6px;
+    -webkit-transform: scale(0) rotate(0);
+    transform: scale(0) rotate(0);
+  }
+
+  .login-form .group label .icon:after {
+    top: 6px;
+    right: 0;
+    -webkit-transform: scale(0) rotate(0);
+    transform: scale(0) rotate(0);
+  }
+
+  .login-form .group .check:checked+label {
+    color: #fff;
+  }
+
+  .login-form .group .check:checked+label .icon {
+    background: #1161ee;
+  }
+
+  .login-form .group .check:checked+label .icon:before {
+    -webkit-transform: scale(1) rotate(45deg);
+    transform: scale(1) rotate(45deg);
+  }
+
+  .login-form .group .check:checked+label .icon:after {
+    -webkit-transform: scale(1) rotate(-45deg);
+    transform: scale(1) rotate(-45deg);
+  }
+
+  .login-html .sign-in:checked+.tab+.for-pwd+.tab+.login-form .sign-in-htm {
+    -webkit-transform: rotate(0);
+    transform: rotate(0);
+  }
+
+  .login-html .for-pwd:checked+.tab+.login-form .for-pwd-htm {
+    -webkit-transform: rotate(0);
+    transform: rotate(0);
+  }
+
+  .hr {
+    height: 2px;
+    margin: 60px 0 50px 0;
+    background: rgba(255, 255, 255, .2);
+  }
+
+  .foot-lnk {
+    text-align: center;
+  }
+
+  .brand-logo-text {
+    /* font-family: 'Goldman', cursive; */
+    font-weight: 700;
+  }
+
+</style>
+<div class="loginbody" full-size>
+  <div class="login-wrap" style="height: 100%;">
+    <div class="login-html">
+      <h1 class="text-center brand-logo-text">SMP</h1>
+      <hr style="margin: 10px 0 20px 0;" class="hr" />
+      <input id="tab-1" type="radio" name="tab" class="sign-in" checked><label for="tab-1" class="tab">Sign In</label> /
+      <input id="tab-2" type="radio" name="tab" class="for-pwd"><label for="tab-2" class="tab">Register</label>
+      <div class="login-form">
+        <div class="sign-in-htm">
+          <form ng-submit="login()">
+            <div class="group">
+              <label for="user" class="label">Your Mobile Number</label>
+              <input ng-model="username" id="loginMobile" ng-change="count('username', 10, '#loginPassword')"
+                maxlength="10" type="tel" class="input">
+            </div>
+            <div class="group">
+              <label for="pass" class="label">Your PIN</label>
+              <input ng-model="password" id="loginPassword" ng-change="count('password', 4, '#loginButton')"
+                maxlength="4" type="tel" class="input">
+            </div>
+            <div class="group">
+              <input type="submit" id="loginButton" class="btn btn-block btn-outline-primary" value="Sign In" />
+            </div>
+          </form>
+          <div style="margin: 0;" class="hr"></div>
+
+        </div>
+        <div class="for-pwd-htm">
+          <form ng-submit="register()">
+            <div class="group">
+              <label for="user" class="label">Your Name</label>
+              <input ng-model="name" type="text" class="input">
+            </div>
+            <div class="group">
+              <label for="user" class="label">Your Mobile Number</label>
+              <input ng-model="username" ng-change="count('username', 10, '#registerPin')" maxlength="10" type="tel"
+                class="input">
+            </div>
+            <div class="group">
+              <label for="pass" class="label">Your PIN</label>
+              <input ng-model="password" id="registerPin" maxlength="4" type="tel" class="input">
+            </div>
+            <div class="group">
+              <input type="submit" class="btn btn-block btn-outline-primary" value="Submit" />
+            </div>
+          </form>
+          <div style="margin: 0;" class="hr"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

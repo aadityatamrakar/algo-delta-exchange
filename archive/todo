@@ -1,0 +1,125 @@
+No change strike audi
+
+3. Audi SL - 
+Copy of current B4 which reenters at 1 PM if there is no switch along with 80/20 logic
+
+Current Stretegy consist of SL of 750 on every strangle. Sometime SL hit and stretegy stop but original stretegy recovered and remains with same position without switch for long time.
+Enter at 1 pm if 1st strangle of B1 remained continue.
+
+4. AudiPC-800 - 
+Copy of current B4 which reenters at 1 PM if there is no switch along with 80/20 logic and 800 profit booking in each Strangle
+
+Current Stretegy consist of SL of 750 on every strangle. Sometime SL hit and stretegy stop but original stretegy recovered and remains with same stretegy for long time. Enter at 1 pm if 1st strangle of B1 remained continue.
+
+5. AudiPS- 600 - 
+Copy of current B4 which reenters at 1 PM if there is no switch along with 80/20 logic and 600 profit booking and STOP the Strategy for the Day.
+
+market watch 
+1. nifty 50 stocks , nifty , banknifty
+2. live color light
+3. buy sell vwap color
+4. sms api order book
+5. 
+
+AlgoMaker@987
+
+{
+    "name" : "A1528",
+    "username" : "Arhamshare (A1528)",
+    "broker" : "arhamshare",
+    "strategy" : {
+        "BN_LowRisk" : 1,
+        "BN_Strangle" : 1
+    },
+    "credentials" : {
+        "appKey": "664729fa32384b1cad9565",
+        "secretKey": "Lime358@7u",
+        "url":"http://mtrade.arhamshare.com:3000/interactive"
+    },
+    "config" : {},
+    "margins" : {}
+}
+
+{
+	"tradingsymbol": "BANKNIFTY20DEC31000PE",
+	"transaction_type": "BUY",
+	"order_type": "MARKET",
+	"quantity": 25,
+	"trigger_price": 0,
+	"price": 0,
+    "tag": "ALGOMAKER_SQF"
+}
+
+mongodump --uri mongodb+srv://admin:v1tsm2CAwz1qFi7g@cluster0.yaiyk.mongodb.net/algo 
+
+db.createUser(
+   {
+     user: "aaditya",
+     pwd: "Algo987",
+     roles: [ "readWrite", "dbAdmin" ]
+   }
+)
+
+db.getCollection('strategyPNL').aggregate([
+    { $match: { strategy: "Tesla" } },
+    { $group: { _id: {$dateToString: {date: "$ts", format: "%Y-%m-%d"}}, maxPnl: { $max: "$m2m" }, minPnl: { $min: "$m2m" } }},
+    { $sort: {maxPnl: 1} }
+])
+
+db.getCollection('xtsAccount').update({}, {$set: {token: false}}, {multi:true})
+
+{
+    "instrumentId": "48840",
+    "type": "SELL",
+    "quantity": 175,
+    "tag": "AudiB2"
+}
+
+{
+    "instrumentId": "48847",
+    "type": "SELL",
+    "quantity": 175,
+    "tag": "AudiB2"
+}
+
+{
+    "_id" : ObjectId("62d0b50ac1445e24cede047c"),
+    "broker" : "ArhamWealth",
+    "credentials" : {
+        "user_id" : "AW0198",
+        "password" : "Jigar@8070",
+        "twofa" : "123456",
+        "token" : "nUKgLnWcnIreNhDwjWcbrLTjDtUDBpnK0id7kMIACAo.uPGuajPK1b6HI10TlJ64L-PM9AqHLWTpLrBGHyLHXmc"
+    },
+    "margins" : "0",
+    "name" : "AW0198",
+    "server_url" : "https://klevertrade.arhamwealth.com",
+    "username" : "AW0198",
+    "margin" : NumberInt(4300000),
+    "fullname" : "AW0198",
+    "strategy" : {
+
+    }
+}
+
+{
+    "updateTs": "2022-01-21T03:46:50.227Z",
+    "updateType": "order",
+    "strategy": "Lion_ZZJ4351",
+    "params": [
+        "12"
+    ],
+    "status": "Filled",
+    "price": "187"
+}
+
+1. send order id to redis stream
+2. listen to stream events for order id and fetch order status after 1 second if order was market type
+3. generate positions from orderbook function, incremental updates from redis stream
+4. rebuild orderbook from scratch
+5. sync orderbook with xts api function
+6. orderbook in redis structure
+7. 
+
+
+db.getCollection("paper-trade").deleteMany({order_timestamp: {$gte: new Date("2023-08-17")}})

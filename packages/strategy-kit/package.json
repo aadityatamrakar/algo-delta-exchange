@@ -1,0 +1,15 @@
+{
+  "name": "@algomaker/strategy-kit",
+  "version": "1.0.0",
+  "description": "StrategyBase with fully injected dependencies, plus the golden-master replay harness that verifies a port against the legacy file.",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "node --test test/*.test.ts" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@algomaker/core": "1.0.0",
+    "@algomaker/instruments": "1.0.0",
+    "@algomaker/marketdata-core": "1.0.0",
+    "@algomaker/order-bus": "1.0.0"
+  }
+}
