@@ -13,7 +13,6 @@
 
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { OptionMaster } from '@algomaker/instruments'
 import { connectWithRetry, installCrashGuards } from '@algomaker/core'
 import { connectMongo } from './mongo.ts'
 import { requireMasterKey } from './brokerstore.ts'
@@ -38,6 +37,7 @@ import {
 import type { DeskMode } from './contract.ts'
 import { streamRoutes } from './routes/stream.ts'
 import { loadStoredInstruments } from '../../marketdata/src/sync-runner.ts'
+import { MasterRefresher, collectionFingerprint } from './master-refresh.ts'
 import type { ApiDeps } from './routes/kit.ts'
 import { API_VENUE } from './venue.ts'
 import { createAuthGate } from './authsvc.ts'
@@ -267,25 +267,32 @@ export async function main(): Promise<void> {
 
   // Instrument master, refreshed from Mongo. The sync job owns writing it; this
   // process only reads, so a sync failure degrades to a stale master rather
-  // than an empty one.
-  let master = new OptionMaster(await loadStoredInstruments(mongo.db.collection('instrument')))
-  log('instrument master loaded', { contracts: master.optionCount })
-  const masterProvider: MasterProvider = { current: () => master }
+  // than an empty one. A load that lands mid-sync holds only the rows written
+  // so far, so a cheap change check reloads as soon as the sync adds rows
+  // (`master-refresh.ts`), and the full reload covers in-place edits.
+  const instrumentCol = mongo.db.collection('instrument')
+  const masterSource = new MasterRefresher(
+    {
+      load: () => loadStoredInstruments(instrumentCol),
+      fingerprint: () => collectionFingerprint(instrumentCol),
+    },
+    log,
+  )
+  await masterSource.reload('boot')
+  const masterProvider: MasterProvider = { current: () => masterSource.current() }
 
   const refreshMs = Number(process.env['DESK_MASTER_REFRESH_MS'] ?? 15 * 60_000)
+  const checkMs = Number(process.env['DESK_MASTER_CHECK_MS'] ?? 10_000)
+  const masterFailed = (err: unknown): void =>
+    log('instrument master refresh failed', { error: err instanceof Error ? err.message : String(err) })
   const refresh = setInterval(() => {
-    void (async () => {
-      try {
-        master = new OptionMaster(await loadStoredInstruments(mongo.db.collection('instrument')))
-        log('instrument master refreshed', { contracts: master.optionCount })
-      } catch (err) {
-        log('instrument master refresh failed', {
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    })()
+    masterSource.reload('scheduled').catch(masterFailed)
   }, refreshMs)
   refresh.unref()
+  const masterCheck = setInterval(() => {
+    masterSource.reloadIfChanged().catch(masterFailed)
+  }, checkMs)
+  masterCheck.unref()
 
   // Defaults sized from the LIVE BHEL chain (2026-07-27): individual stock
   // option contracts tick roughly every 30s, so a per-token age limit anywhere
