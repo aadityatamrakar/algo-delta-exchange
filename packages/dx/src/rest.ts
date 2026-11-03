@@ -125,6 +125,16 @@ export class DxRest {
     return env.result ?? []
   }
 
+  /** One product, `/v2/products/{symbol}` (its `product_specs` carry the OI cap). */
+  async product(symbol: string): Promise<DxProduct> {
+    return this.#result(await this.#request<DxProduct>('GET', `/v2/products/${encodeURIComponent(symbol)}`, {}, undefined, false))
+  }
+
+  /** One ticker, `/v2/tickers/{symbol}` (its `oi_value_usd` and `oi_reduce_only_mode`). */
+  async ticker(symbol: string): Promise<DxTicker> {
+    return this.#result(await this.#request<DxTicker>('GET', `/v2/tickers/${encodeURIComponent(symbol)}`, {}, undefined, false))
+  }
+
   // ---------------------------------------------------------------- signed
 
   async placeOrder(o: DxOrderRequest): Promise<DxOrder> {

@@ -40,7 +40,7 @@ import { chooseRail, stampedPaperRail, type OrderRail, type PaperRailChoice } fr
 import { orderMode } from './journal.ts'
 
 /** What the demo rail needs of a REST client (a fake in tests). */
-export type DemoRest = DxTradingClient & Pick<DxRest, 'products' | 'fills' | 'heartbeat'>
+export type DemoRest = DxTradingClient & Pick<DxRest, 'products' | 'fills' | 'heartbeat' | 'product' | 'ticker'>
 
 export interface DemoRailDeps {
   /** The demo settings; throws when demo is not configured (`loadDxDemoConfig`). */

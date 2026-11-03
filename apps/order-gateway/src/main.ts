@@ -80,6 +80,7 @@ import {
 } from './dx-edge.ts'
 import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore } from './dx-config.ts'
 import { DemoRail, createAdapterRouter, demoKeyReadiness, holdsLegs } from './dx-demo.ts'
+import { OiCapGate } from './dx-oicap.ts'
 import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
 import {
   BROKER_SNAPSHOT_COLLECTION,
@@ -430,6 +431,13 @@ export interface PlacerPorts {
    * same refusal live would make. Absent (NSE) is no cap.
    */
   readonly capRefusal?: (order: GatewayOrderDoc, contract: ResolvedContract | null) => string | null
+  /**
+   * THE DELTA OI CAP (`dx-oicap.ts`): why this order's opening PACKAGE must not
+   * be sent — one of its legs is on a product Delta has in reduce-only mode on
+   * the venue `rail` names — or null. Every leg of the package gets the same
+   * answer, so none is sent. Closes are never refused. Absent (NSE) is no check.
+   */
+  readonly oiCapRefusal?: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) => Promise<string | null>
   /** Gate 2 — the Strategies page switch. Not asked of a PAPER order. */
   readonly allowsLive: (tag: string) => Promise<boolean>
   /** Gate 3 — the kill switch. */
@@ -916,6 +924,20 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
       await refuseSlice(laterSlice(tranches), {
         clientOrderId, tag: order.tag, tradingsymbol: order.tradingsymbol,
         reason: capped, phase: 'FAILED', errorClass: 'fatal', label: 'CAPPED', mode,
+      })
+      return
+    }
+
+    /**
+     * Delta's open-interest cap, asked of the WHOLE opening package before its
+     * first leg goes out (`dx-oicap.ts`): a straddle with one leg on a product
+     * in reduce-only mode would fill the other leg alone.
+     */
+    const oiCapped = (await ports.oiCapRefusal?.(order, clientOrderId, routed.rail)) ?? null
+    if (oiCapped !== null) {
+      await refuseSlice(laterSlice(tranches), {
+        clientOrderId, tag: order.tag, tradingsymbol: order.tradingsymbol,
+        reason: oiCapped, phase: 'FAILED', errorClass: 'fatal', label: 'OI-CAP', mode,
       })
       return
     }
@@ -2168,6 +2190,25 @@ export async function main(): Promise<void> {
   /** Read once; a typo stops the boot. NSE has no caps. */
   const dxCaps = onDx ? dxCapsFromEnv(process.env) : null
   if (dxCaps !== null) log('DX caps', { ...dxCaps })
+  /** Delta's per-product OI cap, checked per opening package on the rail it goes to. */
+  const oiCapGate = onDx
+    ? new OiCapGate({
+        venueFor: (rail) => (rail === 'live' ? dxRest : rail === 'demo' ? (demoRail?.rest ?? null) : null),
+        loadPackage: async (decisionId) => {
+          const d = await mongo.db.collection('desk-decisions').findOne({ decisionId })
+          const planned = d?.['plannedFills']
+          if (!Array.isArray(planned)) return null
+          return planned.map((f: Record<string, unknown>) => ({
+            tradingsymbol: String(f['tradingsymbol'] ?? ''),
+            qty: Number(f['qty'] ?? 0),
+            ...(typeof f['op'] === 'string' ? { op: f['op'] } : {}),
+          }))
+        },
+        index: () => btcIndex,
+        now: () => Date.now(),
+        log,
+      })
+    : null
   const placer = createOrderPlacer({
     queue,
     journal,
@@ -2230,6 +2271,12 @@ export async function main(): Promise<void> {
               deskOp: order.desk_op,
               index: btcIndex,
             }),
+        }),
+    ...(oiCapGate === null
+      ? {}
+      : {
+          oiCapRefusal: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) =>
+            oiCapGate.refusal(order, clientOrderId, rail),
         }),
     allowsLive,
     readHalt,
