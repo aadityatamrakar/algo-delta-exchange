@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { skipUnlessMongo } from '../../api/test/require-mongo.ts'
 import { connectMongo, type MongoHandle } from '../../api/src/mongo.ts'
 import { DeskStore } from '../../api/src/store.ts'
+import { DX } from '@algomaker/venue'
 import { listOpenBooks, mongoSettlementBooker, planDxSettlement, countWorking } from '../src/dx-settlement.ts'
 
 const URL_MONGO = process.env['DESK_TEST_MONGO_GW_SETTLE'] ?? 'mongodb://127.0.0.1:27017/algomaker_dx_gw_settle_test'
@@ -61,10 +62,11 @@ test('a settled short leg is closed on desk-books at Delta\'s price, once', asyn
   const fill = (decisions[0]?.['fills'] as Record<string, unknown>[])[0]
   assert.deepEqual(
     { op: fill?.['op'], side: fill?.['side'], qty: fill?.['qty'], price: fill?.['price'], ts: fill?.['ts'] },
-    { op: 'close', side: 'Buy', qty: 0.05, price: 412.3, ts: INSTANT },
+    { op: 'close', side: 'Buy', qty: 0.05, price: 412.3, ts: INSTANT - 1 },
   )
   assert.ok(Number(fill?.['fee']) > 0)
-  assert.equal(decisions[0]?.['createdAt'], INSTANT, 'booked on the settlement instant')
+  assert.equal(decisions[0]?.['createdAt'], INSTANT - 1, 'booked on the last ms of the settled day')
+  assert.equal(DX.dayKey(Number(decisions[0]?.['createdAt'])), EXPIRY)
   const after = await db.collection('desk-books').findOne({ tag: 'BS-D1', mode: 'paper' })
   const open = ((after?.['legs'] ?? []) as { qty: number }[]).filter((l) => l.qty !== 0)
   assert.equal(open.length, 0, 'the leg is gone')

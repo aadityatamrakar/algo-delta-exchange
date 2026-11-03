@@ -17,11 +17,10 @@
  */
 
 import { splitIntoTranches, type FreezeLimits } from '@algomaker/instruments'
-import { roundToStep } from '@algomaker/venue'
+import { roundToStep, venueFromEnv } from '@algomaker/venue'
 // The desk's ONE definition of "this op only reduces exposure", shared rather
 // than restated: a second spelling of it here is a second thing to get wrong,
 // and the two would disagree about `roll` on the day one of them changed.
-import { venueFromEnv } from '@algomaker/venue'
 import { reducesExposure } from './queue.ts'
 import type { OrderIntent } from '@algomaker/order-bus'
 import type { PlacedOrder } from '@algomaker/brokers'
@@ -381,7 +380,7 @@ function dialLots(v: number | undefined): number | undefined {
 export function trancheQtyThrough(plan: readonly TranchePlanEntry[], cursor: number): number {
   let qty = 0
   for (let i = 0; i <= cursor && i < plan.length; i++) qty += plan[i]?.qty ?? 0
-  return qty
+  return onStep(qty)
 }
 
 /** What a gated order does next, once its current slice is accounted for. */
@@ -465,7 +464,7 @@ export function decideTrancheStep(input: {
   if (cursor >= plan.length - 1) return { kind: 'settle' }
 
   const due = trancheQtyThrough(plan, cursor)
-  const shortfall = Math.max(0, due - agg.filledQty)
+  const shortfall = Math.max(0, onStep(due - agg.filledQty))
   if (shortfall === 0 && agg.rejected.length === 0) return { kind: 'advance', from: cursor, shortfall: 0 }
 
   // The exit exemption. See rule 3: the remaining tranches of a close are the
@@ -661,7 +660,18 @@ export function packedToExchangeToken(packed: unknown, tokensPacked: boolean = T
  * built to echo (`packedTokens: false`) — so unpacking it would compare 9001
  * against 35 and refuse every fill's attribution. Read once, at import.
  */
-const TOKENS_PACKED = venueFromEnv(process.env).id !== 'dx'
+const VENUE = venueFromEnv(process.env)
+const TOKENS_PACKED = VENUE.id !== 'dx'
+
+/**
+ * A sum of fill quantities, cleaned onto the venue's step. Raw floats drift on
+ * Delta's 0.001 grid (0.001 + 0.001 + 0.001 = 0.0030000000000000005), and a
+ * sum that misses `expectedQty` by 5e-19 leaves a filled order working forever.
+ * NSE's step is 1, where this is the identity on whole shares.
+ */
+function onStep(qty: number): number {
+  return roundToStep(qty, VENUE.qtyStep)
+}
 
 /**
  * Fold a broker update into a fill record.
@@ -875,10 +885,12 @@ export function aggregateTranches(
     return f === undefined || !isTerminalStatus(f.status)
   })
 
+  filledQty = onStep(filledQty)
+  pricedQty = onStep(pricedQty)
   return {
     filledQty,
     avgPrice: pricedQty === 0 ? null : notional / pricedQty,
-    complete: filledQty >= expectedQty,
+    complete: filledQty >= onStep(expectedQty),
     rejected,
     allTerminal: working.length === 0,
     working,
