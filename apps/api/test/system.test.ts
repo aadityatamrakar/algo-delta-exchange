@@ -856,3 +856,32 @@ test('DX: the demo comparison is its own card, and a divergence there needs atte
   // NSE has no demo rail and no demo card.
   assert.equal((await report(healthy())).components.some((c) => c.id === 'positions-truth-demo'), false)
 })
+
+test('DX: the Delta testnet price socket rides on the market-data card, down included', async () => {
+  const withDemo = (demo: Record<string, unknown>) =>
+    harness({
+      venue: DX,
+      feedHealth: {
+        payload: {
+          sockets: [{ socket: 0, connected: true, tokens: 300, downForMs: null }],
+          tokens: 300,
+          session: true,
+          instrumentSyncDay: '2026-11-03',
+          instrumentsStale: false,
+          demo,
+        },
+        receivedAt: NOW - 3_000,
+      },
+      marks: { spotQuote: () => ({ price: 76543.21, asOf: NOW - 2_000 }) } as unknown as ApiDeps['marks'],
+      busConnected: () => true,
+    })
+  const up = { url: 'wss://socket-ind-pub.testnet.deltaex.org', connected: true, downForMs: null, tokens: 4, staleTokens: 0, oldestAgeMs: 0 }
+  const md = find(await report(withDemo(up)), 'dx-marketdata')
+  assert.deepEqual(md.extra?.['demo'], up)
+  assert.match(md.detail, /Delta testnet prices: 4 contracts/)
+
+  const down = { ...up, connected: false, downForMs: 42_000 }
+  const mdDown = find(await report(withDemo(down)), 'dx-marketdata')
+  assert.deepEqual(mdDown.extra?.['demo'], down)
+  assert.match(mdDown.detail, /Delta testnet price socket DOWN for 42s/)
+})
