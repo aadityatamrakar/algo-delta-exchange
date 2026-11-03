@@ -65,7 +65,7 @@ apps/web/dist/
 *.tsbuildinfo
 .claude/
 
-# Written into the repo root by legacy archive/server tools (seen 2026-09-15).
+# Written into the repo root by the retired legacy server tools (seen 2026-09-15).
 # Nothing live reads them; they are scratch output, never source.
 optionConfig_*.json
 cancelledOrders.json
@@ -73,21 +73,6 @@ rejectedOrders.json
 
 # Real trader data supplied for analysis (ODIN OnLineBackup, screenshots) — holds client codes, never commit
 trader-data-sample/
-
-# Traders parser fixtures are samples of ODIN files; the repo-wide *.csv/*.log/*.dat rules would hide them
-!apps/traders/test/fixtures/**
-# Watcher build output
-apps/watcher/dist/
-apps/web/dist-traders/
-
-# SPAN/exposure/bhavcopy parser fixtures; the repo-wide *.csv rules would hide them
-!packages/span/test/**
-# The NSE jobs' fixtures (scripts/test_*.py): bhavcopy and CMVOLT samples the *.csv rule would hide
-!scripts/fixtures/**
-
-# NSE SPAN/exposure/bhavcopy downloads and the span job venv
-/data/
-/.venv-nse/
 
 # Python bytecode
 __pycache__/

@@ -60,7 +60,7 @@ endef
 #
 #   make deploy-remote DEPLOY_HOST=ubuntu@1.2.3.4 SSH_KEY=~/.ssh/desk.pem
 #
-# The IP is already in docs/SERVER-REBUILD.md; the KEY is not, and must not be.
+# The IP may live in this file; the KEY must not.
 DEPLOY_HOST ?= ubuntu@3.108.231.230
 DEPLOY_PATH ?= /opt/algomaker-delta
 # The key PATH is not a secret and the key itself is outside the repo, so
@@ -71,8 +71,7 @@ SSH_OPTS    := $(if $(SSH_KEY),-i $(SSH_KEY),)
 
 .DEFAULT_GOAL := help
 .PHONY: help up down restart deploy deploy-remote status-remote logs-remote status logs logs-api logs-gateway logs-md live \
-        logs-runner strategies sync seed positions feed check test typecheck web mongo-up e2e clean-logs \
-        watcher watcher-test
+        logs-runner strategies feed check test typecheck web mongo-up e2e clean-logs
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -193,22 +192,6 @@ mongo-up: ## Ensure the local MongoDB replica set is running
 	  try{const h=await connectMongo('$(MONGO)',{serverSelectionTimeoutMS:3000});await h.close();\
 	  console.log('mongo ok')}catch(e){console.error('MONGO UNREACHABLE:',e.message);process.exit(1)}})()" 2>/dev/null
 
-sync: ## Refresh instruments + NSE and BSE freeze limits
-	@DESK_MONGO_URL=$(MONGO) $(NODE) apps/api/src/cli.ts sync
-	@DESK_MONGO_URL=$(MONGO) $(NODE) -e "(async()=>{\
-	  const {connectMongo}=await import('./apps/api/src/mongo.ts');\
-	  const {syncFreezeLimits,syncBseFreezeLimits}=await import('./apps/marketdata/src/sync-runner.ts');\
-	  const h=await connectMongo(process.env.DESK_MONGO_URL);\
-	  await syncFreezeLimits({collection:h.db.collection('desk-freeze-limits'),log:(m,c)=>console.log(m,c||'')});\
-	  await syncBseFreezeLimits({collection:h.db.collection('desk-freeze-limits'),log:(m,c)=>console.log(m,c||'')});\
-	  await h.close()})()" 2>/dev/null
-
-seed: ## Seed the BHEL opening position (paper)
-	@DESK_MONGO_URL=$(MONGO) $(NODE) apps/api/src/cli.ts seed-bhel --replace
-
-positions: ## Print the BHEL book with greeks
-	@DESK_MONGO_URL=$(MONGO) $(NODE) apps/api/src/cli.ts positions BHEL --spot $${SPOT:-417}
-
 # --------------------------------------------------------------- frontend
 
 web: ## Run the dashboard dev server
@@ -225,20 +208,4 @@ test: ## Full test suite
 typecheck: ## Typecheck everything
 	npm run typecheck
 
-# ------------------------------------------------------------------ watcher
-# The Windows folder watcher (apps/watcher). Pure Go, no third-party modules.
-
-GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
-WATCHER_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-
-watcher: ## Build apps/watcher/dist/watcher.exe (Windows amd64, pure Go) and the download, dist/delta-desk-watcher.zip
-	cd apps/watcher && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "-H=windowsgui -X main.version=$(WATCHER_VERSION)" -o dist/watcher.exe .
-	# the zip: the exe, install.cmd, its script and the README, with Windows line endings; served at /download/ (runbook section 8)
-	cd apps/watcher && rm -rf dist/kit && mkdir dist/kit && cp dist/watcher.exe dist/kit/ \
-	  && for f in install/*; do sed 's/\r*$$/\r/' "$$f" > "dist/kit/$${f#install/}"; done \
-	  && rm -f dist/delta-desk-watcher.zip && cd dist/kit && python3 -m zipfile -c ../delta-desk-watcher.zip * && cd .. && rm -rf kit
-
-watcher-test: ## Go vet (linux + windows) and tests for the watcher
-	cd apps/watcher && CGO_ENABLED=0 $(GO) vet ./... && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) vet ./... && CGO_ENABLED=0 $(GO) test ./...
-
-check: typecheck test watcher-test ## Typecheck + tests
+check: typecheck test ## Typecheck + tests

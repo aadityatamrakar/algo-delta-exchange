@@ -1,70 +1,82 @@
-# algomaker — desk execution system
+# algomaker-delta — the Delta desk
 
-Execution bridge and dashboard for the Python trading desk
-(`algo-engine/sensibull-desk`), which owns all trading logic. This side routes
-orders, computes greeks independently from the live feed, and reports what
-actually happened.
+Paper option books on **Delta Exchange India BTC options**, run 24x7 by the supervisor, with every
+Dial editable while the book runs. The first strategy is **BULL-S** (an ATM straddle pyramid on
+strike crossings), in 1-strike and 2-strike jumps across daily, weekly and monthly expiries. P&L is
+in USD, net of Delta fees.
 
-> **2026-07-27: full cutover.** The previous LoopBack system is retired and
-> frozen in [`archive/`](archive/README.md). Do not fix anything there — new
-> work goes in `packages/` and `apps/`.
+This repo was cloned from the live NSE desk (`/opt/algomaker`, at `0d390c37`). It shares that desk's
+machinery but is **isolated** from it: own database, ports, pm2 names and cookies.
 
-## Quick start
+| | NSE desk (live, not this repo) | This repo |
+|---|---|---|
+| Mongo db | `algomaker` | `algomaker_dx` (tests: `algomaker_dx_*`) |
+| Ports | 87xx | **8890–8897** |
+| pm2 | namespace `desk`, `desk-*` | namespace `dx`, **`dx-*`** |
 
-```bash
-make up        # start everything, SIMULATED broker (cannot place real orders)
-make status    # processes + feed readiness
-make logs      # follow
-make down      # stop
-make help      # everything else
-```
+`packages/core/test/dx-isolation.test.ts` fails on any live port, database, pm2 name or cookie in
+a tracked source file. Never edit, run or restart anything of `/opt/algomaker` from here.
 
-`make up` is safe by construction: the gateway runs `DESK_BROKER=simulate`, and
-only `make live` (which asks for confirmation) reaches a real broker. A
-forgotten flag should never be the difference between a dry run and real money.
+**Status (3 Nov 2026):** being built in lanes — see the [plan](docs/plans/2026-11-03-dx-bull-s-plan.md).
+Until the Delta feed and gateway lanes land, `apps/marketdata` and `apps/order-gateway` still carry
+their NSE (Kite, XTS) code.
 
-The feed needs **60–90 seconds** to warm up after a start — far strikes trade
-rarely, so their first tick takes a while. `make feed` reports readiness, which
-is measured against *the legs you actually hold*, not chain coverage.
+## Processes
+
+| pm2 | Entry | What it does |
+|---|---|---|
+| `dx-api` | `bin/desk-bridge.mjs` → `apps/api` | HTTP + WS on :8890. Books, Dials, orders, P&L, kill switch, auth; the dashboard's only API |
+| `dx-marketdata` | `bin/desk-marketdata.mjs` → `apps/marketdata` | Instruments and the price feed; bus on :8891 (`md.tick`, `md.spot`, `md.health`) |
+| `dx-gateway` | `bin/desk-gateway.mjs` → `apps/order-gateway` | The only process that can place a live order. Defaults to the simulator. The Delta rule (plan Task 6, not built yet): it sends to Delta only when `mode === 'live'` AND `DESK_DX_LIVE=1`, and everything else goes to the simulator |
+| `dx-supervisor` | `bin/desk-supervisor.mjs` → `apps/supervisor` | Converges the book registry and runs each book's decide path (`packages/desk-engine`) |
+| `dx-runner` | `bin/desk-runner.mjs` → `apps/runner` | Hosted-strategy runner. Defined, **not started** this round (spec §5) |
+| web | `apps/web` (Vite build) | The dashboard, served as static files |
+
+`ecosystem.desk.config.cjs` defines the pm2 apps. Starting and restarting them is the **operator's** job.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `apps/api` | The bridge. HTTP :8890 — actions, positions+greeks, diff, kill switch, close-all |
-| `apps/marketdata` | One Kite login, socket pool (900 tokens each), instrument + freeze sync, bus :8891 |
-| `apps/order-gateway` | The only process that places live orders. Splits under the exchange freeze limit, journals every attempt |
-| `apps/runner` | Supervises the hosted strategies. **Squares off open positions on SIGTERM** — never restart it mid-session |
+| `apps/api` | The bridge: routes, rails (paper / live), P&L jobs, auth |
+| `apps/marketdata` | Feed, instrument sync, marks, history |
+| `apps/order-gateway` | Claim, split, place, correlate fills, journal |
+| `apps/supervisor` | Book hosting on top of `packages/desk-engine` |
+| `apps/runner` | Hosted-strategy runner (skeleton; its catalogue is `premium-leg-book` only) |
 | `apps/web` | React 19 + Vite dashboard |
-| `packages/` | Pure, tested libraries: instruments, greeks, brokers, order-bus, strategies, bus |
-| `context/`, `memory/`, `docs/` | Architecture docs, distilled facts, plans |
-| `archive/` | The retired system, frozen |
-
-## Safety properties worth knowing
-
-- **Paper and live are separate collections.** A paper order cannot reach a
-  broker by construction, not by discipline.
-- **Idempotency is a unique database index** on `decisionId`, not a
-  read-then-write — several Python clients race.
-- **A halt blocks new exposure and never an exit.** Close-all works while the
-  kill switch is engaged; that is its purpose.
-- **Nothing incomplete is presented as complete.** A book whose legs cannot all
-  be marked reports `complete: false` and names what is missing, rather than a
-  net delta of zero that reads as "flat".
-- **Every order submission is journalled** to `desk-order-events`, with the
-  broker's own message and its error class.
+| `packages/desk-engine` | The book decide paths (pure): state, dials, presets, triggers |
+| `packages/strategies` | `premium-leg-book` (the NSE BULL/LION port) and its golden tape — the BULL-S parity reference |
+| `packages/*` | The other pure, tested libraries: core, bus, instruments, marketdata-core, greeks, payoff, pnl, brokers, order-bus, auth, secrets, strategy-kit, strategy-config |
+| `bin/` | pm2 entry points and CLIs (`desk-user.mjs`, `desk-reset.mjs`, `desk-payoff.mjs`, `desk-stall-watch.mjs`) |
+| `scripts/` | `deploy.sh`, `dryrun-feed.mjs` (a scripted bus feed for rehearsals) |
+| `docs/` | See [docs/README.md](docs/README.md) |
 
 ## Testing
 
+Run everything at low priority. The api suites use real Mongo test databases (`algomaker_dx_*`).
+
 ```bash
-make check                                # typecheck + both suites
-cd apps/web && npx tsc -b                 # NOT covered by the above — run it too
+npm run typecheck                         # root project + apps/web
+cd apps/web && npx tsc -b                 # the dashboard's own build check
+DESK_REQUIRE_MONGO=1 nice -n 19 node --test --test-concurrency=2 \
+  'packages/*/test/**/*.test.ts' 'apps/*/test/**/*.test.ts'
+nice -n 19 npm run test --workspace @algomaker/web -- --maxWorkers=2
 ```
 
-`make check` is the root typecheck plus `test:node` (node:test) and `test:web` (vitest). The root
-typecheck **excludes `apps/web`** — `tsconfig.json` lists it in `exclude` and globs only `*.ts` —
-so the dashboard's own `tsc -b` is a separate, necessary step. A type error reached the server this
-way on 2026-07-28. See `context/13-development-workflow.md` §4.
+The root typecheck excludes `apps/web`, and the node glob does not run the dashboard's `.test.tsx`
+files, so all four are needed. Tests never reach the network: Delta REST/WS are exercised through
+fixtures.
 
-`DESK_BROKER=simulate` runs the entire live path — durable write, nudge, claim,
-freeze split, placement, fill correlation, journal — with no broker account.
+## Safety properties
+
+- **Paper and live are separate rails.** Paper is filled by the simulator, never by a venue.
+- **Idempotency is a unique database index**, not a read-then-write.
+- **A halt blocks new exposure and never an exit.** Close-all works while the kill switch is on.
+- **Nothing incomplete is presented as complete.** A book that cannot mark every leg says so and
+  names what is missing.
+- **Every order submission is journalled** to `desk-order-events`.
+
+## Upstream fixes
+
+`upstream` is the NSE repo, fetchable but not pushable. To bring an NSE fix across:
+`git fetch upstream && git cherry-pick <sha>`.

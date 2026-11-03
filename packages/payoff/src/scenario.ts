@@ -87,7 +87,7 @@ const IST_OFFSET_MS = 330 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
 const OPEN_MS = (9 * 60 + 15) * 60 * 1000 // 09:15 as ms into the IST day
 /** 15:40 IST, the F&O close and the expiry instant `yearsToExpiry` prices to
- * (core's `FNO_CLOSE_MIN`; pinned by apps/traders/test/fno-close.test.ts). */
+ * (core's `FNO_CLOSE_MIN`; pinned by packages/payoff/test/fno-close.test.ts). */
 const CLOSE_MS = (15 * 60 + 40) * 60 * 1000
 
 const ZERO: ScenarioGreeks = { delta: 0, gamma: 0, vega: 0, theta: 0, vanna: 0, volga: 0 }

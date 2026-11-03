@@ -37,9 +37,6 @@ import { CATALOGUE } from './catalogue.ts'
 import { heldLegTokens } from './held-tokens.ts'
 import { HttpHistoryFetcher } from './history.ts'
 import { RunnerMarketData, type DeclaredSeries } from './market-data.ts'
-import { MIRRORS, MirrorHost } from './mirrors.ts'
-import { OptionbhaiClient } from './optionbhai.ts'
-import { resolveOptionbhaiOptions } from './optionbhai-env.ts'
 import {
   clearRequestTtlMs,
   HttpOrderGateway,
@@ -282,12 +279,7 @@ export async function main(): Promise<void> {
   // for them: a position left open by a mode that has since been switched off
   // is exactly the one nothing else will ever close, and the ledger has to be
   // loaded before `sync()` can stop that instance and flatten it.
-  // The MIRROR tags are in here too. They are hosted by `MirrorHost` rather
-  // than by `Runner`, but they submit through the same gateway and therefore
-  // book into the same ledger — and `PositionLedger.load()` throws if it is
-  // called after anything has been booked, so it has to happen here, before a
-  // mirror can be started, exactly like a strategy's.
-  for (const tag of [...CATALOGUE.keys(), ...MIRRORS.keys()]) {
+  for (const tag of CATALOGUE.keys()) {
     for (const mode of ['paper', 'live'] as const) await ledgerFor(tag, mode).load()
   }
   log.info('position ledgers loaded', {
@@ -350,8 +342,8 @@ export async function main(): Promise<void> {
    * instead; this pass consumes it on the sync cadence. Single writer, no
    * restart, and the operator's name is in the journal.
    *
-   * IT IS DRIVEN BY THE COLLECTION, NOT BY `ledgers`. The map holds CATALOGUE ∪
-   * MIRRORS, and the bridge accepts a clear for any instance whose
+   * IT IS DRIVEN BY THE COLLECTION, NOT BY `ledgers`. The map holds the
+   * CATALOGUE, and the bridge accepts a clear for any instance whose
    * `runner:positions` document exists — including a tag that has since been
    * retired from the catalogue. Iterating the map meant such a request was never
    * consumed: it stayed armed until the tag was re-added, and then fired, at
@@ -404,19 +396,16 @@ export async function main(): Promise<void> {
    * The underlying every order from this tag is keyed on, or null.
    *
    * A catalogue strategy trades ONE underlying and states it, so the freeze
-   * table is keyed exactly rather than derived. A MIRROR places whatever the
-   * upstream account traded — NIFTY one minute, SENSEX the next — so it has no
-   * single underlying to state, and null tells `HttpOrderGateway` to omit the
-   * field and let the bridge derive it per symbol. Guessing one fixed value
-   * would key the freeze split against the wrong table for every other symbol.
+   * table is keyed exactly rather than derived. (null, which tells
+   * `HttpOrderGateway` to let the bridge derive it per symbol, was the signal
+   * mirrors' answer; none are hosted now.)
    *
-   * A tag that is neither is still a hard error: it has no implementation here,
-   * so an order under it would be one nothing in this process ever built.
+   * Any other tag is a hard error: it has no implementation here, so an order
+   * under it would be one nothing in this process ever built.
    */
   const underlyingFor = (tag: string): string | null => {
     const entry = CATALOGUE.get(tag)
     if (entry !== undefined) return entry.underlying
-    if (MIRRORS.has(tag)) return null
     throw new Error(`${tag}: no hosted implementation, cannot place orders`)
   }
 
@@ -485,7 +474,7 @@ export async function main(): Promise<void> {
    * ledger shows one. The window is worst immediately after a crash, which is
    * exactly when this process is starting.
    */
-  for (const tag of [...CATALOGUE.keys(), ...MIRRORS.keys()]) {
+  for (const tag of CATALOGUE.keys()) {
     for (const mode of ['paper', 'live'] as const) await gatewayFor(tag, mode).load()
   }
   const held = [...gateways].filter(([, g]) => g.unresolvedCount > 0).map(([k]) => k)
@@ -575,9 +564,6 @@ export async function main(): Promise<void> {
    * copies of it would eventually disagree — at which point the runner would
    * start a strategy the bridge then refuses every order from, or worse, would
    * not start one the bridge is happily authorising.
-   *
-   * ONE READ, TWO HOSTS. `Runner` and `MirrorHost` see the same rows and apply
-   * the same per-mode switch to them.
    */
   const loadRegistryRows = async (): Promise<HostedRow[]> => {
     const docs = await mongo.db.collection('desk-strategies').find({}).toArray()
@@ -600,18 +586,7 @@ export async function main(): Promise<void> {
     clock: systemClock,
     log,
     factory,
-    /**
-     * The MIRROR rows are withheld from the runner, and this is the whole of
-     * the separation between the two hosts.
-     *
-     * `MirrorHost` runs them, and both hosts publish into the same
-     * `desk-strategy-runtime` collection keyed `tag:mode`. Left in, the runner
-     * would find no catalogue entry, park each mirror as `stopped` with "no
-     * hosted implementation", and overwrite the mirror's own runtime row with
-     * it every second — so the portal would report a mirror that is connected
-     * and mirroring orders as not running at all.
-     */
-    loadRows: async () => (await loadRegistryRows()).filter((r) => !MIRRORS.has(r.tag)),
+    loadRows: loadRegistryRows,
     positions: {
       // Per INSTANCE. `ledgerFor` is keyed `tag:mode`, so the live instance's
       // count can never be answered out of the paper instance's ledger.
@@ -625,72 +600,6 @@ export async function main(): Promise<void> {
       },
     },
     publish: runtimePublisher(mongo.db.collection(RUNTIME_COLLECTION), 'runner'),
-  })
-
-  /**
-   * The three optionbhai signal mirrors.
-   *
-   * Hosted here rather than in `CATALOGUE` because they are `SignalSource`
-   * adapters, not `StrategyBase` objects — see `mirrors.ts`. What they share
-   * with a hosted strategy is everything that matters operationally: the same
-   * registry row, the same per-mode switch, the same order gateway, and
-   * therefore the same strategy switch, kill switch, live allowlist, freeze
-   * split and journal. Until now these three ran as separate pm2 processes that
-   * wrote orders directly and were subject to none of that.
-   *
-   * The credentials come from the ENVIRONMENT, named by each config's
-   * `credentialsRef` (`optionbhai/1pbuy` -> `OPTIONBHAI_1PBUY_USER` /
-   * `OPTIONBHAI_1PBUY_PASS`; see `.env.local.example`). A mirror whose two
-   * variables are absent refuses to start and says which ones are missing.
-   * Nothing is read from a file in the repo — the legacy trio carried plaintext
-   * passwords, and they are still in git history.
-   *
-   * WHERE they connect is the environment too: `OPTIONBHAI_BASE_URL`,
-   * `OPTIONBHAI_SOCKET_URL`, `OPTIONBHAI_HOST_HEADER` (see `optionbhai-env.ts`
-   * and docs/DEPLOYMENT.md §6). Read once, here. A malformed value parks every
-   * mirror as `failed` with the reason rather than crashing the process — the
-   * strategies this process also hosts must not go down over a mirror URL.
-   */
-  const optionbhai = resolveOptionbhaiOptions(process.env, log)
-  const mirrorHost = new MirrorHost({
-    clock: systemClock,
-    log,
-    env: process.env,
-    loadRows: loadRegistryRows,
-    createSource: (config, credentials, mode) => {
-      // Thrown inside `createSource`, so `MirrorHost` records it on the
-      // instance's runtime row as the reason it is not running.
-      if (!optionbhai.ok) throw new Error(optionbhai.error)
-      return new OptionbhaiClient({
-        // The tag on the log lines carries the rail, because a mirror running
-        // on both has two upstream sessions and "socket closed" needs to say
-        // which one.
-        tag: `${config.tag}:${mode}`,
-        credentials,
-        log,
-        instrumentRefreshMinutes: config.instrumentRefreshMinutes,
-        baseUrl: optionbhai.options.baseUrl,
-        socketUrl: optionbhai.options.socketUrl,
-        userAgent: optionbhai.options.userAgent,
-        ...(optionbhai.options.hostHeader === undefined ? {} : { hostHeader: optionbhai.options.hostHeader }),
-      })
-    },
-    createGateway: (tag, mode) => gatewayFor(tag, mode),
-    // The same ledger the strategies book into, keyed `tag:mode`. It is what
-    // puts a mirror's net open legs on the runtime row; nothing flattens it —
-    // see the header of `mirrors.ts`.
-    openPositions: (tag, mode) => ledgerFor(tag, mode).openCount,
-    /**
-     * The SIGNED net per symbol, from that same ledger (audit F-6b/6c).
-     *
-     * It is what lets a mirrored order that reduces the net go out marked
-     * `reducesExposure` — unmarked, the kill switch and the stale-feed block
-     * refuse the exit and nothing retries it, so the upstream account goes flat
-     * while our leg stays open — and what stops an order larger than the
-     * position it reverses from opening a fresh one the other way.
-     */
-    netLots: (tag, mode, tradingsymbol) => ledgerFor(tag, mode).netLots(tradingsymbol),
-    publish: runtimePublisher(mongo.db.collection(RUNTIME_COLLECTION), 'mirror'),
   })
 
   // --- market data over the bus -------------------------------------------
@@ -722,25 +631,13 @@ export async function main(): Promise<void> {
   await declareAll()
 
   await runner.sync()
-  /**
-   * NOT awaited, unlike the runner's own sync. Starting a mirror performs an
-   * HTTP login against a third party, and `fetch` has no deadline of its own:
-   * awaiting it here would let an optionbhai outage hold up the lifecycle
-   * intervals below, so a slow signal source would stop every hosted STRATEGY
-   * from ticking. That is the same "gating boot on something external" mistake
-   * this file's header exists to name. The credential refusal and the first
-   * connection both log on their own.
-   */
-  void mirrorHost.sync().catch((err: unknown) => log.error('mirrors: initial sync failed', { error: String(err) }))
 
   const tick = setInterval(() => {
     void runner.tick().catch((err: unknown) => log.error('runner: tick failed', { error: String(err) }))
   }, TICK_MS)
   /**
    * The IST day the ledgers were last swept for. `Runner` keeps its own session
-   * day for the strategy lifecycle; this one is deliberately separate, because
-   * the sweep has to happen for the MIRROR instances too and those are withheld
-   * from the runner (see `loadRows` above).
+   * day for the strategy lifecycle; this one is the ledgers' own.
    */
   let sweptDay = istDateOf(Date.now())
 
@@ -760,10 +657,6 @@ export async function main(): Promise<void> {
       }
       await processClearRequests(today)
     })().catch((err: unknown) => log.error('runner: ledger maintenance failed', { error: String(err) }))
-    // On the same cadence, so a portal toggle starts or stops a mirror as
-    // promptly as it does a strategy. `MirrorHost.sync()` guards its own
-    // re-entrancy, so a slow optionbhai login cannot have two passes overlap.
-    void mirrorHost.sync().catch((err: unknown) => log.error('mirrors: sync failed', { error: String(err) }))
     /**
      * Re-declare and re-publish on the SYNC cadence, not only every 15 minutes.
      *
@@ -793,7 +686,7 @@ export async function main(): Promise<void> {
     })()
   }, REFRESH_MS)
 
-  log.info('runner up', { api: apiUrl, catalogue: CATALOGUE.size, mirrors: MIRRORS.size })
+  log.info('runner up', { api: apiUrl, catalogue: CATALOGUE.size })
 
   /**
    * A SIGNAL STOPS THE PROCESS; IT DOES NOT CLOSE THE BOOK — unless
@@ -837,13 +730,6 @@ export async function main(): Promise<void> {
     clearInterval(tick)
     clearInterval(sync)
     clearInterval(refresh)
-    // Mirrors stop LISTENING and nothing else. There is no square-off: a
-    // mirrored position belongs to the upstream account's book, which is still
-    // being managed by the system that opened it, and closing it here would
-    // then be re-mirrored when that system sends its own exit.
-    void mirrorHost
-      .stopAll(`${signal} shutdown`)
-      .catch((err: unknown) => log.error('mirrors: shutdown failed', { error: String(err) }))
 
     /**
      * BOTH PATHS QUIESCE FIRST — the intervals are cleared above, but clearing

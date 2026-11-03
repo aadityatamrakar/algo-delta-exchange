@@ -2,7 +2,7 @@
  * Shared tolerance helper for the GOLDEN PARITY suites.
  *
  * Every parity test in this repo compares a TS answer against a number the
- * Python desk produced (see `scripts/gen-parity-fixtures.py`), and every one of
+ * Python desk produced (the NSE repo's `scripts/gen-parity-fixtures.py`), and every one of
  * them needs the same two-sided tolerance, for the same reason: the quantities
  * being compared span ten orders of magnitude in one fixture file. A book P&L is
  * ±10^6 rupees, a gamma is 10^-3, and an out-of-the-money option can be worth

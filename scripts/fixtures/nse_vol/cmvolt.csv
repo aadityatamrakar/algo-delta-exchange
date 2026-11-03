@@ -1,5 +1,0 @@
-Date,Symbol,Underlying Close Price (A),Underlying Previous Day Close Price (B),Underlying Log Returns (C) = LN(A/B),Previous Day Underlying Volatility (D),Current Day Underlying Daily Volatility (E) = Sqrt(0.995*D*D + 0.005*C*C),Underlying Annualised Volatility (F) = E*Sqrt(365)
-22-OCT-2026,INFY,1152.53,1167.99,-0.0133,0.0192,0.0192,0.3668
-22-OCT-2026,M&M,3100.00,3080.00,0.0065,0.0150,0.0150,0.2866
-22-OCT-2026,TCS,2506.46,2528.92,-0.0089,0.0182,0.0181,0.3458
-22-OCT-2026,ZEL,-,-,-,-,-,-

@@ -1280,7 +1280,7 @@ async function handleStrategyModeRemove(
  * EITHER rail. Exactly the precondition the book erase applies before its own
  * `deleteOrphanStrategy` (`routes/books.ts`), offered on its own so the
  * leftovers of erases that predate that step — and of books purged by hand —
- * can be cleared (`scripts/delta-lean-roll.mjs --prune-orphans`).
+ * can be cleared.
  *
  * Everything else is a 409: a hosted row (a runner strategy has no book by
  * design), a row still added to a mode (remove the membership first, through

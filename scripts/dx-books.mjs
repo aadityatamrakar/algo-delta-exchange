@@ -23,7 +23,32 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve as resolvePath, dirname } from 'node:path'
-import { PAPER, PAPER_ON, STRATEGIES, requestJson } from './delta-lean-books.mjs'
+// Inlined from the retired NSE scripts/delta-lean-books.mjs (removed in the prune).
+export const PAPER = 'paper'
+export const STRATEGIES = '/v1/desk/strategies'
+export const PAPER_ON = Object.freeze({ modes: Object.freeze({ paper: Object.freeze({ enabled: true }) }) })
+
+/** One JSON request to the desk api; never throws on a non-2xx. */
+export async function requestJson(base, method, path, body, token, opts = {}) {
+  /** @type {Record<string, string>} */
+  const headers = { authorization: `Bearer ${token}` }
+  /** @type {RequestInit} */
+  const init = { method, headers }
+  if (opts.timeoutMs !== undefined) init.signal = AbortSignal.timeout(opts.timeoutMs)
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const res = await fetch(`${base}${path}`, init)
+  const text = await res.text()
+  let parsed = null
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    // Not JSON. `text` is what gets reported.
+  }
+  return { status: res.status, body: parsed, text }
+}
 
 const REGISTRY = '/v1/desk/books/registry'
 const SYMBOL = 'BTC'

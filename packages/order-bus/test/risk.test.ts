@@ -3,41 +3,14 @@ import assert from 'node:assert/strict'
 import {
   anyExposureLimitSet,
   checkExposureLimits,
-  checkRisk,
-  defaultRiskLimits,
   exposureLimitsFromEnv,
   NO_EXPOSURE_LIMITS,
   OrderRateWindow,
   ReservationLedger,
-  type Destination,
   type ExposureLimits,
   type ExposureState,
-  type OrderIntent,
-  type RiskLimits,
   type RiskSnapshot,
 } from '../src/index.ts'
-
-function intent(over: Partial<OrderIntent> = {}): OrderIntent {
-  return {
-    clientOrderId: 'coid-1',
-    ts: 1_700_000_000_000,
-    strategyTag: 'TEST_TAG',
-    mode: 'sim',
-    destinations: ['sim'] as Destination[],
-    instrument: {
-      tradingsymbol: 'BANKNIFTY2571750000CE',
-      instrumentToken: 12345,
-      lotSize: 35,
-      tickSize: 0.05,
-      exchange: 'NFO',
-    },
-    side: 'SELL',
-    orderType: 'MARKET',
-    quantity: 35,
-    lots: 1,
-    ...over,
-  }
-}
 
 function snap(over: Partial<RiskSnapshot> = {}): RiskSnapshot {
   return {
@@ -53,128 +26,21 @@ function snap(over: Partial<RiskSnapshot> = {}): RiskSnapshot {
   }
 }
 
-const limits = (over: Partial<RiskLimits> = {}): RiskLimits => ({ ...defaultRiskLimits, ...over })
-
-// --- structural validity ----------------------------------------------------
-
-test('a well-formed sim intent is allowed', () => {
-  assert.equal(checkRisk(intent(), limits(), snap()).allowed, true)
+const exposure = (over: Partial<ExposureLimits> = {}): ExposureLimits => ({
+  ...NO_EXPOSURE_LIMITS,
+  ...over,
 })
 
-test('non-positive or non-finite quantity is rejected', () => {
-  for (const q of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-    const v = checkRisk(intent({ quantity: q }), limits(), snap())
-    assert.equal(v.allowed, false)
-    assert.equal(v.allowed === false && v.rejection.code, 'BAD_INTENT')
-  }
-})
+/** One lot of a 35-lot contract, at market. */
+const ORDER = { lots: 1, quantity: 35 }
 
-test('missing clientOrderId is rejected (idempotency key is mandatory)', () => {
-  const v = checkRisk(intent({ clientOrderId: '' }), limits(), snap())
-  assert.equal(v.allowed === false && v.rejection.code, 'BAD_INTENT')
-})
-
-test('an intent with no destinations is rejected rather than vanishing', () => {
-  const v = checkRisk(intent({ destinations: [] }), limits(), snap())
-  assert.equal(v.allowed === false && v.rejection.code, 'NO_DESTINATION')
-})
-
-test('LIMIT without limitPrice and SL without triggerPrice are rejected', () => {
-  assert.equal(
-    checkRisk(intent({ orderType: 'LIMIT' }), limits(), snap()).allowed,
-    false,
-  )
-  assert.equal(
-    checkRisk(intent({ orderType: 'SL_MARKET' }), limits(), snap()).allowed,
-    false,
-  )
-  // ...and accepted when the required price is present
-  assert.equal(
-    checkRisk(intent({ orderType: 'LIMIT', limitPrice: 100 }), limits(), snap()).allowed,
-    true,
-  )
-})
-
-// --- the dual-rail lesson ---------------------------------------------------
-
-test('mixing sim with a real broker is rejected, not silently split', () => {
-  // This is the legacy `placeAllAccount` hazard encoded as a rule: half the size
-  // going to a simulator is a silent failure, so refuse the intent outright.
-  const v = checkRisk(
-    intent({ mode: 'live', destinations: ['sim', 'zerodha'], strategyTag: 'OK' }),
-    limits({ liveAllowlist: ['OK'] }),
-    snap(),
-  )
-  assert.equal(v.allowed === false && v.rejection.code, 'MIXED_SIM_LIVE')
-})
-
-test("mode 'sim' with a real broker destination is rejected", () => {
-  const v = checkRisk(intent({ mode: 'sim', destinations: ['zerodha'] }), limits(), snap())
-  assert.equal(v.allowed === false && v.rejection.code, 'MIXED_SIM_LIVE')
-})
-
-test("mode 'live' with only a sim destination is rejected", () => {
-  const v = checkRisk(
-    intent({ mode: 'live', destinations: ['sim'], strategyTag: 'OK' }),
-    limits({ liveAllowlist: ['OK'] }),
-    snap(),
-  )
-  assert.equal(v.allowed === false && v.rejection.code, 'MIXED_SIM_LIVE')
-})
-
-test('multiple real destinations ARE allowed (dual-rail is legitimate when explicit)', () => {
-  const v = checkRisk(
-    intent({ mode: 'live', destinations: ['zerodha', 'xts'], strategyTag: 'OK' }),
-    limits({ liveAllowlist: ['OK'] }),
-    snap(),
-  )
-  assert.equal(v.allowed, true, 'explicit multi-broker routing must be expressible')
-})
-
-// --- authorisation ----------------------------------------------------------
-
-test('live trading requires the strategy tag to be allowlisted', () => {
-  const v = checkRisk(
-    intent({ mode: 'live', destinations: ['zerodha'], strategyTag: 'NOT_LISTED' }),
-    limits({ liveAllowlist: ['SOMETHING_ELSE'] }),
-    snap(),
-  )
-  assert.equal(v.allowed === false && v.rejection.code, 'NOT_LIVE_ALLOWED')
-})
-
-test('allowlisted live tag passes', () => {
-  const v = checkRisk(
-    intent({ mode: 'live', destinations: ['zerodha'], strategyTag: 'LIVE_OK' }),
-    limits({ liveAllowlist: ['LIVE_OK'] }),
-    snap(),
-  )
-  assert.equal(v.allowed, true)
-})
-
-test('sim mode does not consult the live allowlist', () => {
-  assert.equal(checkRisk(intent(), limits({ liveAllowlist: [] }), snap()).allowed, true)
-})
-
-// --- kill switch and loss stop must never trap a position -------------------
-
-test('kill switch blocks new exposure', () => {
-  const v = checkRisk(intent(), limits({ killSwitch: true }), snap({ isReducingExposure: false }))
-  assert.equal(v.allowed === false && v.rejection.code, 'KILL_SWITCH')
-})
-
-test('kill switch still ALLOWS exposure-reducing orders', () => {
-  const v = checkRisk(intent(), limits({ killSwitch: true }), snap({ isReducingExposure: true }))
-  assert.equal(v.allowed, true, 'a kill switch that traps an open position is worse than none')
-})
+// --- the loss stop ----------------------------------------------------------
 
 test('daily loss stop blocks entries but allows exits', () => {
-  const l = limits({ maxDailyLoss: 50_000 })
+  const l = exposure({ maxDailyLoss: 50_000 })
+  assert.equal(checkExposureLimits(ORDER, l, snap({ dayLoss: 50_000 })).allowed, false)
   assert.equal(
-    checkRisk(intent(), l, snap({ dayLoss: 50_000, isReducingExposure: false })).allowed,
-    false,
-  )
-  assert.equal(
-    checkRisk(intent(), l, snap({ dayLoss: 99_999, isReducingExposure: true })).allowed,
+    checkExposureLimits(ORDER, l, snap({ dayLoss: 99_999, isReducingExposure: true })).allowed,
     true,
   )
 })
@@ -183,32 +49,32 @@ test('daily loss stop blocks entries but allows exits', () => {
 
 test('rate limit counts only the trailing 60 seconds', () => {
   const now = 1_700_000_000_000
-  const l = limits({ maxOrdersPerMinute: 3 })
+  const l = exposure({ maxOrdersPerMinute: 3 })
   // 3 orders, all older than 60s -> should NOT count
   const old = [now - 61_000, now - 70_000, now - 120_000]
-  assert.equal(checkRisk(intent(), l, snap({ nowMs: now, recentOrderTs: old })).allowed, true)
+  assert.equal(checkExposureLimits(ORDER, l, snap({ nowMs: now, recentOrderTs: old })).allowed, true)
   // 3 orders inside the window -> at the limit
   const fresh = [now - 1_000, now - 2_000, now - 3_000]
-  const v = checkRisk(intent(), l, snap({ nowMs: now, recentOrderTs: fresh }))
+  const v = checkExposureLimits(ORDER, l, snap({ nowMs: now, recentOrderTs: fresh }))
   assert.equal(v.allowed === false && v.rejection.code, 'RATE_LIMIT')
 })
 
 test('per-underlying lot cap counts the incoming order', () => {
-  const l = limits({ maxOpenLotsPerUnderlying: 5 })
+  const l = exposure({ maxOpenLotsPerUnderlying: 5 })
   // 4 open + 1 incoming = 5, at the cap -> allowed
   assert.equal(
-    checkRisk(intent({ lots: 1 }), l, snap({ openLotsByUnderlying: { BANKNIFTY: 4 } })).allowed,
+    checkExposureLimits(ORDER, l, snap({ openLotsByUnderlying: { BANKNIFTY: 4 } })).allowed,
     true,
   )
   // 5 open + 1 incoming = 6 -> over
-  const v = checkRisk(intent({ lots: 1 }), l, snap({ openLotsByUnderlying: { BANKNIFTY: 5 } }))
+  const v = checkExposureLimits(ORDER, l, snap({ openLotsByUnderlying: { BANKNIFTY: 5 } }))
   assert.equal(v.allowed === false && v.rejection.code, 'MAX_LOTS_UNDERLYING')
 })
 
 test('lot caps do NOT block exposure-reducing orders', () => {
-  const l = limits({ maxOpenLotsPerUnderlying: 1, maxOpenLotsTotal: 1 })
-  const v = checkRisk(
-    intent({ lots: 10 }),
+  const l = exposure({ maxOpenLotsPerUnderlying: 1, maxOpenLotsTotal: 1 })
+  const v = checkExposureLimits(
+    { lots: 10, quantity: 350 },
     l,
     snap({ openLotsByUnderlying: { BANKNIFTY: 99 }, openLotsTotal: 99, isReducingExposure: true }),
   )
@@ -216,53 +82,31 @@ test('lot caps do NOT block exposure-reducing orders', () => {
 })
 
 test('total lot cap is independent of the per-underlying cap', () => {
-  const l = limits({ maxOpenLotsPerUnderlying: 100, maxOpenLotsTotal: 10 })
-  const v = checkRisk(intent({ lots: 2 }), l, snap({ openLotsTotal: 9 }))
+  const l = exposure({ maxOpenLotsPerUnderlying: 100, maxOpenLotsTotal: 10 })
+  const v = checkExposureLimits({ lots: 2, quantity: 70 }, l, snap({ openLotsTotal: 9 }))
   assert.equal(v.allowed === false && v.rejection.code, 'MAX_LOTS_TOTAL')
 })
 
 test('notional cap uses limitPrice when present, else the snapshot price', () => {
-  const l = limits({ maxNotionalPerOrder: 1000 })
+  const l = exposure({ maxNotionalPerOrder: 1000 })
   // limitPrice 100 * qty 35 = 3500 > 1000
-  let v = checkRisk(intent({ orderType: 'LIMIT', limitPrice: 100 }), l, snap({ price: 1 }))
+  let v = checkExposureLimits({ ...ORDER, limitPrice: 100 }, l, snap({ price: 1 }))
   assert.equal(v.allowed === false && v.rejection.code, 'MAX_NOTIONAL')
   // falls back to snapshot price for MARKET
-  v = checkRisk(intent(), l, snap({ price: 100 }))
+  v = checkExposureLimits(ORDER, l, snap({ price: 100 }))
   assert.equal(v.allowed === false && v.rejection.code, 'MAX_NOTIONAL')
 })
 
 test('an unpriced MARKET order is not blocked on missing price data', () => {
-  const l = limits({ maxNotionalPerOrder: 1 })
-  const v = checkRisk(intent(), l, snap({ price: null }))
+  const l = exposure({ maxNotionalPerOrder: 1 })
+  const v = checkExposureLimits(ORDER, l, snap({ price: null }))
   assert.equal(v.allowed, true, 'lot caps already bound exposure; do not fail on absent data')
-})
-
-// --- rejection ordering -----------------------------------------------------
-
-test('structural errors are reported ahead of capacity errors', () => {
-  const v = checkRisk(
-    intent({ quantity: -5 }),
-    limits({ killSwitch: true, maxOrdersPerMinute: 0 }),
-    snap(),
-  )
-  assert.equal(
-    v.allowed === false && v.rejection.code,
-    'BAD_INTENT',
-    'the most fundamental problem should be the reported one',
-  )
 })
 
 // --- the wired subset: `checkExposureLimits` --------------------------------
 //
-// These are the limits the API gates its LIVE rails on (F-28). The tests above
-// reach the same code through `checkRisk`; these exercise it as the API calls
-// it — without an `OrderIntent`, and with limits that are DISABLED unless the
-// operator configured them.
-
-const exposure = (over: Partial<ExposureLimits> = {}): ExposureLimits => ({
-  ...NO_EXPOSURE_LIMITS,
-  ...over,
-})
+// These are the limits the API gates its LIVE rails on (F-28), with limits
+// that are DISABLED unless the operator configured them.
 
 test('an unconfigured limit set allows an order no sane desk would place', () => {
   const now = 1_700_000_000_000

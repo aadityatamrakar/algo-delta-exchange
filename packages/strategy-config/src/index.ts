@@ -94,11 +94,7 @@ export interface Risk {
   readonly dayLossRupees: number | null
 }
 
-export type StrategyClassId =
-  | 'range-breakout-directional'
-  | 'premium-leg-book'
-  | 'momentum-flip-directional'
-  | 'premium-distance-accumulator'
+export type StrategyClassId = 'premium-leg-book'
 
 export interface BaseConfig {
   /** Unique. Sizing key, P&L grouping key, square-off key. */

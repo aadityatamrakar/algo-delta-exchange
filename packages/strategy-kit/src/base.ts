@@ -519,7 +519,7 @@ export abstract class StrategyBase {
    * Exposed for strategies that want to short-circuit before doing other work
    * (e.g. skip a whole entry-evaluation branch), but it is no longer the only
    * thing standing between a strategy and a stale-feed entry: `submit()` below
-   * enforces this centrally, the same way `checkRisk()` enforces the kill
+   * enforces this centrally, the same way the desk API enforces the kill
    * switch centrally rather than trusting every call site to remember it.
    */
   protected canEnter(): boolean {
@@ -540,8 +540,8 @@ export abstract class StrategyBase {
    * successful submit.
    *
    * The staleness gate is enforced HERE, centrally, rather than left to each
-   * strategy remembering to call `canEnter()` first — the same reasoning as
-   * the risk gate's `isReducingExposure` check in `checkRisk()`: no strategy
+   * strategy remembering to call `canEnter()` first — the same reasoning as the
+   * exposure limits' `isReducingExposure` check in `checkExposureLimits()`: no strategy
    * bug can bypass it, and it does not have to be relearned per file. Exits
    * (`reducesExposure: true`) are exempt for the same reason a stale feed must
    * never trap an open position.

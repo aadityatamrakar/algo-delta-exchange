@@ -97,7 +97,7 @@ export const MARKET_CLOSE_MIN = 15 * 60 + 30
  * 15:40 IST: NSE's F&O close since 3 Aug 2026, the instant an F&O contract
  * expires and stops being valued. The one source for 15:40; greeks and
  * payoff sit below core in the dependency graph and carry the same literal,
- * pinned to this by apps/traders/test/fno-close.test.ts.
+ * pinned to this by packages/payoff/test/fno-close.test.ts.
  */
 export const FNO_CLOSE_MIN = 15 * 60 + 40
 

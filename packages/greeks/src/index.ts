@@ -432,7 +432,7 @@ const IST_OFFSET_MS = 330 * 60 * 1000
  * 15:40 because NSE F&O trades to 15:40 since 3 Aug 2026, so an expiring
  * contract is still priced, and still has greeks, until then. It is core's
  * `FNO_CLOSE_MIN`; this package depends on nothing, so the literal is
- * repeated here and apps/traders/test/fno-close.test.ts pins the two.
+ * repeated here and packages/payoff/test/fno-close.test.ts pins the two.
  */
 export function yearsToExpiry(expiry: string, nowMs: number): number {
   const [y, m, d] = expiry.split('-').map(Number)
