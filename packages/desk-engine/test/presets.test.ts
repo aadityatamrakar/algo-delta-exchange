@@ -75,10 +75,10 @@ function resolved(p: Preset) {
   return dials
 }
 
-test('there are twenty-five presets, each keyed once', () => {
-  assert.equal(PRESETS.length, 25)
+test('there are thirty-one presets, each keyed once', () => {
+  assert.equal(PRESETS.length, 31)
   const keys = PRESETS.map((p) => p.key)
-  assert.equal(new Set(keys).size, 25)
+  assert.equal(new Set(keys).size, 31)
   assert.deepEqual(keys, [
     'recenter-r',
     'recenter-eod-r',
@@ -114,6 +114,14 @@ test('there are twenty-five presets, each keyed once', () => {
     'pb-expiry-drive',
     'pb-expiry-theta',
     'pb-expiry-gamma',
+    // The six BULL-S books on Delta BTC options (Delta spec §6.2), last so
+    // every NSE preset keeps its place. Pinned in test/bull-s/dials.test.ts.
+    'bull-s-btc-daily',
+    'bull-s-btc-daily-2',
+    'bull-s-btc-weekly',
+    'bull-s-btc-weekly-2',
+    'bull-s-btc-monthly',
+    'bull-s-btc-monthly-2',
   ])
 })
 
@@ -317,7 +325,10 @@ test('every preset carries the recenter family target and cap', () => {
     // The playbooks spread the same base, so they carry the same D4 cap.
     ...PLAYBOOK_KEYS,
   ])
-  for (const p of PRESETS) {
+  // BULL-S reads neither dial — its target and cap are `bs_target` and
+  // `bs_loss_cap`, in USD — so its six carry neither, rather than a number
+  // nobody chose.
+  for (const p of PRESETS.filter((x) => !x.key.startsWith('bull-s-'))) {
     assert.equal(p.dials.target_pnl, 250000, p.key)
     assert.equal(
       p.dials.margin_cap,
