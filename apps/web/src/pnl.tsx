@@ -26,6 +26,7 @@ import { Table, pixel, proportional } from '@astryxdesign/core/Table'
 import type { TableColumn } from '@astryxdesign/core/Table'
 import { inr, money, sign, signed, type DeskMode, type LegQuote, type PnlLeg, type PnlStrategy } from './api.ts'
 import { formatContract } from './contract.ts'
+import { inrSecond } from './format.ts'
 import { LiveFeedNotice, useLivePnl } from './stream.tsx'
 import { ModeBadge } from './mode.tsx'
 
@@ -48,14 +49,28 @@ export function Money(props: {
   weight?: 'normal' | 'medium' | 'bold'
 }): React.ReactElement {
   const size = props.size ?? 'lg'
-  return (
+  // `digits` left undefined is the VENUE's default: whole rupees on NSE, cents on DX.
+  const figure = (
     <Text
       size={size}
       weight={props.weight ?? (size === 'sm' ? 'normal' : 'bold')}
       style={props.value === null ? undefined : sign(props.value)}
     >
-      {money(props.value, props.digits === undefined ? 0 : props.digits)}
+      {money(props.value, props.digits)}
     </Text>
+  )
+  /*
+    A HEADLINE (not a table cell) on a USD venue carries the ₹ second figure
+    under it, at the fixed 85. `inrSecond` is null on NSE, so nothing changes
+    there.
+  */
+  const second = size === 'sm' ? null : inrSecond(props.value)
+  if (second === null) return figure
+  return (
+    <VStack gap={0}>
+      {figure}
+      <Text size="sm" color="secondary">{second}</Text>
+    </VStack>
   )
 }
 

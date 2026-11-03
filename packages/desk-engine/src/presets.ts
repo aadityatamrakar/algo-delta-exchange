@@ -1,8 +1,8 @@
 /**
- * THE PRESETS, AS PREFILLS — twenty-five of them: the twelve historical
+ * THE PRESETS, AS PREFILLS — thirty-one of them: the twelve historical
  * recenter variants plus the one split that keeps a live book from being read
- * off a board it was never measured on, the six delta-lean books, and the six
- * playbook books.
+ * off a board it was never measured on, the six delta-lean books, the six
+ * playbook books, and the six BULL-S books on Delta BTC options.
  *
  * What this prevents: the Python desk chose behaviour by NAME. A book row
  * carried `variant: "recenter-relief-r"`, a `desk-variants` collection mapped
@@ -339,6 +339,45 @@ const DELTA_LEAN_ZERO: Partial<Dials> = {
  * (14:50 passive, 14:55 urgent, 15:00 flat), so it is inherited too.
  */
 const PLAYBOOK_BASE: Partial<Dials> = { ...DELTA_LEAN_BASE, dl_open_lots: 0 };
+
+/**
+ * THE BULL-S BOOKS ON DELTA BTC OPTIONS (Delta spec §6.2) — one per expiry
+ * class, each with a `-2` twin that differs ONLY in `bs_strike_jump`.
+ *
+ * Sizes and loss caps are the analyst's starting numbers
+ * (`docs/research/delta/delta-strategies.md` §1); sizes are contracts of
+ * 0.001 BTC, money is USD. The target is off until the operator sets one per
+ * book. Every preset is CAPPED (spec C9): no uncapped pyramid ships on BTC.
+ *
+ * The two other engine switches are written OFF out loud, so a book whose
+ * dials are refilled from one of these over a delta-lean or playbook preset
+ * cannot keep a second path switched on.
+ */
+function bullS(step: number, start: number, lotStep: number, cap: number, lossCap: number, jump: 1 | 2): Partial<Dials> {
+  return {
+    delta_lean_enabled: false,
+    pb_playbook: 0,
+    // Not read on this path; written off for the reason the file header gives,
+    // so no preset but the live relief-r book resolves to shorts-only steering.
+    delta_shorts_only: false,
+    gamma_shorts_only: false,
+    bs_enabled: true,
+    bs_strike_step: step,
+    bs_strike_jump: jump,
+    bs_stop_mult: 1.25,
+    bs_stop_basis: 1,
+    bs_stop_confirm_s: 3,
+    bs_lots_start: start,
+    bs_lots_step: lotStep,
+    bs_lots_cap: cap,
+    bs_max_open: 4,
+    bs_target: 0,
+    bs_loss_cap: lossCap,
+    bs_after_halt: 0,
+    bs_enter_on_start: true,
+    bs_no_entry_before_expiry_min: 60,
+  };
+}
 
 export const PRESETS: ReadonlyArray<Preset> = [
   {
@@ -752,6 +791,13 @@ export const PRESETS: ReadonlyArray<Preset> = [
       dl_day_target: 15_000,
     },
   },
+  // BULL-S on Delta BTC options — last, so every NSE preset keeps its place.
+  { key: 'bull-s-btc-daily', label: 'BULL-S — BTC daily ($200 grid)', dials: bullS(200, 50, 50, 150, 250, 1) },
+  { key: 'bull-s-btc-daily-2', label: 'BULL-S — BTC daily, jump 2 ($400 grid)', dials: bullS(200, 50, 50, 150, 250, 2) },
+  { key: 'bull-s-btc-weekly', label: 'BULL-S — BTC weekly ($500 grid)', dials: bullS(500, 10, 10, 30, 500, 1) },
+  { key: 'bull-s-btc-weekly-2', label: 'BULL-S — BTC weekly, jump 2 ($1,000 grid)', dials: bullS(500, 10, 10, 30, 500, 2) },
+  { key: 'bull-s-btc-monthly', label: 'BULL-S — BTC monthly ($1,000 grid)', dials: bullS(1000, 10, 10, 30, 500, 1) },
+  { key: 'bull-s-btc-monthly-2', label: 'BULL-S — BTC monthly, jump 2 ($2,000 grid)', dials: bullS(1000, 10, 10, 30, 500, 2) },
 ];
 
 /**

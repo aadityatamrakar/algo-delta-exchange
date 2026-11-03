@@ -52,14 +52,15 @@ import { Link } from '@astryxdesign/core/Link'
 import { Table, proportional, pixel } from '@astryxdesign/core/Table'
 import type { TableColumn } from '@astryxdesign/core/Table'
 import {
-  api, ago, explain, inSession, istDate, seriesOf, signed, sign, RED,
+  api, ago, explain, inSession, pastExpiry, seriesOf, signed, sign, RED,
   type BookRow, type BookSummary, type DeskMode, type PnlStrategy,
 } from './api.ts'
 import { liveStartStatement } from './live-copy.ts'
 import { PHONE, goTo, usePoll, useMedia } from './shell.tsx'
 import { ModeBadge } from './mode.tsx'
 import { Money } from './pnl.tsx'
-import { useReauth } from './auth.tsx'
+import { useReauth, withReauth } from './auth.tsx'
+import { bullsPatch, bullsStatement, isBullS, type BullSAction } from './bulls.ts'
 import { ManualOrderDialog } from './manual-order.tsx'
 import { DialsPanel } from './dials-panel.tsx'
 
@@ -80,9 +81,36 @@ function isStalled(row: BookRow, nowMs: number): boolean {
     (row.lastMarkAt === 0 || nowMs - row.lastMarkAt > STALL_MS)
 }
 
-/** Still holding legs after its own expiry. `legs` comes from `api.books`. */
+/**
+ * Still holding legs after its own expiry INSTANT (15:30 IST on NSE, 12:00 UTC
+ * on DX). `legs` comes from `api.books`.
+ */
 function isPastExpiry(row: BookRow, legs: number | undefined): boolean {
-  return (legs ?? 0) > 0 && istDate() > row.expiry
+  return (legs ?? 0) > 0 && pastExpiry(row.expiry)
+}
+
+/**
+ * CLOSE BOOK and RE-ARM, on a BULL-S book only. Each opens the page's one
+ * confirmation; nothing is sent from here. See `bulls.ts`.
+ */
+function BullSButtons(props: {
+  row: BookRow
+  busy: boolean
+  onAsk: (action: BullSAction) => void
+}): React.ReactElement | null {
+  if (!isBullS(props.row)) return null
+  return (
+    <>
+      <Button
+        variant="ghost" size="sm" label="Close book"
+        isDisabled={props.busy} onClick={() => props.onAsk('close')}
+      />
+      <Button
+        variant="ghost" size="sm" label="Re-arm"
+        isDisabled={props.busy} onClick={() => props.onAsk('rearm')}
+      />
+    </>
+  )
 }
 
 // ------------------------------------------------------------------ cells
@@ -191,6 +219,7 @@ function BookCard(props: {
   onStop: () => void
   onDelete: () => void
   onOrder: () => void
+  onBullS: (action: BullSAction) => void
 }): React.ReactElement {
   const { row, summary, pnl } = props.data
   return (
@@ -198,9 +227,10 @@ function BookCard(props: {
       <VStack gap={2} padding={3}>
         <HStack gap={2} align="start" justify="between">
           <BookCell row={row} legs={summary?.legs} />
-          <HStack gap={1}>
+          <HStack gap={1} wrap="wrap">
             {/* Same action as the table's Order button — see there. */}
             <Button variant="ghost" size="sm" label="Order" onClick={props.onOrder} />
+            <BullSButtons row={row} busy={props.busy} onAsk={props.onBullS} />
             {row.desired === 'running'
               ? <Button variant="ghost" size="sm" label="Stop" isDisabled={props.busy} onClick={props.onStop} />
               : <Button variant="ghost" size="sm" label="Start" isDisabled={props.busy} onClick={props.onStart} />}
@@ -336,6 +366,36 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
   const [pending, setPending] = useState<BookRow | null>(null)
   /** The row awaiting confirmation to DELETE. Irreversible, so it is asked. */
   const [deleting, setDeleting] = useState<{ row: BookRow; purge: boolean } | null>(null)
+  /** A BULL-S Close book / Re-arm awaiting confirmation. */
+  const [bullsAsk, setBullsAsk] = useState<{ row: BookRow; action: BullSAction } | null>(null)
+
+  /**
+   * Send a BULL-S request: the counter +1 through the dials PATCH. A LIVE book
+   * asks for the password first, exactly as a live dials retune does — the
+   * server gates the same endpoint the same way.
+   */
+  const doBullS = async (row: BookRow, action: BullSAction): Promise<void> => {
+    setNote(null)
+    setBusyTag(row.tag)
+    await withReauth({
+      statement: bullsStatement(row.tag, action),
+      promptFirst: row.mode === 'live',
+      run: (password) =>
+        api.bookRegistry.patchDials(row.tag, row.mode, bullsPatch(row, action), password),
+      reauth,
+      onDone: () => {
+        setNote({
+          kind: 'ok',
+          text: action === 'close'
+            ? `${row.tag}: close requested — the book closes its legs and halts at its next decision.`
+            : `${row.tag}: re-arm requested — the halt clears at its next decision.`,
+        })
+        refresh()
+      },
+      onError: (message) => setNote({ kind: 'error', text: message }),
+    })
+    setBusyTag(null)
+  }
   /**
    * How many legs THAT book holds, from the summary already on the page.
    *
@@ -474,6 +534,10 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
           <Button
             variant="ghost" size="sm" label="Order"
             onClick={() => setOrderFor(row)}
+          />
+          <BullSButtons
+            row={row} busy={busyTag === row.tag}
+            onAsk={(action) => setBullsAsk({ row, action })}
           />
           {/*
             Offered on a RUNNING book too, unlike Delete: retuning a live book
@@ -639,6 +703,7 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
               onStop={() => void doStop(r.row)}
               onDelete={() => setDeleting({ row: r.row, purge: false })}
               onOrder={() => setOrderFor(r.row)}
+              onBullS={(action) => setBullsAsk({ row: r.row, action })}
             />
           ))}
         </VStack>
@@ -735,6 +800,22 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
         onAction={() => {
           const d = deleting
           if (d !== null) void doDelete(d.row, deletingLegs, d.purge)
+        }}
+      />
+
+      <AlertDialog
+        isOpen={bullsAsk !== null}
+        onOpenChange={() => setBullsAsk(null)}
+        title={bullsAsk === null
+          ? ''
+          : `${bullsAsk.action === 'close' ? 'Close' : 'Re-arm'} ${bullsAsk.row.tag}?`}
+        description={bullsAsk === null ? '' : bullsStatement(bullsAsk.row.tag, bullsAsk.action)}
+        actionLabel={bullsAsk?.action === 'rearm' ? 'Re-arm the book' : 'Close the book'}
+        actionVariant={bullsAsk?.action === 'rearm' ? 'primary' : 'destructive'}
+        onAction={() => {
+          const ask = bullsAsk
+          setBullsAsk(null)
+          if (ask !== null) void doBullS(ask.row, ask.action)
         }}
       />
 

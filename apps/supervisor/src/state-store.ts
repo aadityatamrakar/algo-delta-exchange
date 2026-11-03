@@ -74,7 +74,7 @@
  * it false and can only be found by reading the rules line by line.
  */
 
-import { EMPTY_RULE_STATE, TRIGGERS, hydratePlaybookState } from '@algomaker/desk-engine'
+import { EMPTY_RULE_STATE, TRIGGERS, hydrateBullState, hydratePlaybookState } from '@algomaker/desk-engine'
 import type {
   DecisionRequest,
   Mode,
@@ -376,6 +376,9 @@ export function hydrateRuleState(raw: unknown): RuleState {
     // no `pb` and reads as `EMPTY_PLAYBOOK_STATE`, a playbook that has not
     // traded today.
     pb: hydratePlaybookState(d['pb']),
+    // ── the BULL-S row (Delta spec §6.3) ── through the engine's own hydrator,
+    // for the reason `pb` is. A row without it reads as `BS_EMPTY`.
+    bs: hydrateBullState(d['bs']),
   }
 }
 

@@ -73,6 +73,8 @@ const base = {
   DESK_BUS_PORT: '8891',
   DESK_PORT: '8890',
   NODE_ENV: 'production',
+  // The Delta desk. Every dx process reads the venue from here; .env.local may only restate it.
+  DESK_VENUE: 'dx',
   ...secrets,
 }
 
@@ -200,6 +202,9 @@ module.exports = {
     app('dx-runner', 'bin/desk-runner.mjs', { DESK_API_URL: 'http://127.0.0.1:8890' }, {
       kill_timeout: 20_000,
       max_memory_restart: '1500M',
+      // Not part of the default start: BULL-S runs in the supervisor. scripts/dx-start.sh names its apps
+      // one by one and never starts this one.
+      autostart: false,
     }),
 
     /**
@@ -241,5 +246,11 @@ module.exports = {
       },
       { max_memory_restart: '900M' },
     ),
+
+    /**
+     * ONE-PORT WEB FRONT: serves apps/web/dist and proxies /v1 (HTTP + websocket)
+     * to desk-api. No bus dependency; holds no credentials.
+     */
+    app('dx-web', 'bin/dx-web.mjs', { DESK_WEB_PORT: '5000' }),
   ],
 }

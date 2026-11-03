@@ -12,7 +12,7 @@
  * (Delta sends one every 30 s) is treated as a dead link and reconnected.
  */
 import { WebSocket } from 'ws'
-import { parseFrame, type DxFrame } from './normalise.ts'
+import { parseFrames, type DxFrame } from './normalise.ts'
 import { signWsAuth } from './sign.ts'
 
 export type DxSocketState = 'connecting' | 'open' | 'authenticated' | 'auth_failed' | 'reconnecting' | 'closed'
@@ -132,9 +132,10 @@ abstract class DxSocketBase {
       } catch {
         return
       }
-      const f = parseFrame(raw)
-      if (this.intercept(f)) return
-      this.#opts.onFrame?.(f)
+      for (const f of parseFrames(raw)) {
+        if (this.intercept(f)) continue
+        this.#opts.onFrame?.(f)
+      }
     })
     ws.on('error', () => {
       // 'close' follows; the reconnect is scheduled there.

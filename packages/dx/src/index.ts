@@ -15,6 +15,7 @@ export {
   spotInstrumentRow,
   quoteFromTicker,
   parseFrame,
+  parseFrames,
   num,
   DX_EXCHANGE,
   DX_OPTION_SEGMENT,

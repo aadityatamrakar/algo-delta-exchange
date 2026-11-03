@@ -40,6 +40,7 @@ import { StrategiesPage, StrategyPage } from './strategies.tsx'
 import { BooksPage } from './books.tsx'
 import { BookBuildPage } from './book-build.tsx'
 import { ReportsPage } from './reports.tsx'
+import { ChainPage } from './chain.tsx'
 
 /**
  * The width at and above which the whole navbar fits on one row.
@@ -259,6 +260,7 @@ function Desk(props: {
         {loc.route === 'books' ? <BooksPage mode={mode} /> : null}
         {loc.route === 'build' ? <BookBuildPage mode={mode} /> : null}
         {loc.route === 'reports' ? <ReportsPage mode={mode} /> : null}
+        {loc.route === 'chain' ? <ChainPage /> : null}
         {/* There is no `orders` branch: the page is gone and `#/orders` is
             aliased onto Status in shell.tsx — the refusals it was opened for
             are a section there, and unlike Broker it honours the switch. */}

@@ -454,6 +454,73 @@ export interface Dials {
   /** The premium stop and the premium trail's arming point, both as fractions
    * of the premium paid. */
   readonly pb_prem_stop_frac: number; readonly pb_prem_trail_arm: number;
+
+  // ── BULL-S (Delta spec §6, plan Task 3) ───────────────────────────────────
+  // A FOURTH decide path: a straddle sold each time the reference price
+  // crosses a grid level, pyramided, each with its own combined stop.
+  // `bs_enabled` is its master switch (an engine switch, like
+  // `delta_lean_enabled`) and is off, so no existing book reads one dial
+  // below. Prices are in the book's own price units (USD on Delta, ₹ on NSE),
+  // sizes in CONTRACTS (lots), P&L in the book's currency.
+
+  /** Selects the BULL-S decide path. */
+  readonly bs_enabled: boolean;
+  /** One strike, in price units, for this expiry class (Delta daily 200,
+   * weekly 500, monthly 1000). REQUIRED > 0 while enabled; `resolveDials`
+   * names a 0 and the engine holds on it. */
+  readonly bs_strike_step: number;
+  /** Strikes per grid step, 1 or 2: the grid is `jump × step`. Applies to new
+   * entries; open straddles keep their strikes. */
+  readonly bs_strike_jump: number;
+  /** The combined stop: buy both legs back when the summed exit price is at
+   * or past this multiple of the summed entry premium. Read live, so a change
+   * reaches open straddles at the next decision. */
+  readonly bs_stop_mult: number;
+  /** What the stop sums: 1 = each leg's ASK (the price it can be bought back
+   * at); 0 = each leg's LTP against the legacy `trunc`ated trigger (the NSE
+   * parity basis). */
+  readonly bs_stop_basis: number;
+  /** The breach must hold this many seconds. 0 = on the first reading. */
+  readonly bs_stop_confirm_s: number;
+  /** The pyramid, in contracts: the first straddle's size, the step each
+   * accepted entry adds, and the ceiling. `bs_lots_cap` 0 = uncapped — the NSE
+   * parity setting only; every BTC preset caps. */
+  readonly bs_lots_start: number;
+  readonly bs_lots_step: number;
+  readonly bs_lots_cap: number;
+  /** Most straddles open at once. 0 = unlimited. */
+  readonly bs_max_open: number;
+  /** Book profit target and loss cap on the P&L since the last arm (net of
+   * fees where the venue charges them). 0 = off. */
+  readonly bs_target: number;
+  readonly bs_loss_cap: number;
+  /** After a target or loss halt: 0 = stay flat until Re-arm; 1 = re-arm by
+   * itself once flat (new baseline, size back to start) and trade from the
+   * next crossing. */
+  readonly bs_after_halt: number;
+  /** The first fresh price after Start or Re-arm counts as a crossing at the
+   * nearest level (the legacy first-tick ATM sale). */
+  readonly bs_enter_on_start: boolean;
+  /** NEW entries only between these IST minutes of day, `from <= m < to`
+   * (from > to wraps midnight), and on these IST weekdays (bit 0 = Sunday).
+   * 0 / 1440 / 127 = always. Stops run at every hour. */
+  readonly bs_entry_from_min: number;
+  readonly bs_entry_to_min: number;
+  readonly bs_entry_weekdays: number;
+  /** No new entry within this many minutes of the expiry instant. 0 = off
+   * (none at or after the instant regardless). */
+  readonly bs_no_entry_before_expiry_min: number;
+  /** Close everything and halt this many minutes before the expiry instant.
+   * 0 = hold into settlement. */
+  readonly bs_flat_before_expiry_min: number;
+  /** A reference price older than this is not traded on: no entry, and it is
+   * not counted as a crossing. Stops still run. */
+  readonly bs_ref_max_age_s: number;
+  /** One-shot commands as COUNTERS: the dashboard PATCHes +1, and the engine
+   * acts once when the dial exceeds the count it has already seen. Close book
+   * closes every straddle and halts; Re-arm clears a halt. */
+  readonly bs_close_req: number;
+  readonly bs_rearm_req: number;
 }
 
 /**
@@ -673,6 +740,30 @@ export const DEFAULT_DIALS: Dials = {
   pb_box_min: 60, pb_box_max_k: 1.5, pb_brk_buf_k: 0.5,
   pb_premium_budget: 6000, pb_gamma_max_lots: 4, pb_otm_steps: 1,
   pb_prem_stop_frac: 0.5, pb_prem_trail_arm: 0.8,
+  // BULL-S: OFF, and every number below unread while it is. A row registered
+  // before these existed resolves them here and never reaches the path.
+  bs_enabled: false,
+  bs_strike_step: 0, // > 0 required once enabled
+  bs_strike_jump: 1,
+  bs_stop_mult: 1.25,
+  bs_stop_basis: 1, // the ask
+  bs_stop_confirm_s: 3,
+  bs_lots_start: 1,
+  bs_lots_step: 1,
+  bs_lots_cap: 0, // uncapped: NSE parity only — every DX preset sets it
+  bs_max_open: 0, // unlimited
+  bs_target: 0, // off
+  bs_loss_cap: 0, // off
+  bs_after_halt: 0, // stay flat
+  bs_enter_on_start: true,
+  bs_entry_from_min: 0,
+  bs_entry_to_min: 1440,
+  bs_entry_weekdays: 127, // every day
+  bs_no_entry_before_expiry_min: 0, // off
+  bs_flat_before_expiry_min: 0, // hold into settlement
+  bs_ref_max_age_s: 10,
+  bs_close_req: 0,
+  bs_rearm_req: 0,
 };
 
 /** Every dial name, taken from the defaults so the two can never disagree. */
@@ -690,9 +781,10 @@ const DIAL_KEYS = Object.keys(DEFAULT_DIALS) as ReadonlyArray<keyof Dials>;
  * the schema moves. `DIAL_SECTIONS` is checked against `DEFAULT_DIALS` in the
  * suite: every dial appears in exactly one section, as a `toggle` or a field.
  *
- * `toggle` IS THE SECTION'S MASTER SWITCH, and only the five dials that really
+ * `toggle` IS THE SECTION'S MASTER SWITCH, and only the six dials that really
  * are one may sit there (`shift_enabled`, `unwind_enabled`, `trend_enabled`,
- * `balance_enabled` and `delta_lean_enabled` — see the header). While it is
+ * `balance_enabled`, `delta_lean_enabled` — see the header — and
+ * `bs_enabled`, the BULL-S path's switch). While it is
  * false the section's numeric
  * fields are INERT: still shown, still their stored value, but not read by the
  * engine. The sections whose off-state is a NUMBER — Recycle (`recycle_frac`
@@ -971,14 +1063,91 @@ export const DIAL_SECTIONS: ReadonlyArray<DialSection> = [
       'pb_prem_trail_arm',
     ],
   },
+  {
+    // The FOURTH decide path, at the very foot: no NSE book opens it, and on
+    // the Delta desk it is the only section a BULL-S book reads. Not
+    // `collapsed` — there it is the whole panel. `bs_enabled` is a real master
+    // switch (an engine switch, like `delta_lean_enabled`): while it is false
+    // the engine reads none of the fields below.
+    key: 'bull-s',
+    label: 'BULL-S',
+    toggle: 'bs_enabled',
+    fields: [
+      // The grid
+      'bs_strike_step',
+      'bs_strike_jump',
+      // The stop
+      'bs_stop_mult',
+      'bs_stop_basis',
+      'bs_stop_confirm_s',
+      // The pyramid
+      'bs_lots_start',
+      'bs_lots_step',
+      'bs_lots_cap',
+      'bs_max_open',
+      // The book's target, loss cap and halt
+      'bs_target',
+      'bs_loss_cap',
+      'bs_after_halt',
+      'bs_enter_on_start',
+      // When new entries may go on
+      'bs_entry_from_min',
+      'bs_entry_to_min',
+      'bs_entry_weekdays',
+      'bs_no_entry_before_expiry_min',
+      'bs_flat_before_expiry_min',
+      'bs_ref_max_age_s',
+      // The two book actions, as counters
+      'bs_close_req',
+      'bs_rearm_req',
+    ],
+  },
 ];
+
+type BsKey = Extract<keyof Dials, `bs_${string}`>;
+
+const int = (v: number): boolean => Number.isInteger(v);
+const minuteOfDay = (v: number): boolean => int(v) && v >= 0 && v <= 1440;
+const count = (v: number): boolean => int(v) && v >= 0;
+const nonNegative = (v: number): boolean => v >= 0;
+
+/**
+ * THE RANGE EACH NUMERIC bs_* DIAL MUST BE IN. Every other dial is checked for
+ * type only (header); these are checked for range as well because the BULL-S
+ * path is new and its dials are typed by hand into a free-form document, and
+ * a jump of 3, a stop multiple of 1 or a size of 1.5 contracts is a book that
+ * trades on a rule nobody wrote. Sizes and counters are whole contracts.
+ */
+const BS_RANGES: Partial<Record<BsKey, (v: number) => boolean>> = {
+  bs_strike_step: nonNegative,
+  bs_strike_jump: (v) => v === 1 || v === 2,
+  bs_stop_mult: (v) => v > 1,
+  bs_stop_basis: (v) => v === 0 || v === 1,
+  bs_stop_confirm_s: nonNegative,
+  bs_lots_start: (v) => int(v) && v >= 1,
+  bs_lots_step: count,
+  bs_lots_cap: count,
+  bs_max_open: count,
+  bs_target: nonNegative,
+  bs_loss_cap: nonNegative,
+  bs_after_halt: (v) => v === 0 || v === 1,
+  bs_entry_from_min: minuteOfDay,
+  bs_entry_to_min: minuteOfDay,
+  bs_entry_weekdays: (v) => int(v) && v >= 0 && v <= 127,
+  bs_no_entry_before_expiry_min: nonNegative,
+  bs_flat_before_expiry_min: nonNegative,
+  bs_ref_max_age_s: (v) => v > 0,
+  bs_close_req: count,
+  bs_rearm_req: count,
+};
 
 /**
  * Fold a stored `dials` document onto `DEFAULT_DIALS`.
  *
  * Returns the resolved set plus the names of every entry it refused — a key
- * that is not a dial, a value of the wrong type, or a number that is not
- * finite. `unknown` preserves the document's own key order so the dashboard
+ * that is not a dial, a value of the wrong type, a number that is not finite,
+ * or a bs_* number outside `BS_RANGES` (and `bs_strike_step` while
+ * `bs_enabled` has no step). `unknown` preserves the document's own key order so the dashboard
  * can point at rows in the order the operator wrote them.
  */
 export function resolveDials(
@@ -1004,6 +1173,23 @@ export function resolveDials(
       continue;
     }
     out[key] = value as number | boolean;
+  }
+
+  // The bs_* ranges: a value the BULL-S path cannot run on is refused BY NAME
+  // and keeps its default, exactly as a wrong type is.
+  for (const key of Object.keys(raw)) {
+    const range = BS_RANGES[key as BsKey];
+    if (range === undefined || unknown.includes(key)) continue;
+    if (!range(out[key] as number)) {
+      unknown.push(key);
+      out[key] = (DEFAULT_DIALS as unknown as Record<string, number | boolean>)[key] as number;
+    }
+  }
+  // An ENABLED book with no strike step has no grid. Named, so the dashboard
+  // shows it — but `bs_enabled` stays as stored: turning it off here would
+  // hand the book to another engine. `decideBullS` holds on a 0 step instead.
+  if (out['bs_enabled'] === true && !((out['bs_strike_step'] as number) > 0) && !unknown.includes('bs_strike_step')) {
+    unknown.push('bs_strike_step');
   }
 
   // The one cast in the file, and it is load-bearing rather than lazy: `out`

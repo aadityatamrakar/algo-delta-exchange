@@ -19,7 +19,7 @@
     "@algomaker/dx": "1.0.0",
     "@algomaker/instruments": "1.0.0",
     "@algomaker/order-bus": "1.0.0",
-    "@algomaker/venue": "1.0.0",
+    "@algomaker/venue": "*",
     "socket.io-client": "^2.4.0"
   }
 }

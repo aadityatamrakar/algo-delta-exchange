@@ -15,6 +15,7 @@
  */
 
 import type { OptionMaster } from '@algomaker/instruments'
+import { roundToStep } from '@algomaker/venue'
 import {
   closingSide,
   signedQty,
@@ -25,6 +26,15 @@ import {
   type MarkSource,
   type Skip,
 } from './contract.ts'
+
+/**
+ * Every quantity this fold produces is snapped to a grid far finer than any
+ * venue's step (NSE 1 share, Delta 0.001 BTC), so float tails cannot survive a
+ * sum: 0.05 + 0.05 + 0.05 is 0.15000000000000002, and closing 0.15 against it
+ * would leave a 2.7e-17 leg that counts as a position. Integers pass unchanged.
+ */
+const QTY_GRID = 1e-6
+const cleanQty = (x: number): number => roundToStep(x, QTY_GRID)
 
 /** One order that actually reached a rail, in the terms the book needs. */
 export interface RoutedFill {
@@ -139,8 +149,8 @@ export function applyRoutedFill(
     const leg = next[i] as BridgeLeg
     if (!isMatch(leg) || Math.sign(leg.qty) === sign) continue
     const take = Math.min(remaining, Math.abs(leg.qty))
-    remaining -= take
-    const qty = leg.qty + sign * take
+    remaining = cleanQty(remaining - take)
+    const qty = cleanQty(leg.qty + sign * take)
     if (qty === 0) {
       next.splice(i, 1)
       i--
@@ -159,7 +169,7 @@ export function applyRoutedFill(
   if (j < 0) return [...next, newLeg(sign * remaining)]
 
   const leg = next[j] as BridgeLeg
-  const qty = leg.qty + sign * remaining
+  const qty = cleanQty(leg.qty + sign * remaining)
   /**
    * A LEG THAT ALREADY EXISTS KEEPS ITS OWN `deskTag`, `openedTs` AND `leanId`.
    *
@@ -333,7 +343,7 @@ export function applyActions(
           const heldQty = Math.abs(held.qty)
           next[heldIdx] = {
             ...held,
-            qty: held.qty + signedQty(action.side, action.qty),
+            qty: cleanQty(held.qty + signedQty(action.side, action.qty)),
             entryPrice: (heldQty * held.entryPrice + action.qty * price) / (heldQty + action.qty),
           }
         } else {
@@ -512,7 +522,7 @@ export function applyActions(
           deskTag: leg.deskTag,
           tradingsymbol: leg.instrument.tradingsymbol,
           side,
-          qty: Math.abs(delta),
+          qty: cleanQty(Math.abs(delta)),
           price,
           ts: ctx.nowMs,
         })

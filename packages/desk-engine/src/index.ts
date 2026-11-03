@@ -117,3 +117,16 @@ export * from './delta-lean/playbook/decide.ts';
 // The frame's steadied index (median of the newest three prints), for the
 // supervisor's index level: one bad print must not move a parity band either.
 export { steadySpot } from './delta-lean/playbook/kit.ts';
+
+/**
+ * THE BULL-S PATH (Delta spec §6), the fourth.
+ *
+ * A straddle sold each time the reference crosses a grid level, pyramided,
+ * each bought back on its own combined stop; book target, loss cap and two
+ * operator commands as counters. A book reaches it through `bs_enabled`,
+ * which defaults off. Exported: the decide entry and its inputs, the
+ * `RuleState.bs` row and its hydrator, and the grid arithmetic.
+ */
+export { decideBullS, type BullSInputs } from './bull-s/decide.ts';
+export { BS_EMPTY, hydrateBullState, type BullSGroup, type BullSHaltReason, type BullSState } from './bull-s/state.ts';
+export { bsCrossedLevel, bsNearestLevel } from './bull-s/grid.ts';
