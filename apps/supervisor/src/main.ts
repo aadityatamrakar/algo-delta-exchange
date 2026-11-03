@@ -1086,6 +1086,8 @@ export class Supervisor {
       host: new EngineHost({
         tag: book.tag,
         mode: book.mode,
+        // The process venue, once; absent leaves the host its own default.
+        ...(this.#d.venue === undefined ? {} : { venue: this.#d.venue }),
         dials: (): Dials => runtime.book.dials,
         // Priced the way THIS book's dials ask (`chainForwardFor`), and the
         // source recorded on the book at the snap — see `#snapFor`.
@@ -1123,7 +1125,7 @@ export class Supervisor {
         spotAsOf: () => this.#lastSpot.get(runtime.book.symbol)?.ts ?? 0,
         // ONE CLOCK per book, shared with the journal by construction: the host
         // consumes the mark and hands it out, and nothing else calls `next()`.
-        marks: new MarkClock(),
+        marks: new MarkClock(this.#d.venue),
         onMark: (sample) => this.#onMark(runtime, sample),
         // The switch as the poll last resolved it. `#retune` replaces
         // `runtime.book` on every pass, so a PATCH on the strategy row lands

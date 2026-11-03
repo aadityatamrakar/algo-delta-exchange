@@ -102,6 +102,11 @@ export interface WireFill {
   readonly qty: number;
   readonly price: number;
   readonly resting?: boolean | undefined;
+  /**
+   * What the venue charged for this fill, in the book currency (Delta: USD,
+   * GST included). Absent = none (NSE). The host banks realised NET of it.
+   */
+  readonly fee?: number | undefined;
 }
 
 export interface DecisionResponse {

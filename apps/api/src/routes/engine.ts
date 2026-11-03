@@ -718,6 +718,8 @@ function wireFills(result: ServiceDecisionResponse): WireFill[] {
     qty: f.qty,
     price: f.price,
     ...(f.resting === true ? { resting: true } : {}),
+    // The venue's charge (Delta), so the supervisor banks net. Absent on NSE.
+    ...(typeof f.fee === 'number' && Number.isFinite(f.fee) && f.fee > 0 ? { fee: f.fee } : {}),
   }))
 }
 
