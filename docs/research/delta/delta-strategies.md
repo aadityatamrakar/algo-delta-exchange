@@ -22,7 +22,7 @@ Contents
 
 ### 1.1 What it is, and what it did on NSE
 
-BULL-S is the crossover straddle pyramid in `context/strategy-specs/bull.md` §3, hosted today
+BULL-S is the crossover straddle pyramid in `docs/reference/nse/strategy-bull.md` §3, hosted today
 as `packages/strategies/src/premium-leg-book` (`Bull_S-1`, `Bull_SNX-1`).
 
 - **Entry.** Each time the reference price crosses a strike level, it sells the ATM straddle at
@@ -32,7 +32,7 @@ as `packages/strategies/src/premium-leg-book` (`Bull_S-1`, `Bull_SNX-1`).
   pyramid is uncapped (D9), and each straddle exits at its own size (P6).
 - **Square-off.** The port added a 15:20 square-off. The legacy code had none (R1).
 
-The record, `docs/reports/2026-10-16-desk-review.md`, 28 Jul to 15 Oct:
+The record, the NSE desk review of 16 Oct (`docs/reports/2026-10-16-desk-review.md` in the NSE repo), 28 Jul to 15 Oct:
 
 | Book | As recorded | At a flat 1 lot | Notes |
 |---|---|---|---|

@@ -161,7 +161,7 @@ Live fills carry Delta's reported commission instead.
 
 ## 6. The BULL-S book
 
-### 6.1 Rules (same idea as `Bull_S-1`, `context/strategy-specs/bull.md` §3)
+### 6.1 Rules (same idea as `Bull_S-1`, `docs/reference/nse/strategy-bull.md` §3)
 1. **Grid.** The grid step is `bs_strike_jump × bs_strike_step_usd` (e.g. daily: 1 × $200 or 2 × $400). Levels
    are multiples of the grid step.
 2. **Entry.** When the reference price (index `.DEXBTUSD`) crosses a grid level, sell the straddle (CE + PE)

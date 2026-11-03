@@ -17,8 +17,8 @@
  *     node scripts/dryrun-feed.mjs rally
  *
  * Then create the book from the `recenter-relief-r` preset on the Books page and
- * watch. `docs/GOING-LIVE-RUNBOOK-SUPERVISOR.md` is the checklist that says what
- * each scenario should do and what evidence to look for.
+ * watch. (The NSE repo's `docs/GOING-LIVE-RUNBOOK-SUPERVISOR.md` was the checklist
+ * of what each scenario should do; it was not carried into the Delta desk.)
  *
  *     node scripts/dryrun-feed.mjs <scenario> [--symbol TCS] [--expiry 2026-08-28]
  *                                  [--spot 3000] [--seconds 900] [--rate 2]

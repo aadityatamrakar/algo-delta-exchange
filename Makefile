@@ -60,7 +60,7 @@ endef
 #
 #   make deploy-remote DEPLOY_HOST=ubuntu@1.2.3.4 SSH_KEY=~/.ssh/desk.pem
 #
-# The IP is already in docs/SERVER-REBUILD.md; the KEY is not, and must not be.
+# The IP may live in this file; the KEY must not.
 DEPLOY_HOST ?= ubuntu@3.108.231.230
 DEPLOY_PATH ?= /opt/algomaker-delta
 # The key PATH is not a secret and the key itself is outside the repo, so

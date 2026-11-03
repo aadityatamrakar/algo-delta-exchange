@@ -160,7 +160,7 @@ Key: **NSE** marks an NSE, IST, rupee, lot or Kite-token assumption. **Neutral**
   - `Rail.destinations: 'sim'|'xts'` (`:74`); `Risk.dayLossRupees`.
   - Square-off and entry minutes are hard-coded IST: 15:15–15:24 squareoff, a 09:45 opening range (`configs/*.ts`; `range-breakout-directional/logic.ts:179`).
 - **Runner wire.** It POSTs `{instrument:{tradingsymbol, lotSize, tickSize, exchange, instrumentToken}, side, lots, …}` to `/v1/desk/submit` (`apps/runner/src/order-gateway.ts:1285-1300`).
-- **SIGTERM.** Square-off is now **opt-in** with `DESK_SQUAREOFF_ON_STOP=1`; the default stops without flattening and resumes on restart (`apps/runner/src/main.ts:800-845`). `context/00` §1 predates this. The flat-book rule for restarts stands either way.
+- **SIGTERM.** Square-off is now **opt-in** with `DESK_SQUAREOFF_ON_STOP=1`; the default stops without flattening and resumes on restart (`apps/runner/src/main.ts:800-845`). `docs/reference/nse/00-live-system-map.md` §1 predates this. The flat-book rule for restarts stands either way.
 
 ### packages/greeks
 - **NSE defaults.**
