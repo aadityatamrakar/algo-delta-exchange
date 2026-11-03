@@ -92,3 +92,4 @@ apps/web/dist-traders/
 # Python bytecode
 __pycache__/
 *.pyc
+/.worktrees/
