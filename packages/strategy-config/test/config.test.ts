@@ -7,7 +7,7 @@ const DATA = [{ kind: 'future', underlying: 'BANKNIFTY' }] as const
 function base(overrides: Partial<BaseConfig> = {}): BaseConfig {
   return {
     tag: 'Test_Tag',
-    class: 'range-breakout-directional',
+    class: 'premium-leg-book',
     enabled: true,
     underlying: { symbol: 'BANKNIFTY', reference: 'current-future', strikeStep: 100 },
     strike: { offsetPoints: 0 },

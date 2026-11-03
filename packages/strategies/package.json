@@ -1,7 +1,7 @@
 {
   "name": "@algomaker/strategies",
   "version": "1.0.0",
-  "description": "The 4 strategy classes + the ExternalSignalMirror adapter that the 15 active strategies port onto.",
+  "description": "The premium-leg-book strategy class (the NSE BULL/LION port), kept as the BULL-S parity reference.",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "node --test test/*.test.ts" },

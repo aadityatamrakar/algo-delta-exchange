@@ -1298,11 +1298,7 @@ itHttp('/available lists catalogue tags not yet added TO THAT MODE', async () =>
     }[]
   }
   const before = await list('paper')
-  assert.ok(before.some((r) => r.tag === 'BN_BREAKOUT'), 'a catalogue tag with no row is offered')
-  assert.ok(
-    before.some((r) => r.tag === 'MIRROR_1PBUY'),
-    'a MIRROR tag is offered too — MirrorHost runs it, so it is hostable',
-  )
+  assert.ok(before.some((r) => r.tag === 'BULL_S_1'), 'a catalogue tag with no row is offered')
   assert.equal(
     before.some((r) => r.tag === 'NOT_A_REAL_STRATEGY'),
     false,
@@ -1310,11 +1306,11 @@ itHttp('/available lists catalogue tags not yet added TO THAT MODE', async () =>
   )
   // Everything offered must actually be addable, or the form offers a 400.
   const added = await post('/v1/desk/strategies', {
-    tag: 'BN_BREAKOUT', kind: 'hosted', mode: 'paper',
+    tag: 'BULL_S_1', kind: 'hosted', mode: 'paper',
   })
   assert.equal(added.status, 201)
   assert.equal(
-    (await list('paper')).some((r) => r.tag === 'BN_BREAKOUT'),
+    (await list('paper')).some((r) => r.tag === 'BULL_S_1'),
     false,
     'a tag already added to paper is not offered on the paper form again',
   )
@@ -1322,7 +1318,7 @@ itHttp('/available lists catalogue tags not yet added TO THAT MODE', async () =>
   // ...but it IS still offered for LIVE, flagged as already registered. A
   // strategy running on paper is exactly the one an operator wants to add to
   // live, and excluding it because a row exists would make that impossible.
-  const live = (await list('live')).find((r) => r.tag === 'BN_BREAKOUT')
+  const live = (await list('live')).find((r) => r.tag === 'BULL_S_1')
   assert.equal(live?.registered, true)
 })
 
@@ -1370,18 +1366,17 @@ itHttp('bulk-on SKIPS a hosted row with no implementation, and says why', async 
   // an operator ends up believing a strategy is running when it is not.
   await handle!.db.collection(COLLECTIONS.strategies).deleteMany({})
   const now = Date.now()
-  // A tag NO host implements. MIRROR_* used to serve this role and no longer
-  // can: MirrorHost runs those, and the check now spans both hosting paths.
+  // A tag no host implements.
   await store.registerStrategy(
     { tag: 'GHOST_STRATEGY', kind: 'hosted', modes: { paper: { enabled: false } } }, now,
   )
   await store.registerStrategy(
-    { tag: 'BN_BREAKOUT', kind: 'hosted', modes: { paper: { enabled: false } } }, now,
+    { tag: 'BULL_S_1', kind: 'hosted', modes: { paper: { enabled: false } } }, now,
   )
 
   const res = await post('/v1/desk/strategies/bulk', { mode: 'paper', on: true })
   const body = (await res.json()) as Record<string, unknown>
-  assert.deepEqual(body['changed'], ['BN_BREAKOUT'])
+  assert.deepEqual(body['changed'], ['BULL_S_1'])
   assert.deepEqual(body['skipped'], [
     {
       tag: 'GHOST_STRATEGY',

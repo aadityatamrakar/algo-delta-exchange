@@ -23,9 +23,6 @@ import { HOSTED_STRATEGIES } from '../../api/src/registry-seed.ts'
 import { CATALOGUE } from '../src/catalogue.ts'
 import { ensureRuntimeIndexes, runtimePublisher, toRuntimeView, RUNTIME_STALE_MS } from '../src/runtime.ts'
 
-/** The rows that deliberately have no `StrategyBase` implementation. */
-const SIGNAL_MIRRORS = ['MIRROR_1PBUY', 'MIRROR_A006', 'MIRROR_A010', 'MIRROR_EMA2050']
-
 test('every catalogue tag has a registry row — otherwise it could never be switched off', () => {
   const seeded = new Set(HOSTED_STRATEGIES.map((s) => s.tag))
   for (const tag of CATALOGUE.keys()) {
@@ -33,16 +30,9 @@ test('every catalogue tag has a registry row — otherwise it could never be swi
   }
 })
 
-test('every seeded row except the signal mirrors has an implementation', () => {
+test('every seeded row has an implementation', () => {
   for (const seed of HOSTED_STRATEGIES) {
-    if (SIGNAL_MIRRORS.includes(seed.tag)) continue
     assert.ok(CATALOGUE.has(seed.tag), `${seed.tag} is seeded but nothing runs it`)
-  }
-})
-
-test('the signal mirrors are deliberately absent — they are adapters, not strategies', () => {
-  for (const tag of SIGNAL_MIRRORS) {
-    assert.equal(CATALOGUE.has(tag), false)
   }
 })
 
@@ -50,10 +40,9 @@ test('the registry tag and the config tag are BOTH kept — neither can be renam
   // The config tag is what the golden-master fixtures and the legacy XTS
   // account map are keyed on; the registry tag is what every gate on the
   // bridge keys on. Collapsing them would break one or the other.
-  assert.equal(CATALOGUE.get('CHEETAH_B1_1')?.configTag, 'CheetahB1-1')
-  assert.equal(CATALOGUE.get('EAGLE_S_1')?.configTag, 'Eagle_S-1')
+  assert.equal(CATALOGUE.get('BULL_S_1')?.configTag, 'Bull_S-1')
   assert.equal(CATALOGUE.get('BULL_SNX_1')?.configTag, 'Bull_SNX-1')
-  assert.equal(CATALOGUE.get('BN_BREAKOUT')?.configTag, 'BN_BREAKOUT')
+  assert.equal(CATALOGUE.get('LION_S25_2')?.configTag, 'Lion_S25_2')
 })
 
 test('every entry declares an underlying and at least one data need', () => {

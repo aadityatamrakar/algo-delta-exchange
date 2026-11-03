@@ -123,11 +123,6 @@ export function instanceKey(tag: string, mode: RunMode): string {
  * a real case rather than an error — a row seeded ahead of the class that runs
  * it — and it is reported as `stopped` with a reason, never rendered as if the
  * runner were supervising it.
- *
- * The three `MIRROR_*` rows used to be the standing example and no longer are:
- * they are hosted by `mirrors.ts` (they are `SignalSource` adapters, not
- * `StrategyBase` objects) and `main.ts` withholds them from `loadRows`, so the
- * runner never sees them at all.
  */
 export interface StrategyFactory {
   create(instance: HostedInstance): StrategyBase | null
@@ -327,7 +322,7 @@ export class Runner {
    * interval and `sync()` from a 15-second one, and neither waits for the
    * previous pass — so a flatten that takes 1.5 seconds is enough for two
    * passes to be inside the day-end exit at once, each reversing the same
-   * legs. `MirrorHost.sync` guards the identical hazard for the same reason.
+   * legs.
    *
    * Dropping the overlapping pass rather than queueing it is deliberate: both
    * of these are IDEMPOTENT reconciliations against the clock and the registry,

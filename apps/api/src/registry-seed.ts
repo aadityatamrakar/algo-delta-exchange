@@ -29,10 +29,6 @@
  * Adding a strategy is a row here plus a config in `packages/strategies`; it is
  * never a change to the runner's lifecycle code.
  *
- * `smp_order_listener` (0914) is the 16th entry in the legacy table and gets NO
- * row: it is infrastructure, not a strategy. The order gateway's fill watcher
- * replaces it, and giving it a registry row would put an on/off switch in the
- * portal that does nothing.
  */
 
 import { isOn, type StrategyRow } from './strategies.ts'
@@ -74,34 +70,6 @@ export interface SeedStore {
  */
 export const LEGACY_SEEDED_REASON = 'not yet enabled by an operator'
 
-/**
- * Reasons the seed USED to write and no longer should, cleared on the same
- * narrow terms as `LEGACY_SEEDED_REASON`.
- *
- * Both were true when written and are now false, which is worse than noise: a
- * row that explains a defect somebody already fixed sends an operator to
- * investigate nothing.
- *
- *  - ATR_BAND_NIFTY's live block. Both port defects are fixed and its golden
- *    test is green; the row was still telling anyone who looked that the test
- *    was failing.
- *  - The three mirrors' "not migrated to the broker store yet", which described
- *    a PLAN rather than a problem — and the plan changed. optionbhai is a
- *    signal source, not a broker, so its credentials live in the environment by
- *    decision, named by the config's `credentialsRef`.
- *
- * Deleting them from the seed only fixes a FRESH deployment. Every desk already
- * running keeps the text forever, because seeding is insert-only by design —
- * which is exactly how "fixed in code, still broken in production" happens.
- */
-/** The mirrors' old start time, which `MirrorHost` never honoured. */
-export const LEGACY_MIRROR_AUTOSTART = '0914'
-
-export const RETIRED_SEEDED_REASONS: readonly string[] = [
-  'BLOCKED FROM LIVE — golden test still failing (Phase C §6); paper only',
-  'signal-source credentials not migrated to the broker store yet',
-]
-
 export interface HostedSeed {
   readonly tag: string
   readonly label: string
@@ -112,116 +80,17 @@ export interface HostedSeed {
 }
 
 /**
- * The Phase C §2 table.
+ * The hosted rows: the `premium-leg-book` family, the only one the Delta desk
+ * keeps (3 Nov 2026 — the other NSE families and the optionbhai signal mirrors
+ * were removed). Each row here must have a `CATALOGUE` entry in
+ * `apps/runner/src/catalogue.ts`; `apps/runner/test/catalogue.test.ts` checks it.
  *
- * COUNT NOTE: the spec says "15 strategies", which is 15 legacy MODULES. It is
- * 17 rows here because `orb-scalp.js` is a single legacy process that runs
- * three independent configs (BANKNIFTY / NIFTY / SENSEX) off one `CONFIGS`
- * array. Each needs its own switch, its own mode and its own live lot
- * allocation — collapsing them onto one row would mean disabling the SENSEX
- * variant also silently disabled the NIFTY one.
- *
- * `autostartAt` values are the legacy `delay_start` strings from
- * `archive/common/models/strategies.json`; `''` is the legacy
- * `autostart: true`, i.e. start with the process.
+ * 0918, not '' (start with the process): '' was the legacy `autostart: true`,
+ * which the day-roll floor turned into an entry at the 09:15 bell, selling
+ * straddles into the opening auction's first prints. 0918 lets the open settle.
  */
 export const HOSTED_STRATEGIES: readonly HostedSeed[] = [
-  // --- external signal mirrors (delay_start 0914) ---------------------------
-  // These carry a ported CONFIG but no StrategyBase implementation: an external
-  // signal mirror has no entry/exit logic, no position state and no market data
-  // need, so it is a SignalSource adapter rather than a scheduled strategy
-  // (packages/strategies/src/external-signal-mirror/adapter.ts). They get rows
-  // so their orders can be gated and switched like everything else; the runner
-  // reports them as unimplemented rather than pretending to supervise them.
-  //
-  // Their `autostartAt` is '' — START WITH THE PROCESS — and that is not the
-  // legacy 0914 it replaces.
-  //
-  // `MirrorHost` has no schedule and never had one: a mirror relays another
-  // account's EXECUTED orders, so there is no session to open. Delaying it is
-  // not merely pointless, it is DANGEROUS. If the upstream account entered at
-  // 09:10 and the mirror connected at 09:14, it would miss the entry, see the
-  // exit, and place a SELL with no position behind it — opening a short in the
-  // wrong direction. You cannot half-mirror a round trip, so the only safe
-  // start is the earliest one.
-  //
-  // Legacy carried that risk because pm2 started those three at delay_start
-  // 0914. Keeping the number here would have kept a column telling the operator
-  // a time nothing honours.
-  //
-  // They carry NO `disabledReason`. They used to say the credentials were "not
-  // migrated to the broker store yet", which described a plan rather than a
-  // problem — and the plan changed: optionbhai is a signal source, not a
-  // broker, so its credentials live in the environment by decision. The config's
-  // `credentialsRef` names the pair (`optionbhai/1pbuy` ->
-  // OPTIONBHAI_1PBUY_USER / _PASS), and a mirror whose pair is absent refuses to
-  // start and says so at that moment — which is the honest place to report it,
-  // not a permanent line on a registry row.
-  {
-    tag: 'MIRROR_1PBUY',
-    label: 'Mirror 1PBUY (optionbhai)',
-    autostartAt: '',
-  },
-  {
-    tag: 'MIRROR_A006',
-    label: 'Mirror A006 (optionbhai)',
-    autostartAt: '',
-  },
-  {
-    tag: 'MIRROR_A010',
-    label: 'Mirror A010 (optionbhai)',
-    autostartAt: '',
-  },
-  {
-    tag: 'MIRROR_EMA2050',
-    label: 'Mirror EMA2050 (optionbhai)',
-    autostartAt: '',
-  },
-
-  // --- directional breakout ------------------------------------------------
-  { tag: 'BN_BREAKOUT', label: 'BANKNIFTY first-candle breakout', autostartAt: '0916' },
-
-  // --- momentum flip -------------------------------------------------------
-  { tag: 'CHEETAH_B1_1', label: 'Cheetah B1 BANKNIFTY', autostartAt: '0917' },
-  { tag: 'CHEETAH_B1_SNX', label: 'Cheetah B1 SENSEX', autostartAt: '0917' },
-
-  // --- ATR band ------------------------------------------------------------
-  {
-    tag: 'ATR_BAND_NIFTY',
-    label: 'ATR band NIFTY',
-    autostartAt: '0918',
-    // Phase C §6's live block is GONE, and so is the reason string that carried
-    // it. Both port defects are fixed — the band forms in two steps (60-minute
-    // ATR width at 10:15, lines anchored on the 11:40 five-minute close), and
-    // the candle-close stop reads the UNDERLYING series rather than the
-    // option's own. The golden test is green and is now the regression guard.
-    //
-    // The string is deleted rather than reworded because `disabledReason` is
-    // for a reason a HUMAN recorded. A row that keeps explaining a defect that
-    // no longer exists is worse than a blank one: once every row carries text,
-    // a real reason is invisible in the noise.
-  },
-
-  // --- opening-range futures (delay_start 0918) ----------------------------
-  { tag: 'ORB_FUT_NIFTY', label: 'ORB futures NIFTY', autostartAt: '0918' },
-  { tag: 'ORB_FUT_BN', label: 'ORB futures BANKNIFTY', autostartAt: '0918' },
-  { tag: 'ORB_FUT_SNX', label: 'ORB futures SENSEX', autostartAt: '0918' },
-
-  // --- opening-range option scalps (one legacy process, three configs) ------
-  { tag: 'ORB_SCALP_BN', label: 'ORB scalp BANKNIFTY', autostartAt: '0918' },
-  { tag: 'ORB_SCALP_NIFTY', label: 'ORB scalp NIFTY', autostartAt: '0918' },
-  { tag: 'ORB_SCALP_SNX', label: 'ORB scalp SENSEX', autostartAt: '0918' },
-
-  // --- premium sellers (were legacy `autostart: true`) ----------------------
-  // These entered THE INSTANT they started. Legacy `autostart: true` became
-  // '', the day-roll floor turned '' into the 09:15 bell, and all four sold
-  // straddles into the opening auction's first prints — the thinnest, most
-  // whipsaw-prone minutes of the day. 0918 lets the open settle first. The
-  // breakout family is different: it needs the bell's ticks to BUILD its
-  // opening range and places nothing until the range breaks, so it keeps
-  // its earlier starts.
   { tag: 'LION_S25_2', label: 'Lion S25-2 BANKNIFTY straddle', autostartAt: '0918' },
-  { tag: 'EAGLE_S_1', label: 'Eagle S-1 BANKNIFTY premium ladder', autostartAt: '0918' },
   { tag: 'BULL_S_1', label: 'Bull S-1 BANKNIFTY straddle', autostartAt: '0918' },
   { tag: 'BULL_SNX_1', label: 'Bull SNX-1 SENSEX straddle', autostartAt: '0918' },
 ]
@@ -229,17 +98,12 @@ export const HOSTED_STRATEGIES: readonly HostedSeed[] = [
 /**
  * The premium sellers' old seeded value — '' meant "start with the process",
  * which `sessionStartMinute`'s floor turns into an entry at the 09:15 bell.
- * Repaired to the seed's 0918 on the same exact-old-value terms as the
- * mirrors' 0914: rows already in Mongo keep '' forever otherwise, and an
+ * Repaired to the seed's 0918 on exact-old-value terms: rows already in Mongo
+ * keep '' forever otherwise, and an
  * operator who chose a real time of their own is never touched.
  */
 export const LEGACY_BELL_AUTOSTART = ''
-export const LEGACY_BELL_TAGS: readonly string[] = [
-  'LION_S25_2',
-  'EAGLE_S_1',
-  'BULL_S_1',
-  'BULL_SNX_1',
-]
+export const LEGACY_BELL_TAGS: readonly string[] = ['LION_S25_2', 'BULL_S_1', 'BULL_SNX_1']
 
 /**
  * Insert any missing hosted row, and clear the legacy filler reason from rows
@@ -264,39 +128,13 @@ export async function seedHostedStrategies(
        *
        * Guarded three ways, because rule 1 says a redeploy must never undo an
        * operator's decision: the text must be the exact legacy filler, this
-       * seed must not have declared a real reason of its own (the `MIRROR_*`
-       * rows keep theirs — an unmigrated credential is a genuine blocker the
-       * operator would otherwise have to rediscover), and the row must still
-       * be off in BOTH modes. A row someone switched on and back off with a
+       * seed must not have declared a real reason of its own, and the row must
+       * still be off in BOTH modes. A row someone switched on and back off with a
        * note of their own matches none of those.
        */
-      /**
-       * The mirrors' 0914 became '' (start with the process) because
-       * `MirrorHost` never honoured a schedule — see the block above
-       * HOSTED_STRATEGIES. Repaired on the same terms as a retired reason: the
-       * exact old value only, and never a row somebody switched on.
-       */
-      // NO switched-on guard here, unlike every other repair, and the reason is
-      // specific rather than a relaxation: `autostartAt` is INERT for a mirror.
-      // `MirrorHost` never reads it and `Runner` excludes MIRROR_* entirely, so
-      // correcting it cannot change what runs — there is no behaviour to
-      // protect. Keeping the guard only meant the rows an operator actually
-      // uses were the ones left displaying a time nothing honours, which is
-      // exactly backwards.
-      if (
-        existing.autostartAt === LEGACY_MIRROR_AUTOSTART &&
-        seed.autostartAt !== LEGACY_MIRROR_AUTOSTART &&
-        seed.tag.startsWith('MIRROR_')
-      ) {
-        if (await store.repairSeededAutostart(seed.tag, LEGACY_MIRROR_AUTOSTART, seed.autostartAt)) {
-          log('mirror autostart corrected — MirrorHost has no schedule', { tag: seed.tag })
-        }
-      }
-
       // The premium sellers' '' -> 0918, and DELIBERATELY no switched-on
-      // guard — the opposite reasoning from the mirrors'. There the field was
-      // inert so correcting it changed nothing; here it is honoured, and the
-      // rows an operator runs are precisely the ones entering at the bell,
+      // guard: the field is honoured, and the rows an operator runs are
+      // precisely the ones entering at the bell,
       // which is the behaviour being retired. '' was the seed's own value,
       // never an operator's choice of time, so the exact-match still protects
       // every deliberately chosen start.
@@ -315,8 +153,7 @@ export async function seedHostedStrategies(
 
       if (
         seed.disabledReason === undefined &&
-        (existing.disabledReason === LEGACY_SEEDED_REASON ||
-          RETIRED_SEEDED_REASONS.includes(existing.disabledReason)) &&
+        existing.disabledReason === LEGACY_SEEDED_REASON &&
         !isOn(existing.modes, 'paper') &&
         !isOn(existing.modes, 'live')
       ) {

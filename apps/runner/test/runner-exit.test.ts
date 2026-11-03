@@ -827,44 +827,45 @@ test('liveLots changing really is nothing to restart for', async () => {
 // ------------------------------------------------- a REAL catalogue strategy
 
 /**
- * BN_BREAKOUT, the real class from `packages/strategies`, driven through the
- * real runner with the real gateway and ledger.
+ * BULL_S_1, the real premium-leg-book class from `packages/strategies`, driven
+ * through the real runner with the real gateway and ledger.
  *
  * This is the test the fixture in `runner.test.ts` could not be: it makes no
  * assumption about which lifecycle hooks the class implements. The invariant it
  * asserts is the one that has to hold for every strategy in the catalogue
  * however each of them is written — when the runner says the position is
- * closed, an exit for the instrument the entry actually used has reached the
+ * closed, an exit for every instrument the entry actually used has reached the
  * bridge and the ledger is empty.
  */
+const CE: InstrumentRef = { ...OPTION, tradingsymbol: 'BANKNIFTY26AUG56000CE', instrumentToken: 900_001 }
+const PE: InstrumentRef = { ...OPTION, tradingsymbol: 'BANKNIFTY26AUG56000PE', instrumentToken: 900_002 }
+const LEGS = [CE.tradingsymbol, PE.tradingsymbol].sort()
+
 function realHarness(nowMs: number): {
   runner: Runner
   clock: ReturnType<typeof fixedClock>
   bridge: FakeBridge
   desk: Desk
   setRows(rows: readonly HostedRow[]): void
-  setCandles(c: readonly Candle[]): void
-  spot(price: number): void
   state(): string
 } {
   const clock = fixedClock(nowMs)
   const log = makeLogger()
   const bridge = new FakeBridge()
   const desk = new Desk(bridge, clock, log)
-  const entry = CATALOGUE.get('BN_BREAKOUT')
-  assert.ok(entry !== undefined, 'BN_BREAKOUT must be in the catalogue')
-  let rows: readonly HostedRow[] = [row({ tag: 'BN_BREAKOUT' })]
-  let candles: readonly Candle[] = []
-  let spotPrice = 56_000
+  const entry = CATALOGUE.get('BULL_S_1')
+  assert.ok(entry !== undefined, 'BULL_S_1 must be in the catalogue')
+  let rows: readonly HostedRow[] = [row({ tag: 'BULL_S_1' })]
 
+  // No future listed, so the strategy references the index spot.
   const SPOT_TOKEN = 260_105
   const md: MarketData = {
     quote: (token) =>
-      token === OPTION.instrumentToken
-        ? { token, lastPrice: 250, ts: clock.now() }
-        : { token, lastPrice: spotPrice, ts: clock.now() },
-    candles: async () => candles,
-    option: () => OPTION,
+      token === CE.instrumentToken || token === PE.instrumentToken
+        ? { token, lastPrice: 100, ts: clock.now() }
+        : { token, lastPrice: 56_000, ts: clock.now() },
+    candles: async () => [],
+    option: (_u, _strike, type) => (type === 'CE' ? CE : PE),
     selectOption: () => null,
     future: () => null,
     atmStrike: (_u, price) => Math.round(price / 100) * 100,
@@ -901,54 +902,26 @@ function realHarness(nowMs: number): {
     setRows: (next) => {
       rows = next
     },
-    setCandles: (c) => {
-      candles = c
-    },
-    spot: (p) => {
-      spotPrice = p
-    },
     state: () => runner.snapshots()[0]?.state ?? 'gone',
   }
 }
 
-/**
- * `tsMs` defaults to 09:15 IST, the session's first bar. It is a real instant and
- * not 0 because `#formBand` scopes its candles to TODAY — the port of legacy's
- * `historyData(today, today)` — so an epoch-0 bar is not today's and no band forms.
- */
-const candle = (o: number, c: number, tsMs: number = ist(9, 15)): Candle => ({
-  ts: tsMs,
-  open: o,
-  high: Math.max(o, c),
-  low: Math.min(o, c),
-  close: c,
-})
-
-/** Run the real BN_BREAKOUT up to an open option position. */
+/** Run the real BULL_S_1 up to an open short straddle. */
 async function realEntry(): Promise<ReturnType<typeof realHarness>> {
-  const h = realHarness(ist(9, 16))
+  const h = realHarness(ist(9, 19))
   await h.runner.sync()
   await h.runner.tick()
 
-  // 09:21 formBand: the band is the first candle's close +/- 0.09%.
-  h.setCandles([candle(55_900, 56_000)])
-  h.clock.set(ist(9, 21, 2))
-  await h.runner.tick()
-
-  // A green candle closing above the upper line is the CE breakout.
-  h.setCandles([candle(56_100, 56_300, ist(9, 25))])
-  h.spot(56_300)
-  h.clock.set(ist(9, 26))
-  await h.runner.tick()
-  h.runner.handleTick('BN_BREAKOUT', { token: 260_105, lastPrice: 56_300, ts: ist(9, 26) })
+  // The first reference tick crosses the 56000 strike: sell the ATM straddle.
+  h.runner.handleTick('BULL_S_1', { token: 260_105, lastPrice: 56_000, ts: ist(9, 19) })
   await drain(h)
 
   assert.deepEqual(
-    h.bridge.posted.map((p) => [p.side, p.tradingsymbol]),
-    [['Buy', OPTION.tradingsymbol]],
-    'the real class should have bought the ATM CE',
+    h.bridge.posted.map((p) => [p.side, p.tradingsymbol]).sort(),
+    [['Sell', CE.tradingsymbol], ['Sell', PE.tradingsymbol]],
+    'the real class should have sold the ATM straddle',
   )
-  assert.equal(h.desk.openCount('BN_BREAKOUT', 'paper'), 1)
+  assert.equal(h.desk.openCount('BULL_S_1', 'paper'), 2)
   return h
 }
 
@@ -958,43 +931,43 @@ async function drain(h: { runner: Runner }): Promise<void> {
   await h.runner.tick()
 }
 
-test('a REAL catalogue strategy: BN_BREAKOUT enters, and the runner closes what it entered', async () => {
+test('a REAL catalogue strategy: BULL_S_1 enters, and the runner closes what it entered', async () => {
   const h = await realEntry()
 
   // Switched off mid-session — the path with no cron and no market close to
   // help, i.e. exactly where a strategy without an `onDayEnd` used to be
   // reported `squared-off` while its position stayed open.
   h.clock.set(ist(12, 30))
-  h.setRows([row({ tag: 'BN_BREAKOUT', modes: { paper: { enabled: false } } })])
+  h.setRows([row({ tag: 'BULL_S_1', modes: { paper: { enabled: false } } })])
   await h.runner.sync()
 
   const exits = h.bridge.exits
-  assert.equal(exits.length, 1, 'an exit order must actually have reached the bridge')
-  assert.equal(exits[0]?.side, 'Sell')
-  assert.equal(
-    exits[0]?.tradingsymbol,
-    OPTION.tradingsymbol,
-    'and for the instrument the entry actually used, never a fabricated one',
+  assert.equal(exits.length, 2, 'an exit order per leg must actually have reached the bridge')
+  assert.ok(exits.every((e) => e.side === 'Buy'))
+  assert.deepEqual(
+    exits.map((e) => e.tradingsymbol).sort(),
+    LEGS,
+    'and for the instruments the entry actually used, never a fabricated one',
   )
-  assert.equal(h.desk.openCount('BN_BREAKOUT', 'paper'), 0)
+  assert.equal(h.desk.openCount('BULL_S_1', 'paper'), 0)
 })
 
 test('a REAL catalogue strategy: an exit the bridge REFUSED does not become a squared-off report', async () => {
   const h = await realEntry()
-  // The strategy's own square-off is rejected. It has already cleared its
-  // in-memory position (claim-before-await, so a tick mid-close cannot
-  // double-exit), so from the class's point of view it is flat — `endDay()`
-  // returns perfectly happily and the leg is still open at the broker. Only the
-  // ledger knows, which is the entire reason the runner keeps one.
+  // The strategy's own square-off is rejected. Only the ledger knows the legs
+  // are still open, which is the entire reason the runner keeps one.
   h.bridge.refuse = (p) => (p.reducesExposure && p.flatten === null ? 'no mark for this contract' : null)
 
   h.clock.set(ist(15, 30, 5))
   await h.runner.tick()
 
   const flattens = h.bridge.exits.filter((p) => p.flatten !== null)
-  assert.equal(flattens.length, 1, 'the runner must reverse what the strategy could not')
-  assert.equal(flattens[0]?.tradingsymbol, OPTION.tradingsymbol)
-  assert.equal(h.desk.openCount('BN_BREAKOUT', 'paper'), 0)
+  assert.deepEqual(
+    flattens.map((p) => p.tradingsymbol).sort(),
+    LEGS,
+    'the runner must reverse what the strategy could not',
+  )
+  assert.equal(h.desk.openCount('BULL_S_1', 'paper'), 0)
   assert.equal(h.state(), 'squared-off')
 })
 
@@ -1005,7 +978,6 @@ test('a REAL catalogue strategy: day end leaves nothing open', async () => {
   await h.runner.tick()
 
   assert.equal(h.state(), 'squared-off')
-  assert.equal(h.desk.openCount('BN_BREAKOUT', 'paper'), 0, 'squared-off must mean the ledger is empty')
-  assert.equal(h.bridge.exits.length, 1)
-  assert.equal(h.bridge.exits[0]?.tradingsymbol, OPTION.tradingsymbol)
+  assert.equal(h.desk.openCount('BULL_S_1', 'paper'), 0, 'squared-off must mean the ledger is empty')
+  assert.deepEqual(h.bridge.exits.map((e) => e.tradingsymbol).sort(), LEGS)
 })
