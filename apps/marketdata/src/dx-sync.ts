@@ -100,6 +100,37 @@ export function planDxSync(input: DxPlanInputs): DxSyncPlan {
   return { toUpsert: input.listed, toDelete, retainedExpired, unsettledDropped }
 }
 
+/**
+ * THE PRODUCT'S LEVERAGE ON ITS ROW (`dx_leverage`), from Delta's
+ * `default_leverage` — what the short-option margin estimate divides the index
+ * by (`@algomaker/desk-engine` `bull-s/margin.ts`). It varies by moneyness
+ * (observed 20 / 100 / 200), so it is per product, never one number. A product
+ * that states none carries `dx_leverage: null`: unknown, never a default.
+ */
+export type DxInstrumentRow = InstrumentRow & { readonly dx_leverage: number | null }
+
+export function withLeverage(rows: readonly InstrumentRow[], products: readonly DxProduct[]): DxInstrumentRow[] {
+  const byId = new Map(products.map((p) => [p.id, num(p.default_leverage)]))
+  return rows.map((r) => {
+    const lev = byId.get(r.instrument_token) ?? null
+    return { ...r, dx_leverage: lev !== null && lev > 0 ? lev : null }
+  })
+}
+
+/** Token → `dx_leverage` for every stored row that states one. */
+export async function loadDxLeverage(collection: {
+  find(filter: Record<string, unknown>): { toArray(): Promise<Record<string, unknown>[]> }
+}): Promise<Map<number, number>> {
+  const docs = await collection.find({ dx_leverage: { $gt: 0 } }).toArray()
+  const out = new Map<number, number>()
+  for (const d of docs) {
+    const token = Number(d['instrument_token'])
+    const lev = Number(d['dx_leverage'])
+    if (Number.isFinite(token) && Number.isFinite(lev) && lev > 0) out.set(token, lev)
+  }
+  return out
+}
+
 /** The Mongo surface the sync needs; `Collection` satisfies it. */
 export interface DxCollection {
   find(filter: Record<string, unknown>): { toArray(): Promise<Record<string, unknown>[]> }
@@ -144,7 +175,7 @@ export async function runDxSync(d: DxSyncDeps): Promise<DxSyncResult> {
   const nowMs = (d.nowMs ?? Date.now)()
 
   const products = await d.rest.products({ contractTypes: OPTION_TYPES, states: ['live'], underlying: [DX_UNDERLYING] })
-  const rows = d.normalise(products)
+  const rows = withLeverage(d.normalise(products), products)
   const options = rows.filter(isBtcOption)
   if (options.length === 0) {
     throw new Error(`Delta listed ${products.length} products and no BTC option — refusing to apply`)

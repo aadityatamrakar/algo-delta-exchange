@@ -243,6 +243,7 @@ function testnet(capped: ReadonlySet<string>) {
     async positions() { return [] },
     async fills() { return { fills: [] } },
     async heartbeat() {},
+    walletBalances: never,
   }
   return { rest, calls }
 }

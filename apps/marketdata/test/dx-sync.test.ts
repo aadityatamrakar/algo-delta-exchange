@@ -9,6 +9,7 @@ import { toInstrumentRows, type DxProduct } from '@algomaker/dx'
 import {
   DX_SETTLEMENT_WAIT_MS,
   dxSyncDue,
+  loadDxLeverage,
   planDxSync,
   runDxSync,
   type DxCollection,
@@ -243,4 +244,27 @@ test('dxSyncDue: at boot, every 15 minutes, and on the first pass after 12:00 UT
   assert.equal(dxSyncDue(noon + 60_000, noon - 300_000), true)
   // Once done after the instant, it is not due again until the cadence.
   assert.equal(dxSyncDue(noon + 120_000, noon + 61_000), false)
+})
+
+test('each option row carries its product\'s default_leverage as dx_leverage; none stated is null, never a default', async () => {
+  const r = rig({
+    live: [
+      product(201, 76600, 'C', '2026-11-05', { default_leverage: '100' }),
+      product(202, 76600, 'P', '2026-11-05', { default_leverage: 20 }),
+      product(203, 90000, 'C', '2026-11-05'),
+    ],
+  })
+  await runDxSync(r.deps)
+  const lev = (t: number) => r.instruments.docs.find((d) => d['instrument_token'] === t)?.['dx_leverage']
+  assert.deepEqual([lev(201), lev(202), lev(203)], [100, 20, null])
+  const map = await loadDxLeverage({
+    find: (f: Record<string, unknown>) => ({
+      toArray: async () =>
+        r.instruments.docs.filter((d) => {
+          const gt = (f['dx_leverage'] as { $gt: number }).$gt
+          return typeof d['dx_leverage'] === 'number' && (d['dx_leverage'] as number) > gt
+        }),
+    }),
+  })
+  assert.deepEqual([...map.entries()].sort(), [[201, 100], [202, 20]])
 })

@@ -45,6 +45,8 @@ export interface DxProduct {
   readonly underlying_asset?: DxAssetRef
   readonly spot_index?: DxSpotIndexRef
   readonly product_specs?: DxProductSpecs
+  /** The leverage Delta margins a position at by default, e.g. `"100"`; varies by moneyness. */
+  readonly default_leverage?: string | number | null
 }
 
 export interface DxTickerQuotes {

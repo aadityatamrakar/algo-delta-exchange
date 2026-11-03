@@ -490,6 +490,12 @@ export interface Dials {
   readonly bs_lots_cap: number;
   /** Most straddles open at once. 0 = unlimited. */
   readonly bs_max_open: number;
+  /**
+   * The book's margin budget, USD (`bull-s/margin.ts`). A NEW straddle whose
+   * estimated margin would take the book over it is refused, named; stops and
+   * closes are never blocked. 0 = off.
+   */
+  readonly bs_margin_budget: number;
   /** Book profit target and loss cap on the P&L since the last arm (net of
    * fees where the venue charges them). 0 = off. */
   readonly bs_target: number;
@@ -756,6 +762,7 @@ export const DEFAULT_DIALS: Dials = {
   bs_lots_step: 1,
   bs_lots_cap: 0, // uncapped: NSE parity only — every DX preset sets it
   bs_max_open: 0, // unlimited
+  bs_margin_budget: 0, // off
   bs_target: 0, // off
   bs_loss_cap: 0, // off
   bs_after_halt: 0, // stay flat
@@ -1090,6 +1097,7 @@ export const DIAL_SECTIONS: ReadonlyArray<DialSection> = [
       'bs_lots_step',
       'bs_lots_cap',
       'bs_max_open',
+      'bs_margin_budget',
       // The book's target, loss cap and halt
       'bs_target',
       'bs_loss_cap',
@@ -1134,6 +1142,7 @@ const BS_RANGES: Partial<Record<BsKey, (v: number) => boolean>> = {
   bs_lots_step: count,
   bs_lots_cap: count,
   bs_max_open: count,
+  bs_margin_budget: nonNegative,
   bs_target: nonNegative,
   bs_loss_cap: nonNegative,
   bs_after_halt: (v) => v === 0 || v === 1,

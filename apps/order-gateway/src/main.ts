@@ -71,7 +71,7 @@ import { chaseDialsFromEnv, chaseDisabled, createOrderChaser } from './order-cha
 import { createQuoteMap, quoteMaxAgeFromEnv } from './quote-map.ts'
 import {
   brokerModeFromEnv,
-  deltaCommission,
+  awaitDeltaFee,
   dxCapRefusal,
   dxCapsFromEnv,
   dxSimFee,
@@ -92,6 +92,8 @@ import {
   GATEWAY_HEARTBEAT_MS,
   hostOf,
 } from './gateway-heartbeat.ts'
+import { BROKER_MARGIN_COLLECTION, createDeltaMarginSnapshot, DELTA_MARGIN_MS } from './dx-margin.ts'
+import { backfillDeltaFees, DX_FEE_BACKFILL_MS, mongoFeeBackfillPorts } from './dx-fee-backfill.ts'
 import {
   countWorking,
   createDxSettlementJob,
@@ -1728,6 +1730,17 @@ export async function main(): Promise<void> {
     void positionsSnapshot.take()
     const snapTimer = setInterval(() => void positionsSnapshot.take(), DELTA_SNAPSHOT_MS)
     snapTimer.unref()
+    /** The live account's margin, through the live key and host only. */
+    const liveMargin = createDeltaMarginSnapshot({
+      id: 'delta',
+      walletBalances: () => rest.walletBalances(),
+      collection: mongo.db.collection(BROKER_MARGIN_COLLECTION) as never,
+      now: () => Date.now(),
+      host: dxHost,
+      log,
+    })
+    void liveMargin.take()
+    setInterval(() => void liveMargin.take(), DELTA_MARGIN_MS).unref()
 
     /** Order updates as they happen; the broker sweep below is the fallback. */
     privateSocket = new DxPrivateSocket(cfg.wsUrl, {
@@ -1781,7 +1794,8 @@ export async function main(): Promise<void> {
         {
           adapter: live,
           queue,
-          fills: fillWatcher,
+          // The live rail's replays wait for Delta's fee like its socket updates.
+          fills: feeWatcher(live),
           journal,
           orders: mongo.db.collection('desk-gateway-orders') as never,
           ordersFilter: { mode: 'live' },
@@ -1847,6 +1861,26 @@ export async function main(): Promise<void> {
     wake: () => wakeSweeper(),
   })
   await fills.ensureIndexes()
+  /**
+   * A live Delta fill carries DELTA'S REPORTED commission (spec §5.4a), read
+   * off `/v2/fills` for that order. None reported yet → no fee on the row,
+   * never an invented one; the simulator's fills already carry theirs.
+   */
+  const withLiveFee = async (from: BrokerAdapter, update: PlacedOrder): Promise<PlacedOrder> => {
+    if (update.fee !== undefined || !(update.filledQty > 0)) return update
+    // The demo rail's fills carry the TESTNET's reported commission, the same way.
+    const rest = from === dxAdapter ? dxRest : demoRail !== null && from === demoRail ? demoRail.rest : null
+    if (rest === null) return update
+    // Waits (bounded) until Delta's fills cover the quantity: the FILLED frame
+    // beats the fill record, and one lookup booked a leg feeless (13 Nov).
+    return await awaitDeltaFee({ rest, step: venue.qtyStep }, update)
+  }
+  /** The fill watcher as a rail's broker sweep sees it: its replays carry Delta's fee too. */
+  const feeWatcher = (from: BrokerAdapter): Pick<FillWatcher, 'handle' | 'reconcile' | 'resolve'> => ({
+    resolve: (u, o) => fills.resolve(u, o),
+    reconcile: (base, pre) => fills.reconcile(base, pre),
+    handle: async (u, o) => await fills.handle(await withLiveFee(from, u), o),
+  })
   startBrokerSweep(fills)
 
   /**
@@ -1893,6 +1927,17 @@ export async function main(): Promise<void> {
           })
           void demoSnapshot.take()
           setInterval(() => void demoSnapshot.take(), DELTA_SNAPSHOT_MS).unref()
+          /** The testnet account's margin, through the testnet key and host only. */
+          const demoMargin = createDeltaMarginSnapshot({
+            id: 'delta-demo',
+            walletBalances: () => rest.walletBalances(),
+            collection: mongo.db.collection(BROKER_MARGIN_COLLECTION) as never,
+            now: () => Date.now(),
+            host: hostOf(cfg.baseUrl),
+            log,
+          })
+          void demoMargin.take()
+          setInterval(() => void demoMargin.take(), DELTA_MARGIN_MS).unref()
           const hb = createDxHeartbeat({ rest, log })
           void hb.beat()
           setInterval(() => void hb.beat(), DX_HEARTBEAT_MS).unref()
@@ -1911,7 +1956,8 @@ export async function main(): Promise<void> {
               adapter: demoRail,
               rail: 'paper',
               queue,
-              fills,
+              // Replays wait for the testnet's fee like the socket's updates.
+              fills: feeWatcher(demoRail),
               journal,
               orders: gatewayOrders as never,
               ordersFilter: { mode: { $ne: 'live' }, dx_paper_rail: 'demo' },
@@ -2148,19 +2194,6 @@ export async function main(): Promise<void> {
    * Subscribed once when the two are the same object (simulate mode), or a
    * second update would be handled twice.
    */
-  /**
-   * A live Delta fill carries DELTA'S REPORTED commission (spec §5.4a), read
-   * off `/v2/fills` for that order. None reported yet → no fee on the row,
-   * never an invented one; the simulator's fills already carry theirs.
-   */
-  const withLiveFee = async (from: BrokerAdapter, update: PlacedOrder): Promise<PlacedOrder> => {
-    if (update.fee !== undefined || !(update.filledQty > 0)) return update
-    // The demo rail's fills carry the TESTNET's reported commission, the same way.
-    const rest = from === dxAdapter ? dxRest : demoRail !== null && from === demoRail ? demoRail.rest : null
-    if (rest === null) return update
-    const fee = await deltaCommission(rest, update.brokerOrderId)
-    return fee === null ? update : { ...update, fee }
-  }
   const watchFills = (from: BrokerAdapter): void => {
     // The demo rail emits PAPER rows, always: testnet is a rehearsal.
     const rail: 'live' | 'paper' | undefined =
@@ -2424,6 +2457,35 @@ export async function main(): Promise<void> {
     const settleTimer = setInterval(() => void settlement.run(), DX_SETTLEMENT_POLL_MS)
     settleTimer.unref()
     void settlement.run()
+  }
+
+  /**
+   * DELTA'S COMMISSION, AFTER THE FACT (13 / 20 Nov): an order on a Delta rail
+   * that finished before Delta listed its fill gets the fee on its document,
+   * its fill rows and its folded decision once Delta lists it. Each order is
+   * read through ITS rail's client — never the other rail's key or host.
+   */
+  if (onDx) {
+    const feePorts = mongoFeeBackfillPorts({
+      orders: mongo.db.collection('desk-gateway-orders') as never,
+      fills: mongo.db.collection(FILLS_COLLECTION) as never,
+      decisions: mongo.db.collection('desk-decisions') as never,
+      restFor: (o) =>
+        o['mode'] === 'live' ? dxRest : o['dx_paper_rail'] === 'demo' ? (demoRail?.rest ?? null) : null,
+      now: () => Date.now(),
+      log,
+    })
+    let feeRunning = false
+    const feeTimer = setInterval(() => {
+      if (feeRunning) return
+      feeRunning = true
+      void backfillDeltaFees(feePorts)
+        .catch((err: unknown) => log('dx fee backfill pass failed', { error: String(err) }))
+        .finally(() => {
+          feeRunning = false
+        })
+    }, DX_FEE_BACKFILL_MS)
+    feeTimer.unref()
   }
 
   await sweep()

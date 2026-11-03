@@ -191,21 +191,67 @@ export function dxCapRefusal(input: {
  * read failed) — then the fill row carries no fee rather than an invented one.
  */
 export async function deltaCommission(
-  rest: { fills(q?: { after?: string }): Promise<{ fills: readonly { order_id?: string; commission?: string }[] }> },
+  rest: {
+    fills(q?: { after?: string }): Promise<{
+      fills: readonly { order_id?: string; commission?: string; size?: string | number }[]
+    }>
+  },
   brokerOrderId: string,
+  /**
+   * The contracts the update says filled. Given, the commission counts only
+   * once Delta's listed fills for the order COVER that many — a partial
+   * listing is part of the fee, not the fee (13 Nov: one leg booked feeless).
+   */
+  wantContracts?: number,
 ): Promise<number | null> {
   try {
     const { fills } = await rest.fills()
     const mine = fills.filter((f) => String(f.order_id ?? '') === brokerOrderId)
     if (mine.length === 0) return null
     let total = 0
+    let size = 0
     for (const f of mine) {
       const c = Number(f.commission)
       if (!Number.isFinite(c)) return null
       total += c
+      const n = Number(f.size)
+      if (Number.isFinite(n)) size += n
     }
+    if (wantContracts !== undefined && size < wantContracts) return null
     return r8(total)
   } catch {
     return null
   }
+}
+
+/** How long a filled update waits for Delta to list its fills: 0.5+1+2+4 s after a first look. */
+export const DX_FEE_WAIT_DELAYS_MS: readonly number[] = [0, 500, 1_000, 2_000, 4_000]
+
+/**
+ * A Delta update that traded, with Delta's commission on it — waiting, bounded,
+ * until `/v2/fills` lists fills covering the update's quantity. The FILLED
+ * frame routinely beats the fill record (13/20 Nov): asked once, one leg of a
+ * straddle came back with nothing and went in feeless for good. Still not
+ * listed after the last delay: returned WITHOUT a fee (never a guess), and the
+ * backfill (`dx-fee-backfill.ts`) puts it on later.
+ */
+export async function awaitDeltaFee<U extends { readonly brokerOrderId: string; readonly filledQty: number; readonly fee?: number }>(
+  deps: {
+    readonly rest: Parameters<typeof deltaCommission>[0]
+    /** BTC per contract. */
+    readonly step: number
+    readonly sleep?: (ms: number) => Promise<void>
+    readonly delaysMs?: readonly number[]
+  },
+  update: U,
+): Promise<U> {
+  if (update.fee !== undefined || !(update.filledQty > 0)) return update
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const want = Math.round(update.filledQty / deps.step)
+  for (const ms of deps.delaysMs ?? DX_FEE_WAIT_DELAYS_MS) {
+    await sleep(ms)
+    const fee = await deltaCommission(deps.rest, update.brokerOrderId, want)
+    if (fee !== null) return { ...update, fee }
+  }
+  return update
 }

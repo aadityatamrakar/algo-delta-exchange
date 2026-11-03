@@ -184,7 +184,7 @@ function engineSide(day: Day): Row[] {
       {
         tag: 'Bull_S-1', mode: 'paper', nowMs, dateIst: '2026-07-24', minuteOfDay: 556, dte: 6, chain, legs,
         protectedQty: {}, cumRealized: cum, margin: { value: 0, source: 'model', asOf: nowMs, fresh: false },
-        pendingLots: 0, repairHold: false, pricing: 'parity', ref, refAsOf, minutesToExpiry: 6 * 1_440,
+        pendingLots: 0, repairHold: false, pricing: 'parity', ref, refAsOf, minutesToExpiry: 6 * 1_440, leverage: [],
       },
       DIALS,
       state,

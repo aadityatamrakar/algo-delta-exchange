@@ -69,6 +69,7 @@ import { ProtectDialog, type ProtectTarget } from './protect.tsx'
 import { OpenLegs, PnlCards } from './pnl.tsx'
 import { PayoffPanel } from './payoff.tsx'
 import { StrategyReasonLine } from './strategies.tsx'
+import { AccountMarginPanel } from './margin.tsx'
 
 /** Join the non-null bits of an event summary, or an em dash when there are none. */
 function summarise(parts: readonly (string | null)[]): string {
@@ -1381,6 +1382,13 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
 
         </div>
       </Card>
+
+      {/*
+        THE DELTA ACCOUNTS' MARGIN — balance, available, used, % utilized, for
+        demo and live. An account figure, beside the book's own tiles because
+        it is what the next straddle is sized against. See `margin.tsx`.
+      */}
+      <AccountMarginPanel />
 
       {/*
         THE PAYOFF COCKPIT, directly under the tiles it explains.

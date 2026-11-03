@@ -113,6 +113,7 @@ function fakeRest(): Fake {
     async heartbeat() {},
     async product() { throw new Error('the demo-rail suite does not read single products') },
     async ticker() { throw new Error('the demo-rail suite does not read tickers') },
+    async walletBalances() { return [] },
   }
   return f
 }

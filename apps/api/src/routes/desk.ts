@@ -40,6 +40,7 @@ import {
   brokerFigures,
   findNumber,
 } from '../book-margin.ts'
+import { handleAccountMargin, handleBookMarginEstimates } from '../dx-margin.ts'
 import { COLLECTIONS } from '../store.ts'
 
 /**
@@ -686,7 +687,12 @@ export function deskRoutes(deps: DeskDeps): Route {
      * path is not swallowed by the prefix beside it.
      */
     if (path === '/v1/desk/broker/funds' && method === 'GET') return handleBrokerFunds(deps, ctx)
-    if (path === '/v1/desk/margin' && method === 'GET') return handleBookMargin(deps, ctx)
+    // No `tag`: the Delta ACCOUNTS' margin, as the gateway read it. With one:
+    // that book's broker-priced figure, as before.
+    if (path === '/v1/desk/margin' && method === 'GET') {
+      return ctx.url.searchParams.has('tag') ? handleBookMargin(deps, ctx) : handleAccountMargin(deps, ctx)
+    }
+    if (path === '/v1/desk/margin/books' && method === 'GET') return handleBookMarginEstimates(deps, ctx)
 
     if (path === '/v1/desk/broker' && method === 'GET') return handleBrokerSnapshot(deps, ctx)
 

@@ -875,6 +875,71 @@ export interface BookMargin {
   readonly diagnostic?: string
 }
 
+/**
+ * One Delta account's margin, from `GET /v1/desk/margin` (no tag). USD.
+ *
+ * EVERY FIGURE IS NULL WHEN IT IS NOT KNOWN — a failed read or an absent
+ * account — and must render as the `error` / `reason`, never as 0. `stale`
+ * still carries the last good numbers; `ageMs` says how old they are.
+ */
+export interface AccountMargin {
+  readonly id: 'delta-demo' | 'delta'
+  readonly rail: 'demo' | 'live'
+  readonly label: 'Demo' | 'Live'
+  readonly state: 'ok' | 'stale' | 'failed' | 'absent'
+  readonly asOf: number | null
+  readonly ageMs: number | null
+  readonly balance: number | null
+  readonly available: number | null
+  readonly positionMargin: number | null
+  readonly orderMargin: number | null
+  readonly portfolioMargin: number | null
+  /** balance − available. */
+  readonly used: number | null
+  /** used / balance × 100. */
+  readonly utilizedPct: number | null
+  /** The failed read's text, '' otherwise. */
+  readonly error: string
+  /** Why absent / stale, '' otherwise. */
+  readonly reason: string
+}
+
+export interface AccountMarginResponse {
+  /** The fixed rate the ₹ second figure is at (85). */
+  readonly inrPerUsd: number
+  readonly staleAfterMs: number
+  /** Both accounts, demo first. */
+  readonly accounts: readonly AccountMargin[]
+}
+
+/**
+ * A BULL-S book's estimated margin, from `GET /v1/desk/margin/books`. USD.
+ * `usd: null` with a non-empty `missing` is "not estimable", never 0.
+ */
+export interface BookMarginEstimate {
+  readonly tag: string
+  readonly mode: DeskMode
+  /** `bs_margin_budget`, USD; 0 = off. */
+  readonly budget: number
+  readonly current: { readonly usd: number | null; readonly shortLegs: number; readonly missing: readonly string[] }
+  readonly worstAtCap: {
+    readonly usd: number | null
+    readonly atmStrike: number | null
+    /** Contracts per straddle, up to `bs_max_open`. */
+    readonly sizes: readonly number[]
+    /** `bs_max_open` 0: no cap, so no worst case. */
+    readonly unbounded: boolean
+    readonly missing: readonly string[]
+  }
+}
+
+export interface BookMarginEstimatesResponse {
+  readonly asOf: number
+  /** BTC index, USD. */
+  readonly index: number | null
+  readonly books: readonly BookMarginEstimate[]
+}
+
 export interface BrokerRow {
   kind: BrokerKind
   label: string
@@ -2790,6 +2855,10 @@ export const api = {
    */
   brokerFunds: () => get<BrokerFunds>('/v1/desk/broker/funds'),
   bookMargin: (tag: string) => get<BookMargin>(`/v1/desk/margin?tag=${encodeURIComponent(tag)}`),
+  /** The two Delta accounts' margin (demo, live) — no tag. See `AccountMargin`. */
+  accountMargin: () => get<AccountMarginResponse>('/v1/desk/margin'),
+  /** Estimated margin of every BULL-S book: now, and the worst case at its cap. */
+  bookMarginEstimates: () => get<BookMarginEstimatesResponse>('/v1/desk/margin/books'),
   /**
    * Ask the gateway to cancel a broker order. 202 — ACCEPTED, not performed:
    * the gateway does it within ~2s and the order leaves the Broker table.

@@ -143,6 +143,7 @@ const master: MasterPort = {
   instrumentFor: (symbol, expiry, strike, optType) =>
     symbol === NIFTY && expiry === NIFTY_EXPIRY ? symbolOf(strike, optType) : null,
   tickSizeFor: () => 0.05,
+  leverageFor: () => null,
   chainMeta: (symbol, expiry) => {
     if (symbol === NIFTY && expiry === NIFTY_EXPIRY) return { lotSize: NIFTY_LOT, step: NIFTY_STEP }
     if (symbol === SENSEX && expiry === SENSEX_EXPIRY) {
@@ -938,6 +939,11 @@ test('DX master: the chain is read off the Delta rows, and the future is never t
   assert.equal(dx.futureToken('BTC'), 0)
   assert.equal(dx.tickSizeFor('BTC', '2026-11-04', 76600, 'CE'), 0.1)
   assert.equal(dx.chainMeta('BTC', '2026-11-04').lotSize, 0.001)
+  // The product's leverage, by token, beside the master; none stated is null.
+  const levered = masterPort(() => m, DX, () => new Map([[5000, 100]]))
+  assert.equal(levered.leverageFor('BTC', '2026-11-04', 76600, 'CE'), 100)
+  assert.equal(levered.leverageFor('BTC', '2026-11-04', 76600, 'PE'), null)
+  assert.equal(dx.leverageFor('BTC', '2026-11-04', 76600, 'CE'), null)
   // NSE keeps reading its future.
   assert.equal(masterPort(() => m).futureToken('BTC'), 6000)
 })

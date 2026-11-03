@@ -198,7 +198,7 @@ interface Harness {
   seed(rule: Partial<RuleState>): Promise<void>
 }
 
-function make(over: { book?: LegPosition[]; dials?: Dials; index?: number } = {}): Harness {
+function make(over: { book?: LegPosition[]; dials?: Dials; index?: number; leverage?: number | null } = {}): Harness {
   const store = new StateStore(new FakeStateCollection())
   const client = new FakeClient()
   const { log, lines } = fakeLog()
@@ -236,6 +236,7 @@ function make(over: { book?: LegPosition[]; dials?: Dials; index?: number } = {}
     margin: (): MarginInput => ({ value: 0, source: 'broker', asOf: T0, fresh: true }),
     instrumentFor: instrumentOf,
     tickSizeFor: () => 0.1,
+    ...(over.leverage === undefined ? {} : { leverageFor: () => over.leverage ?? null }),
     repairHold: async () => false,
     store,
     client,
@@ -540,4 +541,20 @@ test('an entry that filled whole steps the size as before, and records no refusa
   assert.equal(bs.size, 100)
   assert.equal(bs.groups[0]?.filled, true)
   assert.deepEqual(bs.cooldowns, [])
+})
+
+test('bs_margin_budget: the host hands the master\'s leverage to the engine, and an over-budget entry is refused, named', async () => {
+  const tight = make({ dials: dailyDials({ bs_margin_budget: 1 }), leverage: 100 })
+  await tight.host.evaluate()
+  assert.equal(tight.client.requests.length, 0, 'nothing routed')
+  assert.ok(tight.reasons.some((r) => /margin budget: est \$\d+\.\d\d > \$1\b/.test(r)), tight.reasons.join(' | '))
+  // A roomy budget: the same book enters as before.
+  const room = make({ dials: dailyDials({ bs_margin_budget: 100_000 }), leverage: 100 })
+  await room.host.evaluate()
+  assert.equal(room.client.requests[0]?.trigger, 'bs-entry')
+  // No leverage stated by the master: with a budget set, no entry and it says why.
+  const blind = make({ dials: dailyDials({ bs_margin_budget: 100_000 }) })
+  await blind.host.evaluate()
+  assert.equal(blind.client.requests.length, 0)
+  assert.ok(blind.reasons.some((r) => /margin budget: no leverage/.test(r)), blind.reasons.join(' | '))
 })

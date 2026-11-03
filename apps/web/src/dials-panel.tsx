@@ -84,6 +84,8 @@ import { api, type BookRow, type DialValue } from './api.ts'
 import { withReauth, type Reauth } from './auth.tsx'
 import { PaperRailControl } from './paper-rail.tsx'
 import { VENUE } from './venue.ts'
+import { isBullS } from './bulls.ts'
+import { DialsMarginEstimate } from './margin.tsx'
 import {
   dialMeta,
   dialsPatch,
@@ -412,6 +414,13 @@ export function DialsPanel(props: {
           registry field `dx_paper_rail`, switched on its own confirm.
         */}
         {VENUE.id === 'dx' ? <PaperRailControl row={row} onSwitched={() => props.onSaved()} /> : null}
+
+        {/*
+          A BULL-S BOOK'S MARGIN, NOW AND AT ITS CAP — the two numbers
+          bs_margin_budget is compared against, beside the dial that sets it.
+          Read for this tag on this rail only.
+        */}
+        {isBullS(row) ? <DialsMarginEstimate tag={row.tag} mode={row.mode} /> : null}
 
         {/*
           THE ONE THING THIS PANEL CANNOT CHECK. The API stores dials verbatim;
