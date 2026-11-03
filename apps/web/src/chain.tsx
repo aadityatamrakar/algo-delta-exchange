@@ -31,8 +31,10 @@ import { asOf, usePoll } from './shell.tsx'
 import { VENUE } from './venue.ts'
 import {
   atmIv, atmStraddle, atmStrike, expiryLabel, expiryPillLabel, daysToExpiry, formatCountdown,
-  groupExpiries, heatStep, indexChange, isFar, itmSides, maxPain, putCallRatio, settlesAt, spotLineIndex,
+  groupExpiries, heatStep, indexChange, isFar, itmSides, maxPain, oiWalls, putCallRatio, settlesAt,
+  spotLineIndex, wallRank, type OiWalls,
 } from './chain-model.ts'
+import { OiChart } from './chain-oi-chart.tsx'
 import './chain.css'
 
 export { atmStrike, expiryClass } from './chain-model.ts'
@@ -182,6 +184,8 @@ interface SideView {
   readonly oiPct: number
   /** 0..10 on the chain's IV range, null without an IV. */
   readonly heat: number | null
+  /** 1 or 2 when this strike is the side's highest or second-highest OI. */
+  readonly rank: 1 | 2 | null
 }
 
 function SideCells(props: {
@@ -190,7 +194,7 @@ function SideCells(props: {
   view: SideView
   cols: readonly ColKey[]
 }): React.ReactElement {
-  const { side, itm, oiPct, heat } = props.view
+  const { side, itm, oiPct, heat, rank } = props.view
   const title = sideTitle(props.type, props.strike, side)
   const sideCls = props.type === 'Call' ? 'chain-ce' : 'chain-pe'
   const quoted = side !== null && side !== undefined
@@ -204,7 +208,7 @@ function SideCells(props: {
         return (
           <td
             key={key}
-            className={`chain-td ${sideCls} chain-c-${key}${itm ? ' chain-itm' : ''}`}
+            className={`chain-td ${sideCls} chain-c-${key}${itm ? ' chain-itm' : ''}${rank === null ? '' : ` chain-wall chain-wall-${rank}`}`}
             style={isHeat ? ({ '--heat': heat } as React.CSSProperties) : undefined}
             title={title}
             data-itm={itm ? 'true' : 'false'}
@@ -215,6 +219,13 @@ function SideCells(props: {
               // cover a digit: calls' track sits outside the figure and grows
               // left, puts' mirrors it and grows right.
               <span className="chain-oi">
+                {/* Always rendered, empty when not a wall, so a new wall never shifts the column. */}
+                <span
+                  className="chain-oi-rank"
+                  title={rank === null ? undefined : `${rank === 1 ? 'Highest' : 'Second-highest'} ${props.type.toLowerCase()} OI`}
+                >
+                  {rank === null ? '' : String(rank)}
+                </span>
                 <span className="chain-oi-track" aria-hidden="true">
                   {finite(value) && oiPct > 0 ? (
                     <span className="chain-oi-bar" style={{ inlineSize: `${oiPct}%` }} />
@@ -241,7 +252,7 @@ function sameSide(a: ChainSide | null | undefined, b: ChainSide | null | undefin
 }
 
 function sameView(a: SideView, b: SideView): boolean {
-  return a.itm === b.itm && a.oiPct === b.oiPct && a.heat === b.heat && sameSide(a.side, b.side)
+  return a.itm === b.itm && a.oiPct === b.oiPct && a.heat === b.heat && a.rank === b.rank && sameSide(a.side, b.side)
 }
 
 interface RowProps {
@@ -252,15 +263,21 @@ interface RowProps {
   readonly far: boolean
   readonly ceCols: readonly ColKey[]
   readonly peCols: readonly ColKey[]
+  /** Highlighted from the OI chart (or from hovering this row). */
+  readonly hot: boolean
+  readonly onHot: (strike: number | null) => void
 }
 
 const ChainRow = memo(
   function ChainRow(props: RowProps): React.ReactElement {
     return (
       <tr
-        className={`chain-row${props.atm ? ' chain-atm' : ''}${props.far ? ' chain-far' : ''}`}
+        className={`chain-row${props.atm ? ' chain-atm' : ''}${props.far ? ' chain-far' : ''}${props.hot ? ' chain-hot' : ''}`}
         data-atm={props.atm ? 'true' : 'false'}
         data-far={props.far ? 'true' : 'false'}
+        data-hot={props.hot ? 'true' : 'false'}
+        onMouseEnter={() => props.onHot(props.strike)}
+        onMouseLeave={() => props.onHot(null)}
       >
         <SideCells type="Call" strike={props.strike} view={props.ce} cols={props.ceCols} />
         <th scope="row" className="chain-strike">{upTo(props.strike, 2)}</th>
@@ -269,7 +286,7 @@ const ChainRow = memo(
     )
   },
   (a, b) =>
-    a.strike === b.strike && a.atm === b.atm && a.far === b.far
+    a.strike === b.strike && a.atm === b.atm && a.far === b.far && a.hot === b.hot && a.onHot === b.onHot
     && a.ceCols === b.ceCols && a.peCols === b.peCols
     && sameView(a.ce, b.ce) && sameView(a.pe, b.pe),
 )
@@ -287,6 +304,8 @@ function SpotLine(props: { span: number; underlying: string; spot: number }): Re
 
 // --------------------------------------------------------------- the table
 
+const noHot = (): void => {}
+
 export function ChainTable(props: {
   rows: readonly ChainRowWire[]
   spot: number | null
@@ -296,6 +315,11 @@ export function ChainTable(props: {
   greeks: boolean
   /** Fixed per expiry for the dimming, so the table never re-renders on the clock. */
   msToSettle: number
+  /** The top two OI strikes per side. Absent: computed here. */
+  walls?: OiWalls
+  /** The strike highlighted from the OI chart, and the setter both share. */
+  hot?: number | null
+  onHot?: (strike: number | null) => void
 }): React.ReactElement {
   const { rows, spot } = props
   const ceCols = useMemo(() => callColumns(props.density, props.greeks), [props.density, props.greeks])
@@ -317,13 +341,16 @@ export function ChainTable(props: {
       if (finite(v)) { ivLo = Math.min(ivLo, v); ivHi = Math.max(ivHi, v) }
     }
   }
-  const view = (s: ChainSide | null | undefined, itm: boolean): SideView => {
+  const walls = props.walls ?? oiWalls(rows, spot)
+  const onHot = props.onHot ?? noHot
+  const view = (s: ChainSide | null | undefined, itm: boolean, rank: 1 | 2 | null): SideView => {
     const oi = s?.oi
     return {
       side: s,
       itm,
       oiPct: oiMax > 0 && finite(oi) ? Math.round((oi / oiMax) * 100) : 0,
       heat: heatStep(s?.iv, ivLo, ivHi),
+      rank,
     }
   }
 
@@ -337,12 +364,14 @@ export function ChainTable(props: {
       <ChainRow
         key={r.strike}
         strike={r.strike}
-        ce={view(r.CE, itm.ce)}
-        pe={view(r.PE, itm.pe)}
+        ce={view(r.CE, itm.ce, wallRank(walls.ce, r.strike))}
+        pe={view(r.PE, itm.pe, wallRank(walls.pe, r.strike))}
         atm={r.strike === atm}
         far={isFar(r.strike, spot, iv, props.msToSettle)}
         ceCols={ceCols}
         peCols={peCols}
+        hot={props.hot === r.strike}
+        onHot={onHot}
       />,
     )
   })
@@ -422,12 +451,14 @@ function Header(props: {
   expiry: string | null
   rows: readonly ChainRowWire[]
   asOfText: string | undefined
+  walls: OiWalls
+  pain: number | null
 }): React.ReactElement {
-  const { spot, openSpot, rows } = props
+  const { spot, openSpot, rows, pain } = props
   const move = indexChange(spot, openSpot, LOCALE)
   const atmRow = rows.find((r) => r.strike === atmStrike(rows.map((x) => x.strike), spot))
   const pcr = putCallRatio(rows)
-  const pain = maxPain(rows)
+  const wall = (ks: readonly number[]): string => (ks.length === 0 ? MISSING : ks.map((k) => upTo(k, 2)).join(' · '))
   return (
     <section className="chain-header" aria-label={`${props.underlying} summary`}>
       <div className="chain-price-block">
@@ -456,6 +487,8 @@ function Header(props: {
         <Stat label="ATM IV" value={pct(atmIv(atmRow))} hint="Mean of the ATM call and put mark IV" />
         <Stat label="PCR" value={pcr === null ? MISSING : pcr.toFixed(2)} hint="Put open interest over call open interest, this expiry" />
         <Stat label="Max pain" value={pain === null ? MISSING : upTo(pain, 2)} hint="The settlement strike that pays option holders least" />
+        <Stat label="Call OI wall" value={wall(props.walls.ce)} hint="Highest and second-highest call OI: resistance" />
+        <Stat label="Put OI wall" value={wall(props.walls.pe)} hint="Highest and second-highest put OI: support" />
       </dl>
     </section>
   )
@@ -559,6 +592,9 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
   const [picked, setPicked] = useState<string | null>(null)
   const [density, setDensity] = useStored<Density>('desk.chain.density', 'full', ['compact', 'full'])
   const [greeks, setGreeks] = useStored<'on' | 'off'>('desk.chain.greeks', 'off', ['on', 'off'])
+  const [chart, setChart] = useStored<'shown' | 'hidden'>('desk.chain.chart', 'shown', ['shown', 'hidden'])
+  /** The strike highlighted in both the OI chart and the table. */
+  const [hot, setHot] = useState<number | null>(null)
 
   const list = expiries.data ?? []
   // The first listed expiry until the operator picks one, and again if the
@@ -580,6 +616,8 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
     : null
   const rows = data?.rows ?? []
   const spot = data?.spot ?? null
+  const walls = oiWalls(rows, spot)
+  const pain = maxPain(rows)
 
   // The first index price seen on this page, for "change since opened".
   const openSpot = useRef<{ underlying: string; spot: number } | null>(null)
@@ -655,6 +693,8 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
           expiry={expiry}
           rows={rows}
           asOfText={asOf(chain.updatedAt)}
+          walls={walls}
+          pain={pain}
         />
       ) : null}
 
@@ -666,6 +706,33 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
       ) : null}
 
       {expiry !== null && rows.length > 0 ? (
+        <section className="chain-chart-panel" aria-label="Open interest by strike">
+          <div className="chain-chart-head">
+            <h3 className="chain-chart-title">Open interest by strike</h3>
+            {chart === 'shown' ? (
+              <ul className="chain-legend" aria-label="Legend">
+                <li><span className="chain-swatch chain-swatch-ce" aria-hidden="true" />Calls</li>
+                <li><span className="chain-swatch chain-swatch-pe" aria-hidden="true" />Puts</li>
+                <li><span className="chain-legend-line" aria-hidden="true" />Index</li>
+                <li><span className="chain-legend-line chain-legend-dash" aria-hidden="true" />Max pain</li>
+              </ul>
+            ) : null}
+            <button
+              type="button"
+              className="chain-seg-btn chain-chart-toggle"
+              aria-expanded={chart === 'shown'}
+              onClick={() => setChart(chart === 'shown' ? 'hidden' : 'shown')}
+            >
+              {chart === 'shown' ? 'Hide chart' : 'Show chart'}
+            </button>
+          </div>
+          {chart === 'shown' ? (
+            <OiChart rows={rows} spot={spot} maxPain={pain} walls={walls} hot={hot} onHot={setHot} locale={LOCALE} />
+          ) : null}
+        </section>
+      ) : null}
+
+      {expiry !== null && rows.length > 0 ? (
         <ChainTable
           rows={rows}
           spot={spot}
@@ -674,6 +741,9 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
           density={density}
           greeks={greeks === 'on'}
           msToSettle={msToSettle}
+          walls={walls}
+          hot={hot}
+          onHot={setHot}
         />
       ) : null}
     </div>
