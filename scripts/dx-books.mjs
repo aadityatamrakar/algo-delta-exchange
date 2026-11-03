@@ -168,7 +168,7 @@ async function apply(books, env) {
 
   for (const expiry of new Set(books.map((b) => b.expiry))) {
     const ch = await call('GET', `/v1/desk/chain/${SYMBOL}?expiry=${expiry}`)
-    const strikes = ch.body?.strikes
+    const strikes = ch.body?.rows ?? ch.body?.strikes
     if (ch.status !== 200 || !Array.isArray(strikes) || strikes.length === 0) {
       throw new Error(`REFUSED: no listed strikes for ${SYMBOL} ${expiry} (HTTP ${ch.status}); pass --expiry to name the real expiry`)
     }
