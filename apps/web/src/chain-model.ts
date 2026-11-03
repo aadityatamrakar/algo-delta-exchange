@@ -231,3 +231,53 @@ export function indexChange(
     text: `${up ? '▲' : '▼'} ${sign}${abs} (${sign}${Math.abs(pctMove).toFixed(2)}%)`,
   }
 }
+
+export interface OiWalls {
+  /** Strikes of the highest and second-highest call OI: resistance. */
+  readonly ce: readonly number[]
+  /** Strikes of the highest and second-highest put OI: support. */
+  readonly pe: readonly number[]
+}
+
+/**
+ * The top two strikes by open interest, per side. A strike with no OI
+ * reported, or zero OI, is never a wall. Ties go to the strike nearer the
+ * index (the one the market meets first), then to the lower strike, so the
+ * pick is stable from one poll to the next.
+ */
+export function oiWalls(rows: readonly ChainRowWire[], spot: number | null): OiWalls {
+  const pick = (get: (r: ChainRowWire) => number | null | undefined): number[] => {
+    const ranked: { k: number; oi: number }[] = []
+    for (const r of rows) {
+      const oi = get(r)
+      if (finite(oi) && oi > 0) ranked.push({ k: r.strike, oi })
+    }
+    const away = (k: number): number => (spot !== null && Number.isFinite(spot) ? Math.abs(k - spot) : 0)
+    ranked.sort((a, b) => b.oi - a.oi || away(a.k) - away(b.k) || a.k - b.k)
+    return ranked.slice(0, 2).map((x) => x.k)
+  }
+  return { ce: pick((r) => r.CE?.oi), pe: pick((r) => r.PE?.oi) }
+}
+
+/** 1 or 2 when `strike` is that side's top or second OI wall, else null. */
+export function wallRank(walls: readonly number[], strike: number): 1 | 2 | null {
+  const i = walls.indexOf(strike)
+  return i === 0 ? 1 : i === 1 ? 2 : null
+}
+
+/** A round axis top at or above `v`: 1, 2, 2.5 or 5 times a power of ten. */
+export function niceCeil(v: number): number {
+  if (!(v > 0)) return 1
+  const p = 10 ** Math.floor(Math.log10(v))
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p
+  return 10 * p
+}
+
+/** Axis and tip labels: 950, 1.2K, 182K, 1.5M. */
+export function compactNumber(v: number): string {
+  const a = Math.abs(v)
+  const trim = (x: number): string => (x >= 100 ? x.toFixed(0) : x.toFixed(1).replace(/\.0$/, ''))
+  if (a >= 1e6) return `${trim(v / 1e6)}M`
+  if (a >= 1e3) return `${trim(v / 1e3)}K`
+  return `${Math.round(v)}`
+}

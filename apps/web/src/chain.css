@@ -378,7 +378,9 @@
 }
 
 .chain-row:hover > td,
-.chain-row:hover > th {
+.chain-row:hover > th,
+.chain-hot > td,
+.chain-hot > th {
   box-shadow: inset 0 0 0 100vmax var(--chain-hover);
 }
 
@@ -460,11 +462,13 @@
  * puts mirror it, [number][bar track], growing right. The track is fixed, so
  * the numbers stay right-aligned in a column of their own.
  */
+/* inline-flex, sized to its content and right-aligned by the cell: a block
+   flex row could be laid out narrower than its parts and spill past the cell. */
 .chain-oi {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
   gap: var(--spacing-1-5);
+  vertical-align: middle;
 }
 
 .chain-pe .chain-oi {
@@ -480,6 +484,8 @@
   display: flex;
   justify-content: flex-end;
   flex: 0 0 56px;
+  inline-size: 56px;
+  min-inline-size: 56px;
   block-size: 14px;
 }
 
@@ -656,4 +662,266 @@
   .chain-skel-block {
     flex: 1;
   }
+}
+
+/* ------------------------------------------------------------ OI walls */
+
+/*
+ * The top two OI strikes per side: resistance from call OI, support from put
+ * OI. A rank badge in the OI cell, a bolder figure, and a coloured edge on the
+ * side's outer edge (left for calls, right for puts). The badge slot is always
+ * there, so a wall moving never shifts the column.
+ */
+.chain-oi-rank {
+  flex: 0 0 18px;
+  min-inline-size: 18px;
+  block-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.chain-wall-1 .chain-oi-rank,
+.chain-wall-2 .chain-oi-rank {
+  box-shadow: inset 0 0 0 1.5px var(--chain-wall);
+  background: color-mix(in srgb, var(--chain-wall) 18%, var(--color-background-card));
+}
+
+.chain-ce.chain-wall { --chain-wall: var(--chain-chart-ce); }
+.chain-pe.chain-wall { --chain-wall: var(--chain-chart-pe); }
+
+.chain-wall.chain-c-oi .chain-v {
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+
+.chain-wall.chain-c-oi {
+  position: relative;
+}
+
+.chain-wall.chain-c-oi::before {
+  content: '';
+  position: absolute;
+  inset-block: 2px;
+  inline-size: 3px;
+  border-radius: var(--radius-full);
+  background: var(--chain-wall);
+}
+
+.chain-ce.chain-wall.chain-c-oi::before { inset-inline-start: 0; }
+.chain-pe.chain-wall.chain-c-oi::before { inset-inline-end: 0; }
+
+/* A wall stays at full strength on a dimmed far row: far walls are still the levels. */
+.chain-far td.chain-wall.chain-c-oi {
+  opacity: 1;
+}
+
+.chain-wall-2.chain-c-oi::before {
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------------- OI chart */
+
+/*
+ * Series colours are the dataviz reference blue and orange, validated in
+ * both modes (lightness band, chroma floor, CVD and normal-vision separation,
+ * contrast on the surface). The theme's own ramps have no mid-lightness step
+ * that passes, which is why these two are values rather than tokens.
+ */
+.chain-page {
+  --chain-chart-ce: light-dark(#2a78d6, #3987e5);
+  --chain-chart-pe: light-dark(#eb6834, #d95926);
+}
+
+.chain-chart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  border-radius: var(--radius-container);
+  background: var(--color-background-card);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  min-width: 0;
+}
+
+.chain-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+.chain-chart-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.chain-chart-toggle {
+  margin-inline-start: auto;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.chain-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.chain-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1-5);
+}
+
+.chain-swatch {
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 2px;
+}
+
+.chain-swatch-ce, .chain-key-ce { background: var(--chain-chart-ce); }
+.chain-swatch-pe, .chain-key-pe { background: var(--chain-chart-pe); }
+
+.chain-legend-line {
+  inline-size: 14px;
+  block-size: 0;
+  border-block-start: 2px solid var(--color-text-primary);
+}
+
+.chain-legend-dash {
+  border-block-start-style: dashed;
+  border-color: var(--color-text-secondary);
+}
+
+.chain-chart-box {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chain-chart {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-chart:focus-visible {
+  outline: 2px solid var(--color-border-blue);
+  outline-offset: 2px;
+  border-radius: var(--radius-inner, 4px);
+}
+
+.chain-chart-grid {
+  stroke: var(--color-border);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chain-chart-axis {
+  stroke: var(--color-border-emphasized);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chain-chart-tick,
+.chain-chart-x {
+  font-size: 11px;
+  fill: var(--color-text-secondary);
+}
+
+.chain-chart-x-wall {
+  fill: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chain-chart-tip {
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  fill: var(--color-text-primary);
+}
+
+/* Every column at a lighter strength; the two walls per side at full. */
+.chain-bar { opacity: 0.5; }
+.chain-bar-wall { opacity: 1; }
+.chain-bar-ce { fill: var(--chain-chart-ce); }
+.chain-bar-pe { fill: var(--chain-chart-pe); }
+
+.chain-chart-hot {
+  fill: var(--chain-hover);
+}
+
+.chain-chart-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.chain-chart-spot line {
+  stroke: var(--color-text-primary);
+  stroke-width: 1.5;
+}
+
+.chain-chart-spot text {
+  font-size: 11px;
+  font-weight: var(--font-weight-bold);
+  fill: var(--color-text-primary);
+}
+
+.chain-chart-pain line {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.chain-chart-pain text {
+  font-size: 11px;
+  fill: var(--color-text-secondary);
+}
+
+.chain-chart-tooltip {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--spacing-1-5) var(--spacing-2-5, 10px);
+  border-radius: var(--radius-inner, 6px);
+  background: var(--color-background-popover);
+  box-shadow: 0 0 0 1px var(--color-border-emphasized), 0 4px 12px var(--color-shadow);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-chart-tooltip-k {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.chain-chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1-5);
+}
+
+.chain-chart-tooltip-row strong {
+  color: var(--color-text-primary);
+}
+
+/* Tooltip rows key their series with a short stroke, not a box. */
+.chain-key {
+  inline-size: 10px;
+  block-size: 2px;
+  border-radius: 1px;
 }

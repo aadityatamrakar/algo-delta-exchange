@@ -6,12 +6,14 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { installFetch } from './http.tsx'
 import type { ChainRowWire, ChainSide } from '../src/api.ts'
 import { ChainPage, ChainTable, ExpiryPills, MISSING } from '../src/chain.tsx'
+import { OiChart } from '../src/chain-oi-chart.tsx'
 import {
-  daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, indexChange, isFar, itmSides, maxPain,
+  compactNumber, daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, indexChange, isFar, itmSides, maxPain,
+  niceCeil, oiWalls,
   putCallRatio, spotLineIndex,
 } from '../src/chain-model.ts'
 
@@ -230,8 +232,8 @@ describe('page states', () => {
     await screen.findByRole('rowheader', { name: '76,200' })
     expect(screen.queryByText('Feed stale')).toBe(null)
     // The header carries the expiry's stats.
-    expect(screen.getByText('PCR').nextElementSibling?.textContent).toBe('2.00')
-    expect(screen.getByText('Max pain').nextElementSibling?.textContent).toBe('76,400')
+    expect(screen.getByText('PCR', { selector: 'dt' }).nextElementSibling?.textContent).toBe('2.00')
+    expect(screen.getByText('Max pain', { selector: 'dt' }).nextElementSibling?.textContent).toBe('76,400')
   })
 
   test('an expiry with no strikes says so, and a first load shows the skeleton', async () => {
@@ -306,5 +308,147 @@ describe('the index change chip', () => {
     expect(indexChange(76410.4, 76290)).toEqual({ dir: 'up', text: '▲ +120.40 (+0.16%)' })
     expect(indexChange(76250, 76290)).toEqual({ dir: 'down', text: '▼ -40.00 (-0.05%)' })
     expect(indexChange(76290, null)).toBe(null)
+  })
+})
+
+describe('OI walls: the top two strikes per side', () => {
+  test('call walls are the two highest call OI, put walls the two highest put OI', () => {
+    // ROWS: calls 40, 20, 10, 5; puts 10, 30, 50, 60.
+    expect(oiWalls(ROWS, 76290)).toEqual({ ce: [76000, 76200], pe: [76600, 76400] })
+  })
+
+  test('missing and zero OI are never walls; one quoted strike gives one wall', () => {
+    const rows: ChainRowWire[] = [
+      { strike: 76000, CE: side({ oi: null }), PE: null },
+      { strike: 76200, CE: side({ oi: 0 }), PE: side({ oi: 7 }) },
+      { strike: 76400, CE: null, PE: side({ oi: null }) },
+    ]
+    expect(oiWalls(rows, 76290)).toEqual({ ce: [], pe: [76200] })
+  })
+
+  test('ties go to the strike nearer the index, then the lower strike', () => {
+    const rows: ChainRowWire[] = [
+      { strike: 75000, CE: side({ oi: 90 }), PE: side({ oi: 40 }) },
+      { strike: 76000, CE: side({ oi: 90 }), PE: side({ oi: 40 }) },
+      { strike: 77000, CE: side({ oi: 90 }), PE: side({ oi: 40 }) },
+      { strike: 78000, CE: side({ oi: 10 }), PE: side({ oi: 40 }) },
+    ]
+    // Index 76,400: 76,000 is 400 away, 77,000 is 600, 75,000 is 1,400.
+    expect(oiWalls(rows, 76400).ce).toEqual([76000, 77000])
+    // Index exactly between 76,000 and 77,000 for the puts: the lower strike wins the tie.
+    expect(oiWalls(rows, 76500).pe).toEqual([76000, 77000])
+    // No index: by strike.
+    expect(oiWalls(rows, null).ce).toEqual([75000, 76000])
+  })
+
+  test('the table badges, bolds and edges the wall strikes on their own side only', () => {
+    table(ROWS, 76290)
+    const oiCell = (label: string, s: 'ce' | 'pe'): HTMLElement =>
+      sides(label)[s].find((c) => c.classList.contains('chain-c-oi')) as HTMLElement
+    expect(oiCell('76,000', 'ce').querySelector('.chain-oi-rank')?.textContent).toBe('1')
+    expect(oiCell('76,200', 'ce').querySelector('.chain-oi-rank')?.textContent).toBe('2')
+    expect(oiCell('76,600', 'pe').querySelector('.chain-oi-rank')?.textContent).toBe('1')
+    expect(oiCell('76,400', 'pe').querySelector('.chain-oi-rank')?.textContent).toBe('2')
+    expect(oiCell('76,000', 'ce').classList.contains('chain-wall-1')).toBe(true)
+    // Not a wall on the other side, and the badge slot is still there, empty.
+    expect(oiCell('76,000', 'pe').classList.contains('chain-wall')).toBe(false)
+    expect(oiCell('76,000', 'pe').querySelector('.chain-oi-rank')?.textContent).toBe('')
+  })
+
+  test('axis helpers', () => {
+    expect(niceCeil(182151)).toBe(200000)
+    expect(niceCeil(230000)).toBe(250000)
+    expect(niceCeil(0)).toBe(1)
+    expect(compactNumber(182151)).toBe('182K')
+    expect(compactNumber(1250)).toBe('1.3K')
+    expect(compactNumber(950)).toBe('950')
+  })
+})
+
+describe('the OI chart', () => {
+  const rows: ChainRowWire[] = [
+    ...ROWS,
+    { strike: 76800, CE: side({ oi: null }), PE: null },
+  ]
+  const chart = (hot: number | null, onHot = vi.fn()): ReturnType<typeof render> =>
+    render(<OiChart rows={rows} spot={76290} maxPain={76400} walls={oiWalls(rows, 76290)} hot={hot} onHot={onHot} locale="en-US" />)
+
+  test('draws a column for every strike with OI, per side, and none where OI is missing', () => {
+    const { container } = chart(null)
+    const ce = [...container.querySelectorAll('.chain-bar-ce')].map((b) => Number(b.getAttribute('data-strike')))
+    const pe = [...container.querySelectorAll('.chain-bar-pe')].map((b) => Number(b.getAttribute('data-strike')))
+    expect(ce).toEqual([76000, 76200, 76400, 76600])
+    expect(pe).toEqual([76000, 76200, 76400, 76600])
+    // The walls are drawn at full strength.
+    const walls = [...container.querySelectorAll('.chain-bar-wall')].map((b) => `${b.classList.contains('chain-bar-ce') ? 'ce' : 'pe'}${b.getAttribute('data-strike')}`)
+    expect(walls.sort()).toEqual(['ce76000', 'ce76200', 'pe76400', 'pe76600'])
+    // The index line carries its value; max pain is labelled.
+    expect(screen.getByTestId('chart-spot').textContent).toContain('76,290')
+    expect(container.textContent).toContain('Max pain 76,400')
+  })
+
+  test('pointing at a strike reports it, and a hot strike shows its tooltip', () => {
+    const onHot = vi.fn()
+    const { unmount } = chart(null, onHot)
+    fireEvent.pointerEnter(screen.getByTestId('chart-slot-76400'))
+    expect(onHot).toHaveBeenCalledWith(76400)
+    unmount()
+    chart(76400)
+    const tip = screen.getByRole('status')
+    expect(tip.textContent).toContain('76,400')
+    expect(tip.textContent).toContain('put OI, wall 2')
+  })
+
+  test('chart and table share the hot strike, both ways', async () => {
+    installFetch(({ path }) => {
+      if (path === '/v1/desk/chain/BTC/expiries') return { body: { expiries: ['2026-11-06'] } }
+      if (path === '/v1/desk/chain/BTC') {
+        return { body: { expiry: '2026-11-06', spot: 76290, spotAsOf: Date.now(), future: null, feedAlive: true, rows: ROWS } }
+      }
+      return { body: {} }
+    })
+    render(<ChainPage />)
+    const rowOf = async (label: string): Promise<HTMLElement> =>
+      (await screen.findByRole('rowheader', { name: label })).closest('tr') as HTMLElement
+    // Chart -> table.
+    fireEvent.pointerEnter(await screen.findByTestId('chart-slot-76400'))
+    expect((await rowOf('76,400')).dataset.hot).toBe('true')
+    expect((await rowOf('76,200')).dataset.hot).toBe('false')
+    // Table -> chart.
+    fireEvent.mouseEnter(await rowOf('76,000'))
+    expect((await rowOf('76,000')).dataset.hot).toBe('true')
+    expect((await rowOf('76,400')).dataset.hot).toBe('false')
+    expect(document.querySelector('.chain-chart-hot')).not.toBe(null)
+    expect(screen.getByRole('status').textContent).toContain('76,000')
+    fireEvent.mouseLeave(await rowOf('76,000'))
+    expect(document.querySelector('.chain-chart-hot')).toBe(null)
+  })
+
+  test('"Hide chart" hides it and the choice is remembered', async () => {
+    installFetch(({ path }) => {
+      if (path === '/v1/desk/chain/BTC/expiries') return { body: { expiries: ['2026-11-06'] } }
+      if (path === '/v1/desk/chain/BTC') return { body: { expiry: '2026-11-06', spot: 76290, future: null, rows: ROWS } }
+      return { body: {} }
+    })
+    const { unmount } = render(<ChainPage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide chart' }))
+    expect(screen.queryByTestId('chart-slot-76400')).toBe(null)
+    expect(window.localStorage.getItem('desk.chain.chart')).toBe('hidden')
+    unmount()
+    render(<ChainPage />)
+    expect(await screen.findByRole('button', { name: 'Show chart' })).toBeTruthy()
+    expect(screen.queryByTestId('chart-slot-76400')).toBe(null)
+  })
+
+  test('the header names the call and put OI walls', async () => {
+    installFetch(({ path }) => {
+      if (path === '/v1/desk/chain/BTC/expiries') return { body: { expiries: ['2026-11-06'] } }
+      if (path === '/v1/desk/chain/BTC') return { body: { expiry: '2026-11-06', spot: 76290, future: null, rows: ROWS } }
+      return { body: {} }
+    })
+    render(<ChainPage />)
+    const ce = await screen.findByText('Call OI wall', { selector: 'dt' })
+    expect(ce.nextElementSibling?.textContent).toBe('76,000 · 76,200')
+    expect(screen.getByText('Put OI wall', { selector: 'dt' }).nextElementSibling?.textContent).toBe('76,600 · 76,400')
   })
 })
