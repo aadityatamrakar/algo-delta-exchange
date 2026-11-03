@@ -49,6 +49,7 @@ test('the real compact ticker parses to a full quote — nothing null that Delta
     theta: -310.86207846,
     vega: 16.87198841,
     tsMs: 1793696838633,
+    oiReduceOnly: null,
   })
 })
 

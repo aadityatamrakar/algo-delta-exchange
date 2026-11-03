@@ -15,6 +15,19 @@ export interface DxSpotIndexRef {
   readonly tick_size?: string
 }
 
+/**
+ * `product_specs` fields that decide whether a NEW position may be opened.
+ * `oi_reduce_only_mode` is present (true) only while the product's open
+ * interest is over `max_oi_usd`; Delta then rejects every opening order with
+ * `only_reduce_only_orders_allowed` (observed on the India testnet, 3 Nov 2026).
+ */
+export interface DxProductSpecs {
+  readonly oi_reduce_only_mode?: boolean
+  readonly only_reduce_only_orders_allowed?: boolean
+  readonly max_oi_usd?: number
+  readonly [k: string]: unknown
+}
+
 export interface DxProduct {
   readonly id: number
   readonly symbol: string
@@ -31,6 +44,7 @@ export interface DxProduct {
   readonly tick_size: string
   readonly underlying_asset?: DxAssetRef
   readonly spot_index?: DxSpotIndexRef
+  readonly product_specs?: DxProductSpecs
 }
 
 export interface DxTickerQuotes {
@@ -61,6 +75,9 @@ export interface DxTicker {
   readonly mark_vol?: string | null
   readonly spot_price?: string | null
   readonly oi_contracts?: string | null
+  readonly oi_value_usd?: string | null
+  /** True while open interest is over the product's cap: closing orders only. */
+  readonly oi_reduce_only_mode?: boolean
   readonly quotes?: DxTickerQuotes | null
   readonly greeks?: DxTickerGreeks | null
   /** MICROseconds. */

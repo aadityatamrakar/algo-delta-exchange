@@ -12,6 +12,7 @@ export {
 export {
   toInstrumentRow,
   toInstrumentRows,
+  opensAllowed,
   spotInstrumentRow,
   quoteFromTicker,
   parseFrame,

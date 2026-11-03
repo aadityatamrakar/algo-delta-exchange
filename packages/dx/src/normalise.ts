@@ -56,6 +56,18 @@ export function toInstrumentRow(p: DxProduct): InstrumentRow | null {
   }
 }
 
+/**
+ * Can a NEW position be opened on this contract? False while Delta has it in
+ * reduce-only mode — its open interest is over `max_oi_usd` (product or
+ * ticker `oi_reduce_only_mode`) or the product is flagged
+ * `only_reduce_only_orders_allowed`. Closing orders are still accepted.
+ */
+export function opensAllowed(x: DxProduct | DxTicker): boolean {
+  if ('oi_reduce_only_mode' in x && x.oi_reduce_only_mode === true) return false
+  const specs = 'product_specs' in x ? x.product_specs : undefined
+  return specs?.oi_reduce_only_mode !== true && specs?.only_reduce_only_orders_allowed !== true
+}
+
 /** The `.DEXBTUSD` index as the chain's spot row (`OptionMaster` matches the INDICES segment). */
 export function spotInstrumentRow(idx: DxSpotIndexRef = { id: 14, symbol: DX_SPOT_SYMBOL, tick_size: '0.5' }): InstrumentRow {
   return {
@@ -118,6 +130,12 @@ export interface DxQuote {
   readonly rho: number | null
   /** Exchange timestamp, ms; null when the message carries none. */
   readonly tsMs: number | null
+  /**
+   * Delta accepts only reduce-only orders on this contract (open interest over
+   * its cap): a new short here is rejected `only_reduce_only_orders_allowed`.
+   * From REST tickers; null from the WS ticker, which does not carry it.
+   */
+  readonly oiReduceOnly: boolean | null
 }
 
 /** REST `/v2/tickers` row → quote. */
@@ -143,6 +161,7 @@ export function quoteFromTicker(t: DxTicker): DxQuote {
     vega: num(g.vega),
     rho: num(g.rho),
     tsMs: usToMs(t.timestamp),
+    oiReduceOnly: typeof t.oi_reduce_only_mode === 'boolean' ? t.oi_reduce_only_mode : null,
   }
 }
 
@@ -187,6 +206,7 @@ function quoteFromTickerElement(e: Record<string, unknown>, env: Record<string, 
     theta: num(at(g, 3)),
     vega: num(at(g, 4)),
     tsMs: usToMs(e['ts'] ?? env['ts']),
+    oiReduceOnly: null,
   }
 }
 

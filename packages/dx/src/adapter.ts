@@ -128,6 +128,15 @@ export class DxAdapter implements BrokerAdapter {
           if (attempt < maxAttempts) await sleep(err.retryAfterMs ?? 1000)
           continue
         }
+        if (err instanceof DxApiError && err.code === 'only_reduce_only_orders_allowed' && req.reduce_only !== true) {
+          // Not margin and not timing: the contract's open interest is over its
+          // cap, so Delta takes closing orders only. Retrying cannot help.
+          throw new DxOrderError(
+            `order ${deskId} NOT placed: ${intent.instrument.tradingsymbol} is in reduce-only mode on Delta ` +
+              `(open interest over the contract's cap) — only closing orders are accepted: ${msgOf(err)}`,
+            'fatal',
+          )
+        }
         throw new DxOrderError(`order ${deskId}: ${msgOf(err)}`, classify(err))
       }
       const step = intent.instrument.lotSize
