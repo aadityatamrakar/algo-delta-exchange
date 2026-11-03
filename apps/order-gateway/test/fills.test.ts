@@ -704,3 +704,22 @@ test('a REJECTED tranche is still terminal even when a partial fill outranks it'
   assert.equal(h.order()['state'], 'PARTIAL', '2625 IS on; the desk must not be told otherwise')
   assert.equal(h.order()['filledQty'], 2625)
 })
+
+test('the fills\' fee reaches the terminal document — the desk folds net, never gross', async () => {
+  // 3 Nov: four Delta paper straddles filled and the supervisor banked
+  // cumRealized 0 on each — the fee rode the fill rows, but the reader that
+  // turned rows into records dropped it, so the order document had none.
+  const h = harness()
+  await h.watcher.handle(update({ clientOrderId: T1, filledQty: 1800, avgPrice: 100, fee: 0.4 }))
+  await h.watcher.handle(update({ clientOrderId: T2, filledQty: 450, avgPrice: 130, brokerOrderId: 'b2', fee: 0.12 }))
+  assert.equal(h.order()['state'], 'FILLED')
+  assert.equal(h.order()['fee'], 0.52)
+})
+
+test('fill rows with no fee leave the terminal document without one', async () => {
+  const h = harness()
+  await h.watcher.handle(update({ clientOrderId: T1, filledQty: 1800, avgPrice: 100 }))
+  await h.watcher.handle(update({ clientOrderId: T2, filledQty: 450, avgPrice: 130, brokerOrderId: 'b2' }))
+  assert.equal(h.order()['state'], 'FILLED')
+  assert.equal('fee' in h.order(), false)
+})

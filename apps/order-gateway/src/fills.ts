@@ -910,6 +910,9 @@ export class FillWatcher {
       filledQty: Number(r['filledQty'] ?? 0),
       avgPrice: r['avgPrice'] === null || r['avgPrice'] === undefined ? null : Number(r['avgPrice']),
       ...(r['rejectReason'] === undefined ? {} : { rejectReason: String(r['rejectReason']) }),
+      // The venue's cumulative fee on this tranche (Delta). Carried, or the
+      // order's total (`aggregateTranches`) is null and the desk books gross.
+      ...(typeof r['fee'] === 'number' && Number.isFinite(r['fee']) && r['fee'] >= 0 ? { fee: r['fee'] } : {}),
       ts: Number(r['ts'] ?? 0),
       tag: String(r['tag'] ?? ''),
       // The stored row's own rail, through the same one rule. Nothing in the
