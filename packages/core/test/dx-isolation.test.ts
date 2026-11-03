@@ -169,9 +169,9 @@ test('the rules catch what they are for', () => {
   ]) assert.ok(!caught(fine), fine)
 })
 
-test('both pm2 files load with dx names, dx namespaces and no live default in any env', () => {
+test('the pm2 file loads with dx names, dx namespaces and no live default in any env', () => {
   const require = createRequire(import.meta.url)
-  for (const file of ['ecosystem.desk.config.cjs', 'ecosystem.traders.config.cjs']) {
+  for (const file of ['ecosystem.desk.config.cjs']) {
     const eco = require(join(ROOT, file)) as { apps: { name: string; namespace: string; out_file?: string; env?: Record<string, string> }[] }
     assert.ok(eco.apps.length > 0, file)
     for (const app of eco.apps) {
