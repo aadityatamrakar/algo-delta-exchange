@@ -484,7 +484,7 @@ export function explain(err: unknown): string {
  */
 const BASE =
   import.meta.env['VITE_DESK_API'] ??
-  `${window.location.protocol}//${window.location.hostname}:8890`
+  window.location.origin
 
 /**
  * The same base, for the websocket in `stream.tsx`.
