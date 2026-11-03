@@ -202,6 +202,13 @@ describe('expiry classes', () => {
     expect(expiryClass('2026-11-27')).toBe('monthly')
   })
 
+  test('the 3 Nov BTC listing: every expiry files under one class', () => {
+    const listed = ['2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-13',
+      '2026-11-20', '2026-11-27', '2026-12-25', '2027-01-29']
+    expect(listed.map(expiryClass)).toEqual(['daily', 'daily', 'daily', 'weekly', 'weekly',
+      'weekly', 'monthly', 'monthly', 'monthly'])
+  })
+
   test('ATM is the strike nearest the index price', () => {
     expect(atmStrike([76000, 76200, 76400], 76290)).toBe(76200)
     expect(atmStrike([76000, 76200], null)).toBe(null)
