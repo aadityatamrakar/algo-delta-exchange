@@ -85,6 +85,7 @@ import {
   BROKER_SNAPSHOT_COLLECTION,
   createDeltaPositionsSnapshot,
   createGatewayHeartbeat,
+  DELTA_DEMO_SNAPSHOT_ID,
   DELTA_SNAPSHOT_MS,
   GATEWAY_HEARTBEAT_COLLECTION,
   GATEWAY_HEARTBEAT_MS,
@@ -1762,6 +1763,8 @@ export async function main(): Promise<void> {
    * PROOF OF LIFE for Status, in every broker mode — see `gateway-heartbeat.ts`.
    * The bridge reads the gateway as ok/stale from this row's age.
    */
+  /** Late-bound: the demo rail is built further down. Null off DX. */
+  let demoReadyNow: () => boolean | null = () => null
   const gatewayHeartbeat = createGatewayHeartbeat({
     collection: mongo.db.collection(GATEWAY_HEARTBEAT_COLLECTION) as never,
     events: mongo.db.collection(ORDER_EVENTS_COLLECTION) as never,
@@ -1771,6 +1774,7 @@ export async function main(): Promise<void> {
     broker: liveRail ? 'delta' : 'simulate',
     host: dxHost,
     deltaHeartbeatOk: () => (dxDeadman === null ? null : dxDeadman.healthy),
+    demoReady: () => demoReadyNow(),
     log,
   })
   void gatewayHeartbeat.beat()
@@ -1829,7 +1833,23 @@ export async function main(): Promise<void> {
           ),
         now: () => Date.now(),
         log,
-        onBuilt: ({ rest, cfg }) => {
+        onBuilt: ({ rest, adapter: demoDx, cfg }) => {
+          /**
+           * The testnet account's positions, for Status' "Positions truth —
+           * demo". Read through the testnet adapter itself: its product
+           * symbols are the desk's tradingsymbols, so nothing is translated.
+           */
+          const demoSnapshot = createDeltaPositionsSnapshot({
+            positions: () => demoDx.positions(),
+            collection: mongo.db.collection(BROKER_SNAPSHOT_COLLECTION) as never,
+            now: () => Date.now(),
+            host: hostOf(cfg.baseUrl),
+            log,
+            id: DELTA_DEMO_SNAPSHOT_ID,
+            broker: 'delta-demo',
+          })
+          void demoSnapshot.take()
+          setInterval(() => void demoSnapshot.take(), DELTA_SNAPSHOT_MS).unref()
           const hb = createDxHeartbeat({ rest, log })
           void hb.beat()
           setInterval(() => void hb.beat(), DX_HEARTBEAT_MS).unref()
@@ -1867,6 +1887,7 @@ export async function main(): Promise<void> {
         },
       })
     : null
+  if (demoRail !== null) demoReadyNow = () => demoRail.ready
   /** Merged into every simulator-scoped query: a demo document is not in the simulator's memory. */
   const notDemo: Record<string, unknown> = demoRail === null ? {} : { dx_paper_rail: { $ne: 'demo' } }
 

@@ -40,7 +40,9 @@ import {
   compareCardSummary,
   comparePositions,
   createPositionsComparer,
+  dxDemoNoSnapshotReason,
   dxNoSnapshotReason,
+  positionsDemoComparePorts,
   readLiveLedgers,
   SIMULATOR_NO_COMPARE,
   type BookPositions,
@@ -1046,4 +1048,100 @@ test('with no snapshot, the reason says why in plain words', () => {
   assert.equal(r.comparable, false)
   assert.equal(r.reason, SIMULATOR_NO_COMPARE)
   assert.doesNotMatch(compare({ snapshot: null }).reason, /XTS/)
+})
+
+// ------------------------------------------------------------ the demo rail
+
+/** A DX deps stub for the demo ports: two paper books, one on the demo rail. */
+function demoDeps(snap: Record<string, unknown> | null, heartbeat: Record<string, unknown> | null = null): {
+  deps: ApiDeps
+  saved: Record<string, unknown>[]
+} {
+  const saved: Record<string, unknown>[] = []
+  const deps = {
+    now: () => NOW,
+    log: () => {},
+    db: {
+      collection: (name: string) => ({
+        findOne: async (f: Record<string, unknown>) => {
+          if (name === 'desk-broker-snapshot') return f['_id'] === 'delta-demo' ? snap : null
+          if (name === 'desk-gateway-heartbeat') return heartbeat
+          return null
+        },
+        updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+          saved.push({ _id: f['_id'], ...(u['$set'] as Record<string, unknown>) })
+          return { matchedCount: 1 }
+        },
+      }),
+    },
+    store: {
+      listBooks: async (mode: string) =>
+        mode === 'paper'
+          ? [
+              { tag: 'BTC-DEMO', dx_paper_rail: 'demo' },
+              { tag: 'BTC-SIM', dx_paper_rail: 'sim' },
+            ]
+          : [],
+      allBooks: async (mode: string) =>
+        mode === 'paper'
+          ? [
+              book('BTC-DEMO', [{ symbol: 'C-BTC-80000-041126', qty: -0.05 }, { symbol: 'P-BTC-70000-041126', qty: -0.05 }]),
+              book('BTC-SIM', [{ symbol: 'C-BTC-90000-041126', qty: -1 }]),
+            ]
+          : [],
+    },
+  } as unknown as ApiDeps
+  return { deps, saved }
+}
+
+test('demo: paper books on the demo rail are compared with the testnet account, contract by contract', async () => {
+  const { deps, saved } = demoDeps({
+    asOf: NOW - 5_000,
+    ok: true,
+    broker: 'delta-demo',
+    symbolSpace: 'desk',
+    positions: [
+      { tradingsymbol: 'C-BTC-80000-041126', netQty: -0.05, avgPrice: 100 },
+      { tradingsymbol: 'P-BTC-70000-041126', netQty: -0.02, avgPrice: 30 },
+    ],
+    emptyDiagnostic: { positions: 'array(2)' },
+  })
+  const report = await createPositionsComparer(positionsDemoComparePorts(deps), { intervalMs: INTERVAL, rail: 'demo' }).run(NOW)
+  assert.ok(report !== null)
+  assert.equal(report.comparable, true, report.reason)
+  assert.equal(report.mode, 'paper')
+  assert.equal(report.rail, 'demo')
+  // The sim-rail book is not the testnet's business.
+  assert.deepEqual(report.symbols.map((r) => r.symbol), ['C-BTC-80000-041126', 'P-BTC-70000-041126'])
+  assert.deepEqual(report.divergent, ['P-BTC-70000-041126'])
+  assert.equal(saved[0]?.['_id'], 'demo', 'stored beside, never over, the live report')
+  // The live report's id is not touched.
+  assert.equal(saved.some((d) => d['_id'] === 'live'), false)
+})
+
+test('demo: no testnet snapshot says why, from the gateway heartbeat', async () => {
+  assert.match(dxDemoNoSnapshotReason({ demoReady: false }), /no delta-demo key configured/)
+  assert.match(dxDemoNoSnapshotReason({ demoReady: true }), /no Delta testnet positions snapshot yet/)
+  assert.match(dxDemoNoSnapshotReason(null), /no gateway heartbeat/)
+  const { deps } = demoDeps(null, { broker: 'simulate', demoReady: false })
+  const report = await createPositionsComparer(positionsDemoComparePorts(deps), { intervalMs: INTERVAL, rail: 'demo' }).run(NOW)
+  assert.equal(report?.comparable, false)
+  assert.match(String(report?.reason), /no delta-demo key configured/)
+})
+
+test('demo: a divergence is never journalled into the order feed', async () => {
+  const h = ports({
+    snapshot: async () => snapshot([brokerRow('NIFTY26AUG24000PE', -75)], { asOf: AFTER_CLOSE - 10_000 }),
+    books: async () => [book('DLF-R', [{ symbol: 'NIFTY26AUG24000PE', qty: -150 }])],
+  })
+  const comparer = createPositionsComparer(h.ports, { intervalMs: INTERVAL, rail: 'demo' })
+  const report = await comparer.run(AFTER_CLOSE)
+  assert.equal(report?.divergent.length, 1)
+  assert.equal(h.journalled.length, 0)
+  assert.equal(h.notified.length, 0)
+})
+
+test('the demo card names the testnet account', () => {
+  const card = compareCardSummary({ asOf: NOW, comparable: true, symbols: [{ symbol: 'x' }], divergent: [], unattributable: [], unmeasurable: [], intervalMs: INTERVAL }, NOW, 'the Delta testnet account')
+  assert.match(card.detail, /1 desk contracts compared to the Delta testnet account/)
 })

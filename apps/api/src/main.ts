@@ -865,6 +865,17 @@ export async function main(): Promise<void> {
   const positionsCompare = startPositionsCompare(routeDeps, {
     intervalMs: positiveEnvMs('DESK_POSITIONS_COMPARE_MS', 300_000),
   })
+  /**
+   * THE DEMO RAIL'S COMPARISON (DX only): paper books on `dx_paper_rail: 'demo'`
+   * against Delta's testnet account. Reported on Status as "Positions truth —
+   * demo"; it never journals and never feeds mirror sync.
+   */
+  const positionsCompareDemo = API_VENUE.id === 'dx'
+    ? startPositionsCompare(routeDeps, {
+        intervalMs: positiveEnvMs('DESK_POSITIONS_COMPARE_MS', 300_000),
+        rail: 'demo',
+      })
+    : null
 
   /**
    * MIRROR POSITION SYNC — the detector half (`mirror-sync.ts`).
@@ -956,6 +967,7 @@ export async function main(): Promise<void> {
     stopReconcile()
     stopPaperFold()
     positionsCompare.stop()
+    positionsCompareDemo?.stop()
     mirrorSync.stop()
     // Called directly rather than through `start`'s return value: a SIGTERM
     // arriving before the boot read lands must still stop the reconcile that

@@ -14,6 +14,9 @@
  *     the desk's tradingsymbol (`symbolSpace: 'desk'`), so the comparison joins
  *     on it directly. A failed read is written as `ok: false` with the error and
  *     NO positions, so a stale list can never be compared as current.
+ *   - `desk-broker-snapshot` `_id: 'delta-demo'`, the same, for the DEMO rail's
+ *     testnet account (`dx-demo.ts`) once that rail is built from a
+ *     `delta-demo` key. Testnet product symbols are the desk's tradingsymbols.
  *
  * NEVER THROWS. A failed write is logged and retried on the next beat; the
  * caller owns the timers.
@@ -26,6 +29,7 @@ export const GATEWAY_HEARTBEAT_MS = 15_000
 
 export const BROKER_SNAPSHOT_COLLECTION = 'desk-broker-snapshot'
 export const DELTA_SNAPSHOT_ID = 'delta'
+export const DELTA_DEMO_SNAPSHOT_ID = 'delta-demo'
 export const DELTA_SNAPSHOT_MS = 30_000
 
 export type GatewayBroker = 'simulate' | 'delta'
@@ -41,6 +45,8 @@ export interface GatewayHeartbeatDoc {
   readonly lastOrderAt: number | null
   /** Delta's dead-man heartbeat: true/false on the live rail, null in simulate mode. */
   readonly deltaHeartbeatOk: boolean | null
+  /** The demo (testnet) rail: built from a `delta-demo` key or not; null off DX. */
+  readonly demoReady: boolean | null
 }
 
 interface UpsertCollection {
@@ -75,6 +81,7 @@ export function createGatewayHeartbeat(deps: {
   readonly broker: GatewayBroker
   readonly host: string | null
   readonly deltaHeartbeatOk: () => boolean | null
+  readonly demoReady?: () => boolean | null
   readonly log: Log
 }): { beat(): Promise<void> } {
   let failing = false
@@ -100,6 +107,7 @@ export function createGatewayHeartbeat(deps: {
           host: deps.host,
           lastOrderAt,
           deltaHeartbeatOk: deps.deltaHeartbeatOk(),
+          demoReady: deps.demoReady?.() ?? null,
         }
         await deps.collection.updateOne({ _id: GATEWAY_HEARTBEAT_ID }, { $set: doc }, { upsert: true })
         if (failing) deps.log('gateway heartbeat written again')
@@ -118,7 +126,12 @@ export function createDeltaPositionsSnapshot(deps: {
   readonly now: () => number
   readonly host: string | null
   readonly log: Log
+  /** Default the production account: `_id: 'delta'`, broker `delta`. */
+  readonly id?: string
+  readonly broker?: 'delta' | 'delta-demo'
 }): { take(): Promise<void> } {
+  const id = deps.id ?? DELTA_SNAPSHOT_ID
+  const broker = deps.broker ?? 'delta'
   let running = false
   return {
     async take(): Promise<void> {
@@ -132,7 +145,7 @@ export function createDeltaPositionsSnapshot(deps: {
             asOf: deps.now(),
             ok: true,
             error: '',
-            broker: 'delta',
+            broker,
             host: deps.host,
             symbolSpace: 'desk',
             positions: rows.map((p) => ({ tradingsymbol: p.tradingsymbol, netQty: p.netQty, avgPrice: p.avgPrice })),
@@ -142,16 +155,16 @@ export function createDeltaPositionsSnapshot(deps: {
           set = {
             asOf: deps.now(),
             ok: false,
-            error: `Delta /v2/positions failed: ${errorText(err)}`,
-            broker: 'delta',
+            error: `Delta${broker === 'delta-demo' ? ' testnet' : ''} /v2/positions failed: ${errorText(err)}`,
+            broker,
             host: deps.host,
             symbolSpace: 'desk',
             positions: null,
           }
         }
-        await deps.collection.updateOne({ _id: DELTA_SNAPSHOT_ID }, { $set: set }, { upsert: true })
+        await deps.collection.updateOne({ _id: id }, { $set: set }, { upsert: true })
       } catch (err) {
-        deps.log('Delta positions snapshot write failed', { error: errorText(err) })
+        deps.log('Delta positions snapshot write failed', { id, error: errorText(err) })
       } finally {
         running = false
       }
