@@ -218,6 +218,29 @@ const SPEC_TABLE: Dials = {
   pb_otm_steps: 1,
   pb_prem_stop_frac: 0.5,
   pb_prem_trail_arm: 0.8,
+  // BULL-S (Delta spec §6.2, plan Task 3): off, every number unread while it is.
+  bs_enabled: false,
+  bs_strike_step: 0,
+  bs_strike_jump: 1,
+  bs_stop_mult: 1.25,
+  bs_stop_basis: 1,
+  bs_stop_confirm_s: 3,
+  bs_lots_start: 1,
+  bs_lots_step: 1,
+  bs_lots_cap: 0,
+  bs_max_open: 0,
+  bs_target: 0,
+  bs_loss_cap: 0,
+  bs_after_halt: 0,
+  bs_enter_on_start: true,
+  bs_entry_from_min: 0,
+  bs_entry_to_min: 1440,
+  bs_entry_weekdays: 127,
+  bs_no_entry_before_expiry_min: 0,
+  bs_flat_before_expiry_min: 0,
+  bs_ref_max_age_s: 10,
+  bs_close_req: 0,
+  bs_rearm_req: 0,
 }
 
 /** Spec §8.1's rows in the table's order, with the spec review's eight in the
@@ -373,10 +396,11 @@ test('every pb_* dial is in exactly one section — Playbook — in spec §8.1 o
   }
 })
 
-test('the Playbook section sits right after Delta lean, at the foot of the panel', () => {
+test('the Playbook section sits right after Delta lean, at the foot of the NSE panel', () => {
   const keys = DIAL_SECTIONS.map((s) => s.key)
   assert.equal(keys.indexOf('playbook'), keys.indexOf('delta-lean') + 1)
-  assert.equal(keys.at(-1), 'playbook')
+  // Only BULL-S, the fourth path, comes after it (test/bull-s/dials.test.ts).
+  assert.deepEqual(keys.slice(-2), ['playbook', 'bull-s'])
 })
 
 test('the playbook defaults are inert: pb_playbook 0 and no expiry-only contract', () => {

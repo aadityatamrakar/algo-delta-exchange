@@ -271,6 +271,14 @@ test('engineSwitchChanges: only a change the ENGINE would see — resolved befor
   const parity = { delta_lean_enabled: true, dl_parity_forward: true }
   assert.deepEqual(engineSwitchChanges(parity, { dl_parity_forward: true }), [], 'restating it is no change')
   assert.deepEqual(engineSwitchChanges(parity, { dl_parity_forward: false }).map((c) => c.key), ['dl_parity_forward'])
+  // The fourth: BULL-S (Delta spec §6.3). Off by default, so turning it on is a
+  // change, and restating it on a BULL-S row is not.
+  assert.deepEqual(engineSwitchChanges(recenter, { bs_enabled: true, bs_strike_step: 200 }), [
+    { key: 'bs_enabled', before: false, after: true },
+  ])
+  const bullS = { bs_enabled: true, bs_strike_step: 200 }
+  assert.deepEqual(engineSwitchChanges(bullS, { bs_enabled: true, bs_lots_cap: 30 }), [])
+  assert.deepEqual(engineSwitchChanges(bullS, { bs_enabled: false }).map((c) => c.key), ['bs_enabled'])
 })
 
 // -------------------------------------------------------------- over Mongo

@@ -10,7 +10,7 @@
     "./dials": "./src/dials.ts",
     "./presets": "./src/presets.ts"
   },
-  "scripts": { "test": "node --test test/*.test.ts" },
+  "scripts": { "test": "node --test test/*.test.ts test/bull-s/*.test.ts" },
   "engines": { "node": ">=22" },
   "dependencies": { "@algomaker/greeks": "*" }
 }
