@@ -1,34 +1,15 @@
 /**
- * Risk gate — the outermost safety net.
+ * The desk's exposure limits — the loss stop and the capacity caps.
  *
- * Pure function of (intent, limits, snapshot). It runs BEFORE the journal write
- * and before any broker call, so no strategy bug can bypass it and every
- * decision is reproducible in a test.
- *
- * Ordering is deliberate: structural validity first (a malformed intent can't be
- * meaningfully rate-limited), then authorisation, then capacity. The first
- * failure wins so the reported reason is the most fundamental one.
- *
- * WHO CALLS WHAT (audit F-28). This module used to have no importers at all
- * while the live path had no loss stop and no notional cap — a green test file
- * implying protection that was not there. The desk API now gates BOTH of its
- * live rails on `checkExposureLimits` (the loss stop and the capacity caps),
- * through `apps/api/src/submit-plan.ts:screenRiskGate` and
- * `apps/api/src/decision-plan.ts:splitByRisk`. `checkRisk` calls the same
- * function, so every test that reaches these rules through it is a test of the
- * live path. The API does NOT use `checkRisk` itself: the structural, sim/live
- * and allowlist sections above describe an `OrderIntent` the bridge never
- * builds, and it enforces those three properties with gates of its own.
+ * Pure function of (order, limits, snapshot), so every decision is
+ * reproducible in a test. The desk API gates BOTH of its live rails on
+ * `checkExposureLimits`, through `apps/api/src/submit-plan.ts:screenRiskGate`
+ * and `apps/api/src/decision-plan.ts:splitByRisk` (audit F-28). The kill switch
+ * and the live allowlist are the API's own gates (`safety.ts`, the strategy
+ * switch), not this module's.
  */
 
-import type {
-  ExposureLimits,
-  ExposureState,
-  OrderIntent,
-  RiskLimits,
-  RiskRejection,
-  RiskSnapshot,
-} from './types.ts'
+import type { ExposureLimits, ExposureState, RiskRejection, RiskSnapshot } from './types.ts'
 
 export type RiskVerdict =
   | { readonly allowed: true }
@@ -39,71 +20,6 @@ const deny = (code: RiskRejection['code'], detail: string): RiskVerdict => ({
   allowed: false,
   rejection: { code, detail } as RiskRejection,
 })
-
-export function checkRisk(
-  intent: OrderIntent,
-  limits: RiskLimits,
-  snap: RiskSnapshot,
-): RiskVerdict {
-  // ---- 1. structural validity -------------------------------------------
-  if (!Number.isFinite(intent.quantity) || intent.quantity <= 0) {
-    return deny('BAD_INTENT', `quantity must be > 0, got ${intent.quantity}`)
-  }
-  if (!intent.clientOrderId) {
-    return deny('BAD_INTENT', 'clientOrderId is required (idempotency key)')
-  }
-  if (!intent.strategyTag) {
-    return deny('BAD_INTENT', 'strategyTag is required')
-  }
-  if (intent.destinations.length === 0) {
-    return deny('NO_DESTINATION', 'intent has no destinations; it would silently vanish')
-  }
-  if (intent.orderType === 'LIMIT' && intent.limitPrice === undefined) {
-    return deny('BAD_INTENT', 'LIMIT order requires limitPrice')
-  }
-  if (
-    (intent.orderType === 'SL_MARKET' || intent.orderType === 'SL_LIMIT') &&
-    intent.triggerPrice === undefined
-  ) {
-    return deny('BAD_INTENT', `${intent.orderType} requires triggerPrice`)
-  }
-
-  // A 'sim' destination alongside real brokers is almost always a config
-  // mistake, and the failure mode (half the size going to a simulator) is
-  // silent. Refuse it rather than guessing which was meant.
-  const hasSim = intent.destinations.includes('sim')
-  const hasReal = intent.destinations.some((d) => d !== 'sim')
-  if (hasSim && hasReal) {
-    return deny(
-      'MIXED_SIM_LIVE',
-      `destinations mix sim with real brokers: ${intent.destinations.join(',')}`,
-    )
-  }
-  if (intent.mode === 'sim' && hasReal) {
-    return deny('MIXED_SIM_LIVE', `mode='sim' but destinations include a real broker`)
-  }
-  if (intent.mode === 'live' && !hasReal) {
-    return deny('MIXED_SIM_LIVE', `mode='live' but no real broker destination`)
-  }
-
-  // ---- 2. authorisation --------------------------------------------------
-  // Live trading is opt-in per strategy tag. A misconfigured strategy cannot
-  // reach a broker just because a daemon happens to be running.
-  if (intent.mode === 'live' && !limits.liveAllowlist.includes(intent.strategyTag)) {
-    return deny(
-      'NOT_LIVE_ALLOWED',
-      `strategyTag '${intent.strategyTag}' is not in the live allowlist`,
-    )
-  }
-
-  // Kill switch halts new exposure but must never trap an open position.
-  if (limits.killSwitch && !snap.isReducingExposure) {
-    return deny('KILL_SWITCH', 'kill switch engaged; only exposure-reducing orders allowed')
-  }
-
-  // ---- 3. the loss stop and capacity ------------------------------------
-  return checkExposureLimits(intent, limits, snap)
-}
 
 /**
  * The part of an order the capacity limits are about. A strict subset of
@@ -120,11 +36,8 @@ export interface ExposureOrder {
  * THE LOSS STOP AND THE CAPACITY CAPS, as the desk API gates its live rails
  * (audit F-28) — no `OrderIntent`, no allowlist, no kill switch.
  *
- * Called by `checkRisk` above, so the tests that reach these rules through it
- * are the tests that guard the live path.
- *
  * **IT NEVER BLOCKS AN EXIT.** One rule, stated once, for every limit here —
- * the same asymmetry the kill switch has in `checkRisk`, in `safety.ts` and in
+ * the same asymmetry the kill switch has in `safety.ts` and in
  * `submit-plan.ts`: a position keeps moving whether or not you can act on it,
  * so a control that traps one is worse than whatever it was protecting against.
  * The lot caps already carried the exemption; the rate limit and the notional

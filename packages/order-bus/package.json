@@ -1,7 +1,7 @@
 {
   "name": "@algomaker/order-bus",
   "version": "1.0.0",
-  "description": "Typed order intents, risk gate, write-ahead journal and order lifecycle. MongoDB is NOT on the hot path.",
+  "description": "Typed order intents, order lifecycle, broker snapshot types and the desk exposure limits.",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "node --test test/*.test.ts" },

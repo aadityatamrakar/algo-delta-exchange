@@ -99,13 +99,13 @@ export interface OrderState {
 // ---------------------------------------------------------------- risk
 
 /**
- * The CAPACITY half of the limits — the numbers, without the two switches.
+ * The CAPACITY limits — the numbers, without the kill switch or allowlist.
  *
- * Split out of `RiskLimits` because this is the subset the desk API wires onto
+ * This is the subset the desk API wires onto
  * its live rails (audit F-28): the kill switch and the live allowlist already
  * exist there as gates of their own (`safety.ts`, the Strategies page switch),
  * and a second copy of either would be a second thing to keep in step with the
- * first. `RiskLimits` still carries all seven, so nothing that used it moved.
+ * first.
  *
  * `Infinity` on any field means THAT LIMIT IS DISABLED — see `NO_EXPOSURE_LIMITS`.
  */
@@ -116,23 +116,6 @@ export interface ExposureLimits {
   readonly maxNotionalPerOrder: number
   /** Realised+unrealised loss (positive number) at which trading stops. */
   readonly maxDailyLoss: number
-}
-
-export interface RiskLimits extends ExposureLimits {
-  /** Master halt. New entries blocked; exits still permitted. */
-  readonly killSwitch: boolean
-  /** Strategy tags allowed to trade with mode 'live'. An allowlist, not a flag. */
-  readonly liveAllowlist: readonly string[]
-}
-
-export const defaultRiskLimits: RiskLimits = {
-  killSwitch: false,
-  liveAllowlist: [],
-  maxOrdersPerMinute: 60,
-  maxOpenLotsPerUnderlying: 20,
-  maxOpenLotsTotal: 60,
-  maxNotionalPerOrder: 5_000_000,
-  maxDailyLoss: 100_000,
 }
 
 /**
@@ -177,39 +160,30 @@ export interface RiskSnapshot extends ExposureState {
 }
 
 export type RiskRejection =
-  | { readonly code: 'KILL_SWITCH'; readonly detail: string }
-  | { readonly code: 'NOT_LIVE_ALLOWED'; readonly detail: string }
-  | { readonly code: 'MIXED_SIM_LIVE'; readonly detail: string }
-  | { readonly code: 'NO_DESTINATION'; readonly detail: string }
   | { readonly code: 'RATE_LIMIT'; readonly detail: string }
   | { readonly code: 'MAX_LOTS_UNDERLYING'; readonly detail: string }
   | { readonly code: 'MAX_LOTS_TOTAL'; readonly detail: string }
   | { readonly code: 'MAX_NOTIONAL'; readonly detail: string }
   | { readonly code: 'DAILY_LOSS'; readonly detail: string }
-  | { readonly code: 'BAD_INTENT'; readonly detail: string }
   /** The open position could not be counted in full — see `unmeasuredSymbols`. */
   | { readonly code: 'UNMEASURED_EXPOSURE'; readonly detail: string }
 
-// ---------------------------------------------------------------- journal
+// ---------------------------------------------------------------- broker snapshot
 
-/** One append-only journal record. */
-export type WalRecord =
-  | { readonly kind: 'INTENT'; readonly ts: number; readonly intent: OrderIntent }
-  | {
-      readonly kind: 'SUBMITTED'
-      readonly ts: number
-      readonly clientOrderId: string
-      readonly destination: Destination
-      readonly brokerOrderId: string | null
-    }
-  | {
-      readonly kind: 'STATUS'
-      readonly ts: number
-      readonly clientOrderId: string
-      readonly destination: Destination
-      readonly status: OrderStatus
-      readonly filledQty: number
-      readonly avgFillPrice: number | null
-      readonly rejectReason?: string
-    }
-  | { readonly kind: 'REJECTED_BY_RISK'; readonly ts: number; readonly intent: OrderIntent; readonly code: string }
+/** One net position as a broker reports it. */
+export interface BrokerPosition {
+  readonly tradingsymbol: string
+  /** Signed: positive long, negative short. */
+  readonly netQty: number
+  readonly avgPrice: number
+}
+
+/** One order as a broker reports it. */
+export interface BrokerOrder {
+  readonly brokerOrderId: string
+  /** Null when the broker has no record of our idempotency key. */
+  readonly clientOrderId: string | null
+  readonly tradingsymbol: string
+  readonly status: string
+  readonly filledQty: number
+}
