@@ -7,14 +7,14 @@
  * database and `test/brokers.test.ts` asserts it over the full JSON of every
  * response this file can produce.
  *
- * `test` performs a REAL login (spec §5). That is the whole point of it: "are my
- * credentials right?" is otherwise answerable only by restarting a process and
- * reading its logs. A failed login is `200 {ok:false}`, not a 5xx — the request
+ * `test` performs a REAL authenticated call (spec §5; for Delta a SIGNED wallet
+ * read, spec §5.4). That is the whole point of it: "are my credentials right?"
+ * is otherwise answerable only by restarting a process and reading its logs. A failed login is `200 {ok:false}`, not a 5xx — the request
  * succeeded and its body says exactly what the broker replied; a 5xx would tell
  * the dashboard that OUR service is broken when it is the credentials that are.
  */
 
-import { XtsRestClient } from '@algomaker/brokers'
+import { DxRest } from '@algomaker/dx'
 import { zerodhaLogin } from '../../../marketdata/src/zerodha-login.ts'
 import { BrokerStore, isBrokerKind, requireMasterKey, type BrokerKind } from '../brokerstore.ts'
 import { auditLog } from '../audit.ts'
@@ -52,7 +52,7 @@ export function brokerRoutes(deps: ApiDeps): Route {
     const [kindRaw, action, ...extra] = rest.split('/')
     if (extra.length > 0) return false
     if (!isBrokerKind(kindRaw)) {
-      send(404, { error: `unknown broker "${String(kindRaw)}" — known brokers are xts and zerodha` })
+      send(404, { error: `unknown broker "${String(kindRaw)}" — known brokers are delta and zerodha` })
       return true
     }
     const kind: BrokerKind = kindRaw
@@ -126,8 +126,8 @@ export function brokerRoutes(deps: ApiDeps): Route {
 
       const row = await store.get(kind)
       const result =
-        kind === 'xts'
-          ? await testXts(read.secret, row.meta)
+        kind === 'delta'
+          ? await testDelta(read.secret, row.meta)
           : await testZerodha(read.secret, row.meta)
 
       // Recording the verdict is OUR job; failing to record it is our bug and a
@@ -138,10 +138,9 @@ export function brokerRoutes(deps: ApiDeps): Route {
         principal: ctx.principal,
         source: `${PREFIX}/:kind/test`,
         action: 'tested broker credentials',
-        // A REAL LOGIN happens on this path (spec §5) — XTS invalidates the
-        // previous session on each one — so it belongs in the record even
-        // though it changes nothing. The error is the ALREADY-REDACTED text
-        // (`redact` above), never the raw broker reply.
+        // A REAL authenticated call happens on this path (spec §5), so it
+        // belongs in the record even though it changes nothing. The error is
+        // the ALREADY-REDACTED text (`redact` below), never the raw reply.
         detail: { kind, ok: result.ok, ...(result.ok ? {} : { error: result.error }) },
       })
       if (result.ok) {
@@ -167,52 +166,45 @@ function str(...values: unknown[]): string {
 }
 
 /**
- * A real XTS Interactive login over `packages/brokers/src/xts-rest.ts` — direct
- * REST, no SDK, the same client the order gateway trades through. Testing
- * through a different code path than the one that places orders would verify
- * something nobody uses.
+ * A SIGNED wallet read on Delta Exchange India, over `@algomaker/dx`'s `DxRest`
+ * — the same client the order gateway trades through. Read-only: it can place
+ * nothing, and unlike a session login it invalidates nothing.
  *
- * `baseUrl` is read from `meta` first (contract §2 puts the base URL there) and
- * from the sealed blob second, so a credential set entered as one JSON object
- * still works.
+ * `baseUrl` comes from `meta` first and from the sealed blob second. It is
+ * REQUIRED here rather than defaulted to the India host, so a misfiled row (or
+ * a test) never reaches Delta by accident; the Brokers form fills it in.
  */
-async function testXts(
+async function testDelta(
   secret: Record<string, unknown>,
   meta: Record<string, string | number | boolean>,
 ): Promise<TestResult> {
   const baseUrl = str(meta['baseUrl'], secret['baseUrl'])
-  const appKey = str(secret['appKey'])
-  const secretKey = str(secret['secretKey'])
-  if (baseUrl === '') return { ok: false, error: 'meta.baseUrl is required to reach the XTS host' }
-  if (appKey === '' || secretKey === '') {
-    return { ok: false, error: 'secret.appKey and secret.secretKey are required' }
+  const apiKey = str(secret['apiKey'])
+  const apiSecret = str(secret['apiSecret'])
+  if (baseUrl === '') {
+    return { ok: false, error: 'meta.baseUrl is required to reach Delta (https://api.india.delta.exchange)' }
   }
-  const uniqueKey = str(secret['uniqueKey'])
-  const hostLookupUrl = str(meta['hostLookupUrl'], secret['hostLookupUrl'])
-  const prefix = str(meta['prefix'], secret['prefix'])
-  const source = str(meta['source'], secret['source'])
-
-  const client = new XtsRestClient({
+  if (apiKey === '' || apiSecret === '') return { ok: false, error: 'secret.apiKey and secret.apiSecret are required' }
+  const rest = new DxRest({
     baseUrl,
-    appKey,
-    secretKey,
-    ...(uniqueKey === '' ? {} : { uniqueKey }),
-    ...(hostLookupUrl === '' ? {} : { hostLookupUrl }),
-    ...(prefix === '' ? {} : { prefix }),
-    ...(source === '' ? {} : { source }),
-    // Shorter than the gateway's 15s: an operator is watching this one, and a
-    // broker that has not answered in 10 seconds is the answer.
+    apiKey,
+    apiSecret,
+    userAgent: 'algomaker-dx-api/1.0',
+    // An operator is watching this one; a venue that has not answered in 10
+    // seconds is the answer.
     timeoutMs: 10_000,
   })
   try {
-    const session = await client.login()
-    // Logging straight back out. XTS invalidates the previous session on each
-    // login, so a test that KEPT its token would silently kill the session the
-    // order gateway is holding — testing credentials must not stop trading.
-    await client.logout().catch(() => {})
+    const balances = await rest.walletBalances()
+    const seen = balances
+      .map((b) => {
+        const r = b as unknown as Record<string, unknown>
+        return `${str(r['asset_symbol'])} ${str(r['balance'])}`.trim()
+      })
+      .filter((x) => x !== '')
     return {
       ok: true,
-      ...(session.userID === '' ? {} : { note: `logged in as ${session.userID}` }),
+      note: seen.length === 0 ? 'signed wallet read ok (no balances reported)' : `signed wallet read ok — ${seen.join(', ')}`,
     }
   } catch (err) {
     return { ok: false, error: redact(err instanceof Error ? err.message : String(err), secret) }
@@ -266,7 +258,7 @@ async function testZerodha(
  * Strip any stored credential value out of a broker's error text before it
  * becomes a response.
  *
- * Brokers do echo what you sent them — XTS returns the request body in some
+ * Brokers do echo what you sent them — some return the request body in their
  * error descriptions, and the legacy Zerodha module puts the payload in its
  * message. Forwarding that verbatim would break the module's one invariant
  * through the one field nobody thinks of as ours.
@@ -277,7 +269,7 @@ async function testZerodha(
  * WALKS THE WHOLE BLOB. The previous version did `Object.values(secret)` and
  * skipped anything that was not a string of 4+ characters — but the blob is
  * free-form JSON with no shape check, so a nested `{legacy:{password:"..."}}`
- * or a numeric PIN passed straight through. That mattered because XTS echoes
+ * or a numeric PIN passed straight through. That mattered because brokers echo
  * the request payload in some error descriptions, and the unredacted text goes
  * to TWO places: the response body, and `lastError`, which `GET /v1/desk/brokers`
  * then returns on every poll, forever.

@@ -162,7 +162,7 @@ function desk(
     /** Flip a gate on between tranches, the way an operator would. */
     readonly halt?: { readonly on: boolean }
     readonly live?: { readonly on: boolean }
-    /** The operator's "turn XTS off" switch — see broker-link.ts. */
+    /** The operator's "turn the live broker off" switch (the placer's link gate). */
     readonly link?: { readonly released: boolean }
   } = {},
 ): Desk {
@@ -352,7 +352,7 @@ test('the broker link released BETWEEN tranches stops the rest — HALTED, and i
    * the rest stop — and what already traded stay on the document.
    */
   const link = { released: false }
-  const d = desk({ trancheLots: 3, workMode: 'passive' }, { link })
+  const d = desk({ mode: 'live', trancheLots: 3, workMode: 'passive' }, { link })
   await d.sweep()
   assert.equal(d.broker.placed.length, 1)
   link.released = true

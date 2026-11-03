@@ -62,19 +62,19 @@ const CONTRACT: ResolvedContract = {
 
 // ------------------------------------------------------- the mode predicate
 
-test('ONLY an explicit mode:paper is paper — everything else is LIVE', () => {
-  assert.equal(isPaperOrder({ mode: 'paper' }), true)
+test('ONLY an exact mode:live is live — everything else is PAPER (Delta desk)', () => {
   assert.equal(isPaperOrder({ mode: 'live' }), false)
+  assert.equal(isPaperOrder({ mode: 'paper' }), true)
   /**
-   * The one that matters. Every live order document this desk has ever written
-   * carries no mode at all, and a predicate that read "absent" as paper would
-   * simulate the live book's exits.
+   * The one that matters on this desk: a document with no mode at all is a
+   * rehearsal, never real money. A live order must say so, exactly.
    */
-  assert.equal(isPaperOrder({}), false)
+  assert.equal(isPaperOrder({}), true)
   // And nothing loose counts: a stray truthy value is not a rail.
-  assert.equal(isPaperOrder({ mode: 'PAPER' }), false)
-  assert.equal(isPaperOrder({ mode: true }), false)
-  assert.equal(isPaperOrder({ paper: true }), false)
+  assert.equal(isPaperOrder({ mode: 'LIVE' }), true)
+  assert.equal(isPaperOrder({ mode: 'Live' }), true)
+  assert.equal(isPaperOrder({ mode: true }), true)
+  assert.equal(isPaperOrder({ live: true }), true)
 })
 
 // ------------------------------------------------------------ the fan-out
@@ -262,7 +262,7 @@ function desk(
   opts: {
     readonly live?: boolean
     readonly halt?: boolean
-    /** The operator's "turn XTS off" switch — see broker-link.ts. */
+    /** The operator's "turn the live broker off" switch (the placer's link gate). */
     readonly link?: { readonly released: boolean }
   } = {},
 ): {
@@ -367,7 +367,7 @@ test('a PAPER order reaches the simulator, and the live allowlist is never asked
 })
 
 test('a LIVE order still goes to the live adapter, and is still refused by the allowlist', async () => {
-  const d = desk({}, { live: false })
+  const d = desk({ mode: 'live' }, { live: false })
   await d.sweep()
   await d.settle()
 
@@ -386,7 +386,7 @@ test('a RELEASED broker link refuses a live order — the exit too — and never
    * the absence of a broker. It is asked BEFORE the allowlist: the operator
    * turned the broker off, and the reason must say that, not "not switched on".
    */
-  const open = desk({}, { live: true, link: { released: true } })
+  const open = desk({ mode: 'live' }, { live: true, link: { released: true } })
   await open.sweep()
   await open.settle()
   assert.equal(open.live.placed.length, 0, 'nothing reached the real broker')
@@ -398,7 +398,7 @@ test('a RELEASED broker link refuses a live order — the exit too — and never
   assert.ok(alert !== undefined, 'and it is in the failures feed')
   assert.equal((alert['detail'] as Record<string, unknown> | undefined)?.['mode'], 'live')
 
-  const exit = desk({ desk_op: 'close', transaction_type: 'BUY' }, { live: true, link: { released: true } })
+  const exit = desk({ mode: 'live', desk_op: 'close', transaction_type: 'BUY' }, { live: true, link: { released: true } })
   await exit.sweep()
   await exit.settle()
   assert.equal(exit.live.placed.length, 0, 'an exit cannot be placed without a session either')
@@ -413,7 +413,7 @@ test('a RELEASED broker link refuses a live order — the exit too — and never
 })
 
 test('a live order with the switch ON reaches the LIVE adapter, never the simulator', async () => {
-  const d = desk({}, { live: true })
+  const d = desk({ mode: 'live' }, { live: true })
   await d.sweep()
   await d.settle()
 
@@ -437,7 +437,7 @@ test('a live order with the switch ON reaches the LIVE adapter, never the simula
  * every shrinking resize.
  */
 test('C-1: a live CLOSE reaches the adapter with the switch OFF — an exit is never gated', async () => {
-  const d = desk({ desk_op: 'close', transaction_type: 'BUY' }, { live: false })
+  const d = desk({ mode: 'live', desk_op: 'close', transaction_type: 'BUY' }, { live: false })
   await d.sweep()
   await d.settle()
 
@@ -453,7 +453,7 @@ test('C-1: a live SHRINKING RESIZE reaches the adapter with the switch OFF', asy
    * CONSTRUCTION — `LiveRail.#exits` refused the growing ones, using the book
    * this process cannot see. Refusing it here would re-create C-1 for resizes.
    */
-  const d = desk({ desk_op: 'resize', transaction_type: 'BUY' }, { live: false })
+  const d = desk({ mode: 'live', desk_op: 'resize', transaction_type: 'BUY' }, { live: false })
   await d.sweep()
   await d.settle()
 
@@ -465,7 +465,7 @@ test('C-1: a live SHRINKING RESIZE reaches the adapter with the switch OFF', asy
 test('C-1: a live OPEN with the switch OFF is still refused — the gate still gates', async () => {
   // The half that must NOT move. The exemption is for exits, and an `open` is
   // the new exposure the switch exists to stop.
-  const d = desk({ desk_op: 'open' }, { live: false })
+  const d = desk({ mode: 'live', desk_op: 'open' }, { live: false })
   await d.sweep()
   await d.settle()
 
@@ -483,7 +483,7 @@ test('C-1: an UNKNOWN or absent desk_op is still gated — the exemption is a pa
    * looser than the rail's `#exits`.
    */
   for (const op of ['roll', 'rebalance', undefined]) {
-    const d = desk({ desk_op: op }, { live: false })
+    const d = desk({ mode: 'live', desk_op: op }, { live: false })
     await d.sweep()
     await d.settle()
 
@@ -527,7 +527,7 @@ test('a paper fill is stamped PAPER in desk-fills, and a live one is not', async
    */
   assert.equal(filled[0]?.['mode'], 'paper')
 
-  const liveDesk = desk({}, { live: true })
+  const liveDesk = desk({ mode: 'live' }, { live: true })
   await liveDesk.sweep()
   await liveDesk.settle()
   liveDesk.live.sim.feedTick(TOKEN, 101)
@@ -563,7 +563,7 @@ test('every journal row of a paper placement says paper, and a live one says liv
     assert.equal(detail?.['mode'], 'paper', `${String(row['phase'])} row is unstamped`)
   }
 
-  const l = desk({}, { live: true })
+  const l = desk({ mode: 'live' }, { live: true })
   await l.sweep()
   await l.settle()
   l.live.sim.feedTick(TOKEN, 101)
@@ -711,7 +711,7 @@ test('an order the simulator IS still holding is left alone', async () => {
 })
 
 test('a LIVE document is never touched — the broker owns its outcome', async () => {
-  const d = orphanDesk([placedPaperDoc({ clientOrderId: 'live-1', mode: undefined })])
+  const d = orphanDesk([placedPaperDoc({ clientOrderId: 'live-1', mode: 'live' })])
   const pass = await d.run()
   assert.equal(pass.scanned, 0)
   assert.equal(d.doc('live-1')?.['state'], 'PLACED')

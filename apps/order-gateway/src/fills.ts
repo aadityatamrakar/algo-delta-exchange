@@ -122,8 +122,8 @@ export interface OrderShape {
    * the live tab, and — worst — booked against the live book by the Python
    * desk's own reconcile, which keys on this field.
    *
-   * FAIL-CLOSED TO LIVE for the reason `isPaperOrder` gives: a live fill
-   * mislabelled paper would be silently dropped by every live reader.
+   * FAIL-CLOSED TO PAPER on the Delta desk (`orderMode`): only an exact
+   * `mode: 'live'` document is live.
    */
   readonly mode: 'live' | 'paper'
   /** The slices this order is worked in. Empty for an ungated order. */
@@ -279,9 +279,9 @@ export class FillWatcher {
     const base = resolved?.base ?? baseClientOrderId(raw.clientOrderId)
     const order = resolved?.order ?? null
     // The ORDER's rail when one is found; the EMITTING rail when the caller
-    // named it; live when neither can say — see `OrderShape.mode` on why that
-    // is the safe direction to fail in.
-    const mode: 'live' | 'paper' = order?.mode ?? opts.rail ?? 'live'
+    // named it; paper when neither can say — see `OrderShape.mode` on why that
+    // is the safe direction to fail in on the Delta desk.
+    const mode: 'live' | 'paper' = order?.mode ?? opts.rail ?? 'paper'
 
     /**
      * DEDUP AFTER RESOLUTION, ON THE RESOLVED IDS — so the key CHANGES when
@@ -791,9 +791,8 @@ export class FillWatcher {
       placedAt: Number(doc['placedAt'] ?? 0) || 0,
       deskTag: String(doc['desk_tag'] ?? ''),
       deskOp: String(doc['desk_op'] ?? ''),
-      // Only an EXPLICIT `'paper'` is paper. Every live order document ever
-      // written carries no mode at all, so anything else must read as live —
-      // `orderMode` is that rule, and it is asked rather than re-spelled here.
+      // Only an EXACT `'live'` is live on the Delta desk — `orderMode` is that
+      // rule, and it is asked rather than re-spelled here.
       mode: orderMode(doc),
       tranchePlan: asPlan(doc['tranchePlan']),
       // A garbled cursor reads as 0, never NaN: `NaN >= plan.length - 1` is

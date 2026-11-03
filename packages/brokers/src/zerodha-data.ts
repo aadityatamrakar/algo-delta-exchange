@@ -26,7 +26,7 @@ export class ZerodhaDataAdapter implements BrokerAdapter {
   readonly capabilities: BrokerCapabilities = { orders: false, marketData: true, modify: false }
 
   async placeOrder(_intent: OrderIntent): Promise<PlacedOrder> {
-    throw new CapabilityError('zerodha-data is market-data only: order placement goes through XTS (spec D1)')
+    throw new CapabilityError('zerodha-data is market-data only: order placement goes through the order gateway (spec D1)')
   }
 
   async modifyOrder(_brokerOrderId: string, _price: number): Promise<boolean> {
@@ -38,11 +38,11 @@ export class ZerodhaDataAdapter implements BrokerAdapter {
   }
 
   async positions(): Promise<readonly BrokerPosition[]> {
-    throw new CapabilityError('zerodha-data has no order/position book: order placement goes through XTS (spec D1)')
+    throw new CapabilityError('zerodha-data has no order/position book: order placement goes through the order gateway (spec D1)')
   }
 
   async orderBook(): Promise<readonly BrokerOrder[]> {
-    throw new CapabilityError('zerodha-data has no order/position book: order placement goes through XTS (spec D1)')
+    throw new CapabilityError('zerodha-data has no order/position book: order placement goes through the order gateway (spec D1)')
   }
 
   onOrderUpdate(_handler: (order: PlacedOrder) => void): () => void {

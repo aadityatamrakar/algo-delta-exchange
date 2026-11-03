@@ -37,6 +37,7 @@
  */
 
 import { useState } from 'react'
+import { lotsOf } from './venue.ts'
 import { VStack, HStack, Layout, LayoutContent, LayoutFooter } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
 import { Badge } from '@astryxdesign/core/Badge'
@@ -63,7 +64,8 @@ export interface ProtectTarget {
 /** Held lots, absolute and truncated — the engine counts whole lots only. */
 export function heldLots(qty: number, lotSize: number): number {
   if (!(lotSize > 0)) return 0
-  return Math.trunc(Math.abs(qty) / lotSize)
+  // Snapped before truncating: 0.57 BTC / 0.001 is 569.999… and must be 570.
+  return Math.trunc(lotsOf(Math.abs(qty), lotSize))
 }
 
 export function ProtectDialog(props: {

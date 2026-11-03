@@ -2,7 +2,7 @@
   "name": "@algomaker/marketdata",
   "version": "1.0.0",
   "private": true,
-  "description": "One Kite login, one websocket. Active instrument/token sync and refcounted subscription lifecycle.",
+  "description": "Market data host: one Kite login and socket pool on NSE, Delta's public socket with DESK_VENUE=dx. Active instrument/token sync and refcounted subscription lifecycle.",
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.ts"
@@ -12,10 +12,12 @@
   },
   "dependencies": {
     "@algomaker/core": "1.0.0",
+    "@algomaker/dx": "1.0.0",
     "@algomaker/instruments": "1.0.0",
     "@algomaker/marketdata-core": "1.0.0",
     "@algomaker/order-bus": "1.0.0",
     "@algomaker/bus": "1.0.0",
-    "@algomaker/greeks": "1.0.0"
+    "@algomaker/greeks": "1.0.0",
+    "@algomaker/venue": "1.0.0"
   }
 }

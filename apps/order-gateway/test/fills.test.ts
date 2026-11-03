@@ -93,6 +93,8 @@ function harness(over: Record<string, unknown> = {}, now = 1_000): Harness {
     trancheIds: [T1, T2],
     failedTrancheIds: [],
     state: 'PLACED',
+    // These are LIVE orders; on the Delta desk a live document says so.
+    mode: 'live',
     ...over,
   })
   const fills = new FakeFills()
@@ -460,9 +462,9 @@ test('an unattributed paper-rail row is stamped paper', async () => {
   const status = h.events.find((e) => e.phase === 'STATUS')
   assert.equal(status?.mode, 'paper')
 
-  // And with NO rail given, the fail-closed default holds.
+  // And with NO rail given, the fail-closed default holds — paper on the Delta desk.
   await h.watcher.handle(update({ clientOrderId: 'nobody.2', filledQty: 75, avgPrice: 12 }))
-  assert.equal(h.fills.rows[1]?.['mode'], 'live')
+  assert.equal(h.fills.rows[1]?.['mode'], 'paper')
 })
 
 test('reconcile() resolves an order whose fills landed before markPlaced did', async () => {

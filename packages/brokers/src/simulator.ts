@@ -76,6 +76,20 @@ export interface SimulatorOptions {
    * which is the very collision this exists to prevent.
    */
   readonly runId?: string
+  /**
+   * WHAT A FILL COSTS (spec §5.4a). Called once per fill, with the quantity
+   * and the price it actually filled at — the touch for a marketable limit
+   * (a sell at the bid, a buy at the ask), the print otherwise — and its
+   * answer rides the update as `fee`. Absent: no fee field at all, which is
+   * the NSE simulator exactly as it was.
+   */
+  /**
+   * Is the intent's `instrumentToken` Zerodha-packed? Default true (NSE). The
+   * Delta desk passes false: its token is the Delta product id, echoed as is,
+   * the way `DxAdapter` echoes it.
+   */
+  readonly packedTokens?: boolean
+  readonly feeModel?: (fill: { readonly intent: OrderIntent; readonly qty: number; readonly price: number }) => number
 }
 
 /**
@@ -102,12 +116,13 @@ function freshRunId(): string {
  * fill carries the same contract identity a live one does and the gateway's
  * fill attribution exercises the same guard on both rails. The instrument
  * master's token is Zerodha-PACKED (`exchange_token * 256 + segment`), the
- * same unpacking the XTS order path applies. Omitted when the intent has no
+ * same unpacking a live order path applies. Omitted when the intent has no
  * token: absent is "unknown", 0 would be read as a token.
  */
-function exchangeTokenFor(intent: OrderIntent): { exchangeToken?: number } {
-  const packed = intent.instrument.instrumentToken ?? 0
-  return packed > 0 ? { exchangeToken: Math.floor(packed / 256) } : {}
+function exchangeTokenFor(intent: OrderIntent, packedTokens: boolean): { exchangeToken?: number } {
+  const token = intent.instrument.instrumentToken ?? 0
+  if (!(token > 0)) return {}
+  return { exchangeToken: packedTokens ? Math.floor(token / 256) : token }
 }
 
 export class SimulatorAdapter implements BrokerAdapter {
@@ -122,11 +137,22 @@ export class SimulatorAdapter implements BrokerAdapter {
   readonly #positions = new Map<string, Position>()
   readonly #slippage: number
   readonly #runId: string
+  readonly #feeModel: SimulatorOptions['feeModel']
+  readonly #packedTokens: boolean
   #seq = 0
 
   constructor(opts: SimulatorOptions = {}) {
     this.#slippage = opts.slippage ?? 0
     this.#runId = opts.runId ?? freshRunId()
+    this.#feeModel = opts.feeModel
+    this.#packedTokens = opts.packedTokens ?? true
+  }
+
+  /** `{ fee }` for a fill of `qty` at `price`, or nothing when no model is set. */
+  #feeOf(intent: OrderIntent, qty: number, price: number): { fee?: number } {
+    if (this.#feeModel === undefined || qty <= 0) return {}
+    const fee = this.#feeModel({ intent, qty, price })
+    return Number.isFinite(fee) && fee >= 0 ? { fee } : {}
   }
 
   /**
@@ -221,13 +247,15 @@ export class SimulatorAdapter implements BrokerAdapter {
     const isStop = r.intent.orderType === 'SL_MARKET' || r.intent.orderType === 'SL_LIMIT'
     // Slippage always hurts: a SELL stop fills lower, a BUY stop fills higher.
     const slip = isStop ? (r.intent.side === 'SELL' ? -this.#slippage : this.#slippage) : 0
+    const avgPrice = Number((price + slip).toFixed(4))
     return {
       brokerOrderId: r.brokerOrderId,
       clientOrderId: r.intent.clientOrderId,
       status: 'FILLED',
       filledQty: r.intent.quantity,
-      avgPrice: Number((price + slip).toFixed(4)),
-      ...exchangeTokenFor(r.intent),
+      avgPrice,
+      ...exchangeTokenFor(r.intent, this.#packedTokens),
+      ...this.#feeOf(r.intent, r.intent.quantity, avgPrice),
     }
   }
 
@@ -300,7 +328,8 @@ export class SimulatorAdapter implements BrokerAdapter {
         status: 'FILLED',
         filledQty: intent.quantity,
         avgPrice: last,
-        ...exchangeTokenFor(intent),
+        ...exchangeTokenFor(intent, this.#packedTokens),
+        ...this.#feeOf(intent, intent.quantity, last),
       }
       this.#applyFill(intent, o.filledQty, last)
       this.#emit(o)
@@ -325,7 +354,7 @@ export class SimulatorAdapter implements BrokerAdapter {
     const o: PlacedOrder = {
       brokerOrderId, clientOrderId: intent.clientOrderId,
       status: 'WORKING', filledQty: 0, avgPrice: null,
-      ...exchangeTokenFor(intent),
+      ...exchangeTokenFor(intent, this.#packedTokens),
     }
     this.#emit(o)
     return o
@@ -354,7 +383,7 @@ export class SimulatorAdapter implements BrokerAdapter {
 
   /**
    * Every order-status transition — WORKING, CANCELLED, REJECTED, and
-   * FILLED — not only fills. An implementer modelling the real XTS adapter on
+   * FILLED — not only fills. An implementer modelling a live adapter on
    * this reference could otherwise reasonably forward only fills, silently
    * dropping broker rejections and cancels from the WAL and starving OCO-pair
    * cancellation of the other leg's status change.

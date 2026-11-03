@@ -1,5 +1,5 @@
 /**
- * One interface, three implementations. Paper and live run IDENTICAL strategy
+ * One interface; on the Delta desk: the simulator (paper) and `@algomaker/dx`'s DxAdapter (live). Paper and live run IDENTICAL strategy
  * code — only the injected adapter differs (spec D2).
  *
  * `capabilities` is enforced at construction rather than by convention. That is
@@ -81,6 +81,14 @@ export interface PlacedOrder {
    * the symbol instead. OMITTED, never 0, when the update carries none.
    */
   readonly exchangeToken?: number
+  /**
+   * WHAT THE FILLS ON THIS ORDER COST, cumulative, in the venue's currency —
+   * the same running total `filledQty` is. The simulator's fee model sets it
+   * (Delta's option fee + GST at the price it filled at); a live adapter sets
+   * it from the venue's reported commission. OMITTED, never 0, when nothing
+   * says what it cost: a missing fee is unknown, a 0 fee is a claim.
+   */
+  readonly fee?: number
 }
 
 export interface BrokerAdapter {

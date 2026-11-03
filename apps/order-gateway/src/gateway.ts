@@ -17,7 +17,7 @@
  */
 
 import { splitIntoTranches, type FreezeLimits } from '@algomaker/instruments'
-import { roundToStep } from '@algomaker/venue'
+import { roundToStep, venueFromEnv } from '@algomaker/venue'
 // The desk's ONE definition of "this op only reduces exposure", shared rather
 // than restated: a second spelling of it here is a second thing to get wrong,
 // and the two would disagree about `roll` on the day one of them changed.
@@ -294,6 +294,9 @@ export function planOrder(input: PlanOrderInputs): PlannedOrder {
     ...(doc.order_type === 'LIMIT' && doc.limitPrice !== undefined
       ? { limitPrice: doc.limitPrice }
       : {}),
+    // The desk op rides the intent so the Delta adapter can send a close
+    // `reduce_only` (spec §8) — an exit that can never open the other way.
+    ...(doc.desk_op === undefined || doc.desk_op === '' ? {} : { meta: { desk_op: doc.desk_op } }),
   }))
 
   return {
@@ -377,7 +380,7 @@ function dialLots(v: number | undefined): number | undefined {
 export function trancheQtyThrough(plan: readonly TranchePlanEntry[], cursor: number): number {
   let qty = 0
   for (let i = 0; i <= cursor && i < plan.length; i++) qty += plan[i]?.qty ?? 0
-  return qty
+  return onStep(qty)
 }
 
 /** What a gated order does next, once its current slice is accounted for. */
@@ -461,7 +464,7 @@ export function decideTrancheStep(input: {
   if (cursor >= plan.length - 1) return { kind: 'settle' }
 
   const due = trancheQtyThrough(plan, cursor)
-  const shortfall = Math.max(0, due - agg.filledQty)
+  const shortfall = Math.max(0, onStep(due - agg.filledQty))
   if (shortfall === 0 && agg.rejected.length === 0) return { kind: 'advance', from: cursor, shortfall: 0 }
 
   // The exit exemption. See rule 3: the remaining tranches of a close are the
@@ -604,6 +607,13 @@ export interface FillRecord {
    * doc, XTS's on the row) can never be compared.
    */
   readonly exchangeToken?: number
+  /**
+   * WHAT THE FILLS SO FAR COST, cumulative like `filledQty`, venue currency
+   * (USD on Delta, fee + GST). From the simulator's fee model on paper, Delta's
+   * reported commission on live. OMITTED when nothing says — a missing fee is
+   * unknown, never 0.
+   */
+  readonly fee?: number
 }
 
 /**
@@ -637,9 +647,30 @@ export function baseClientOrderId(clientOrderId: string): string {
  * 0 for anything that is not a positive number: "unknown", which every reader
  * treats as no evidence rather than as a token.
  */
-export function packedToExchangeToken(packed: unknown): number {
+export function packedToExchangeToken(packed: unknown, tokensPacked: boolean = TOKENS_PACKED): number {
   const n = Number(packed)
-  return Number.isFinite(n) && n > 0 ? Math.floor(n / 256) : 0
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return tokensPacked ? Math.floor(n / 256) : n
+}
+
+/**
+ * IS THE INSTRUMENT MASTER'S TOKEN PACKED? Only on NSE, where it is Zerodha's
+ * `exchange_token * 256 + segment`. On Delta (`DESK_VENUE=dx`) the token IS
+ * the Delta product id — what `DxAdapter` echoes and what the simulator is
+ * built to echo (`packedTokens: false`) — so unpacking it would compare 9001
+ * against 35 and refuse every fill's attribution. Read once, at import.
+ */
+const VENUE = venueFromEnv(process.env)
+const TOKENS_PACKED = VENUE.id !== 'dx'
+
+/**
+ * A sum of fill quantities, cleaned onto the venue's step. Raw floats drift on
+ * Delta's 0.001 grid (0.001 + 0.001 + 0.001 = 0.0030000000000000005), and a
+ * sum that misses `expectedQty` by 5e-19 leaves a filled order working forever.
+ * NSE's step is 1, where this is the identity on whole shares.
+ */
+function onStep(qty: number): number {
+  return roundToStep(qty, VENUE.qtyStep)
 }
 
 /**
@@ -700,6 +731,7 @@ export function toFillRecord(
     ...(update.exchangeToken !== undefined && update.exchangeToken > 0
       ? { exchangeToken: update.exchangeToken }
       : {}),
+    ...(update.fee === undefined ? {} : { fee: update.fee }),
   }
 }
 
@@ -853,10 +885,12 @@ export function aggregateTranches(
     return f === undefined || !isTerminalStatus(f.status)
   })
 
+  filledQty = onStep(filledQty)
+  pricedQty = onStep(pricedQty)
   return {
     filledQty,
     avgPrice: pricedQty === 0 ? null : notional / pricedQty,
-    complete: filledQty >= expectedQty,
+    complete: filledQty >= onStep(expectedQty),
     rejected,
     allTerminal: working.length === 0,
     working,

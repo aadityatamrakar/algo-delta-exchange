@@ -67,6 +67,12 @@ export interface PaperSweepDeps {
   readonly queue: Pick<OrderQueue, 'markTerminal'>
   readonly journal: Pick<OrderJournal, 'record'>
   readonly orders: PaperSweepOrders
+  /**
+   * WHICH DOCUMENTS THE SIMULATOR HOLDS. Default: everything not routed to
+   * Delta (`mode` other than exactly `'live'`). A simulate box, where the one
+   * simulator serves both rails, passes `{}`.
+   */
+  readonly ordersFilter?: Record<string, unknown>
   /** When THIS process came up. The whole verdict turns on it. */
   readonly bootedAt: number
   readonly now: () => number
@@ -107,7 +113,7 @@ export function createPaperSweep(
         if (deps.now() - deps.bootedAt < orphanAfterMs) return IDLE
 
         const placed = await deps.orders
-          .find({ mode: 'paper', state: 'PLACED' })
+          .find({ ...(deps.ordersFilter ?? { mode: { $ne: 'live' } }), state: 'PLACED' })
           .sort({ placedAt: 1 })
           .limit(maxOrders)
           .toArray()

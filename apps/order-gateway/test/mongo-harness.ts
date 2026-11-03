@@ -162,6 +162,14 @@ function matches(doc: Record<string, unknown>, filter: Record<string, unknown>):
     if (v !== null && typeof v === 'object' && '$in' in (v as object)) {
       return ((v as { $in: unknown[] }).$in ?? []).includes(doc[k])
     }
+    // Mongo's `$ne` matches a MISSING field too — which is the whole point of
+    // `{ mode: { $ne: 'live' } }` (no mode is paper on the Delta desk).
+    if (v !== null && typeof v === 'object' && '$ne' in (v as object)) {
+      return doc[k] !== (v as { $ne: unknown }).$ne
+    }
+    if (v !== null && typeof v === 'object' && '$nin' in (v as object)) {
+      return !((v as { $nin: unknown[] }).$nin ?? []).includes(doc[k])
+    }
     // Equality against an ARRAY field is containment, as Mongo reads a
     // multikey index: `{ brokerOrderIds: '987' }` matches a document whose
     // array holds '987'. `getByBrokerOrderId` is that query.

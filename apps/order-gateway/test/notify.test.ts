@@ -136,10 +136,9 @@ describe('the notifier itself', () => {
     const headers = calls[0]?.init.headers as Record<string, string>
     assert.equal(headers['authorization'], 'Bearer tok')
     const body = JSON.parse(String(calls[0]?.init.body)) as { mode: string; event: OrderEvent }
-    // An event that names no rail is LIVE — every row this journal wrote before
-    // the field existed, and the same fail-closed direction every other reader
-    // of it takes.
-    assert.equal(body.mode, 'live')
+    // An event that names no rail is PAPER on the Delta desk — the same
+    // fail-closed direction every other reader of it takes (`orderMode`).
+    assert.equal(body.mode, 'paper')
     assert.equal(body.event.clientOrderId, 'X-1')
   })
 
@@ -168,12 +167,12 @@ describe('the notifier itself', () => {
     notify({ ...EVENT, mode: 'paper' })
     notify({ ...EVENT, detail: { mode: 'paper', note: 'the journal folded it in' } })
     notify({ ...EVENT, mode: 'live' })
-    // FAIL-CLOSED: anything that is not exactly 'paper' is live. A live nudge
-    // shown on the paper tab is a live fill an operator does not see.
-    notify({ ...EVENT, detail: { mode: 'PAPER' } })
+    notify({ ...EVENT, detail: { mode: 'live' } })
+    // FAIL-CLOSED: anything that is not exactly 'live' is paper.
+    notify({ ...EVENT, detail: { mode: 'LIVE' } })
     await new Promise((r) => setTimeout(r, 10))
 
-    assert.deepEqual(sent, ['paper', 'paper', 'live', 'live'])
+    assert.deepEqual(sent, ['paper', 'paper', 'live', 'live', 'paper'])
   })
 
   test('a rejected fetch is swallowed — no throw, no unhandled rejection', async () => {

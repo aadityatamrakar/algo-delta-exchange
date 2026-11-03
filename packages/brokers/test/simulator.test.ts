@@ -517,3 +517,57 @@ test('a touch fill books the position at the touch price', async () => {
   sim.feedTick(42, 103, { bid: 100, ask: 101 })
   assert.deepEqual(await sim.positions(), [{ tradingsymbol: 'NIFTY_CE', netQty: 25, avgPrice: 101 }])
 })
+
+// ------------------------------------------------------------- fees (DX §5.4a)
+
+const DX_INST = { tradingsymbol: 'C-BTC-76600-041126', instrumentToken: 9001, lotSize: 0.001, tickSize: 0.1, exchange: 'DELTA' }
+
+test('a fee model charges every fill at the price it filled at — a sell at the bid', async () => {
+  const seen: { qty: number; price: number; side: string }[] = []
+  const sim = new SimulatorAdapter({
+    feeModel: ({ intent, qty, price }) => {
+      seen.push({ qty, price, side: intent.side })
+      return Number((qty * price * 0.035 * 1.18).toFixed(8))
+    },
+  })
+  const updates: { status: string; fee?: number }[] = []
+  sim.onOrderUpdate((o) => updates.push({ status: o.status, ...(o.fee === undefined ? {} : { fee: o.fee }) }))
+  sim.feedTick(9001, 215, { bid: 212, ask: 218 })
+  await sim.placeOrder(intent({ instrument: DX_INST, side: 'SELL', orderType: 'LIMIT', limitPrice: 210, quantity: 0.1, lots: 100 }))
+  sim.feedTick(9001, 215, { bid: 212, ask: 218 })
+  assert.deepEqual(seen, [{ qty: 0.1, price: 212, side: 'SELL' }], 'charged once, at the bid it took')
+  const filled = updates.find((u) => u.status === 'FILLED')
+  assert.equal(filled?.fee, Number((0.1 * 212 * 0.035 * 1.18).toFixed(8)))
+  // The WORKING ack carries no fee: nothing has traded.
+  assert.equal(updates.find((u) => u.status === 'WORKING')?.fee, undefined)
+})
+
+test('a buy fills at the ask and a MARKET fill is charged too', async () => {
+  const sim = new SimulatorAdapter({ feeModel: ({ price }) => price / 1000 })
+  sim.feedTick(9001, 215, { bid: 212, ask: 218 })
+  await sim.placeOrder(intent({ clientOrderId: 'b1', instrument: DX_INST, side: 'BUY', orderType: 'LIMIT', limitPrice: 220, quantity: 0.05, lots: 50 }))
+  const fills: { avg: number | null; fee?: number }[] = []
+  sim.onOrderUpdate((o) => { if (o.status === 'FILLED') fills.push({ avg: o.avgPrice, ...(o.fee === undefined ? {} : { fee: o.fee }) }) })
+  sim.feedTick(9001, 215, { bid: 212, ask: 218 })
+  assert.deepEqual(fills, [{ avg: 218, fee: 0.218 }])
+  const m = await sim.placeOrder(intent({ clientOrderId: 'm1', instrument: DX_INST, quantity: 0.05, lots: 50 }))
+  assert.equal(m.fee, 0.215)
+})
+
+test('with no fee model a fill carries no fee field at all (NSE unchanged)', async () => {
+  const sim = new SimulatorAdapter()
+  sim.feedTick(42, 120)
+  const o = await sim.placeOrder(intent())
+  assert.equal('fee' in o, false)
+})
+
+test('packedTokens:false echoes the token as is (a Delta product id is not Zerodha-packed)', async () => {
+  const sim = new SimulatorAdapter({ packedTokens: false })
+  sim.feedTick(9001, 215)
+  const o = await sim.placeOrder(intent({ instrument: DX_INST, quantity: 0.05, lots: 50 }))
+  assert.equal(o.exchangeToken, 9001)
+  const nse = new SimulatorAdapter()
+  nse.feedTick(42 * 256 + 3, 100)
+  const n = await nse.placeOrder(intent({ instrument: { ...INST, instrumentToken: 42 * 256 + 3 } }))
+  assert.equal(n.exchangeToken, 42)
+})
