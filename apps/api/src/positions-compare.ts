@@ -94,6 +94,7 @@ import {
  */
 import { POSITIONS_KEY } from '../../runner/src/order-gateway.ts'
 import { STATE_COLLECTION } from '../../runner/src/state-store.ts'
+import { reconcileHaltFor } from './reconcile-halt.ts'
 
 /** This job's own report document. One row, overwritten each pass. */
 export const POSITIONS_COMPARE_COLLECTION = 'desk-positions-compare'
@@ -282,6 +283,12 @@ export interface PositionsComparePorts {
   summarised(day: string): Promise<boolean>
   /** The dashboard push. Absent when nothing is attached. */
   notify?(mode: 'live', event: Record<string, unknown>): void
+  /**
+   * THE RECONCILIATION GUARD (`reconcile-halt.ts`): every stored report, so
+   * a live mismatch that persists halts new live opens and alerts. Absent =
+   * report only. A guard that throws is logged and never fails the pass.
+   */
+  reconciled?(report: PositionsCompareReport): Promise<void>
 }
 
 // -------------------------------------------------------- reading the broker
@@ -849,6 +856,15 @@ class Comparer implements PositionsComparer {
       this.#last = report
       await this.#d.save(report)
       this.#noteInLog(report)
+      if (this.#d.reconciled !== undefined) {
+        try {
+          await this.#d.reconciled(report)
+        } catch (err) {
+          this.#d.log('positions compare: the reconciliation guard failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
       if (this.#rail === 'live') await this.#summarise(report, nowMs)
       return report
     } finally {
@@ -1026,7 +1042,10 @@ export function createPositionsComparer(
 /** The real collections behind `PositionsComparePorts`. */
 export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
   const onDx = (deps.venue ?? API_VENUE).id === 'dx'
+  // Live: a persisting mismatch halts new live opens (`reconcile-halt.ts`).
+  const guard = reconcileHaltFor(deps, 'live')
   return {
+    reconciled: async (report) => await guard.observe(report),
     now: () => deps.now(),
     log: deps.log,
     /** On DX, Delta's `/v2/positions` as the gateway last read it (`gateway-heartbeat.ts`). */
@@ -1112,7 +1131,10 @@ export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
  * runner ledger: dx-runner does not run on this desk. Never journals.
  */
 export function positionsDemoComparePorts(deps: ApiDeps): PositionsComparePorts {
+  // Demo: alerts only, never a halt — the demo keeps testing.
+  const guard = reconcileHaltFor(deps, 'demo')
   return {
+    reconciled: async (report) => await guard.observe(report),
     now: () => deps.now(),
     log: (msg, ctx) => deps.log(msg.replace(/^positions compare/, 'positions compare (demo)'), ctx),
     snapshot: async () =>

@@ -666,6 +666,28 @@ test('a pass computes, stores and serves the report', async () => {
   assert.equal((await comparer.last())?.symbols.length, 1)
 })
 
+test('every stored report is handed to the reconciliation guard; a guard that throws never fails the pass', async () => {
+  const seen: PositionsCompareReport[] = []
+  const h = ports({
+    snapshot: async () => snapshot([brokerRow('NIFTY26AUG24000PE', -50)]),
+    books: async () => [book('DLF-R', [{ symbol: 'NIFTY26AUG24000PE', qty: -75 }])],
+    reconciled: async (r) => {
+      seen.push(r)
+    },
+  })
+  const comparer = createPositionsComparer(h.ports, { intervalMs: INTERVAL })
+  const report = await comparer.run(NOW)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0], report)
+  assert.deepEqual(seen[0]?.divergent, ['NIFTY26AUG24000PE'])
+
+  const bad = ports({ reconciled: async () => Promise.reject(new Error('alert store down')) })
+  const r2 = await createPositionsComparer(bad.ports, { intervalMs: INTERVAL }).run(NOW)
+  assert.notEqual(r2, null)
+  assert.equal(bad.saved.length, 1)
+  assert.ok(bad.logs.some((l) => /reconciliation guard failed/.test(l)))
+})
+
 test('a pass already in flight is dropped, not queued', async () => {
   const held: { release: () => void } = { release: () => {} }
   const gate = new Promise<void>((res) => {

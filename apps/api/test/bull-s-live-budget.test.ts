@@ -23,6 +23,7 @@ import type { ApiDeps } from '../src/routes/kit.ts'
 import { booksRoutes } from '../src/routes/books.ts'
 import { deskRoutes } from '../src/routes/desk.ts'
 import { liveBudgetRefusal } from '../src/bull-s-live.ts'
+import { reconcileHaltFor } from '../src/reconcile-halt.ts'
 
 // ─────────────────────────────────────────────────────────────── pure
 
@@ -149,6 +150,28 @@ itMongo('a dials PATCH on a LIVE BULL-S book cannot take the budget to 0; raisin
   assert.match(String(zero.body['error']), /bs_margin_budget/)
   const more = await call('PATCH', `/v1/desk/books/registry/${TAG}`, { mode: 'live', dials: { bs_margin_budget: 2000 } })
   assert.equal(more.status, 403, JSON.stringify(more.body))
+})
+
+itMongo('the reconcile halt engages a LIVE-scoped kill switch and writes desk-alerts; the operator release clears the scope', async () => {
+  const guard = reconcileHaltFor({ db: handle!.db, store, now: () => NOW, log: () => {} }, 'live')
+  const off = {
+    asOf: NOW, day: '2026-11-03', mode: 'live' as const, comparable: true, reason: '', brokerAsOf: NOW,
+    symbols: [{ symbol: 'C-BTC-80000-041126', broker: -30, books: -50, ledger: 0, agree: false, claimedBy: [TAG] }],
+    divergent: ['C-BTC-80000-041126'], unattributable: [], unmeasurable: [], intervalMs: 300_000,
+  }
+  await guard.observe(off)
+  await guard.observe(off)
+  const halt = await store.loadKillSwitch()
+  assert.equal(halt.enabled, true)
+  assert.equal(halt.scope, 'live')
+  assert.equal(halt.setBy, 'positions-compare')
+  const alerts = await handle!.db.collection('desk-alerts').find({}).toArray()
+  assert.deepEqual(alerts.map((a) => a['severity']).sort(), ['critical', 'warn'])
+  // The operator releases it the usual way; a later manual engage holds every rail.
+  await store.saveKillSwitch({ enabled: false, reason: '', setBy: 'op', setAt: NOW })
+  await store.saveKillSwitch({ enabled: true, reason: 'manual', setBy: 'op', setAt: NOW })
+  assert.equal((await store.loadKillSwitch()).scope, undefined)
+  await handle!.db.collection('desk-alerts').deleteMany({})
 })
 
 itMongo('PAPER is never asked: a paper BULL-S book with no budget starts', async () => {

@@ -792,6 +792,7 @@ export class BridgeService {
       halt,
       actions: req.actions,
       book,
+      mode: req.mode,
     })
 
     // GATE 2b: the desk-wide risk limits, on the live rail and only when the

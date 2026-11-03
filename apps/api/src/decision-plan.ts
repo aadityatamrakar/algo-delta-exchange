@@ -30,7 +30,7 @@ import type { BridgeLeg, DeskAction, DeskMode, DeskSide, Fill, Skip } from './co
 import { deriveUnderlying } from '../../order-gateway/src/gateway.ts'
 import { marketableLimit, type MarketableConfig } from './marketable.ts'
 import { API_VENUE, venueDayRange, type VenueSpec } from './venue.ts'
-import { addsExposure, type FlattenLegPlan, type KillSwitchState } from './safety.ts'
+import { addsExposure, haltApplies, type FlattenLegPlan, type KillSwitchState } from './safety.ts'
 
 /**
  * Derived from the decision id, not random: a replayed decision must produce
@@ -55,10 +55,17 @@ export function splitByKillSwitch(input: {
   readonly halt: KillSwitchState
   readonly actions: readonly DeskAction[]
   readonly book: readonly BridgeLeg[]
+  /**
+   * The rail the decision is on. A LIVE-scoped halt (the reconciliation
+   * halt) holds the live rail only. Absent = the halt holds, whatever its
+   * scope — the conservative answer.
+   */
+  readonly mode?: DeskMode
 }): { readonly permitted: readonly DeskAction[]; readonly haltSkips: readonly Skip[] } {
   const { halt, actions, book } = input
-  const permitted = halt.enabled ? actions.filter((a) => !addsExposure(a, book)) : actions
-  const haltSkips: Skip[] = halt.enabled
+  const holds = input.mode === undefined ? halt.enabled : haltApplies(halt, input.mode)
+  const permitted = holds ? actions.filter((a) => !addsExposure(a, book)) : actions
+  const haltSkips: Skip[] = holds
     ? actions
         .filter((a) => addsExposure(a, book))
         .map((action) => ({

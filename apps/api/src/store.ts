@@ -23,6 +23,7 @@ import type { DeclaredGreeks } from './validate.ts'
 import { isDuplicateKey } from './errors.ts'
 import {
   DEFAULT_KILL_SWITCH,
+  killSwitchUpdate,
   readBrokerLinkDoc,
   type BrokerLinkState,
   type KillSwitchState,
@@ -791,13 +792,15 @@ export class DeskStore {
       reason: doc.reason ?? '',
       setBy: doc.setBy ?? '',
       setAt: doc.setAt ?? 0,
+      // Only the literal word: anything else is the operator's all-rail halt.
+      ...(doc.scope === 'live' ? { scope: 'live' as const } : {}),
     }
   }
 
   async saveKillSwitch(state: KillSwitchState): Promise<void> {
     await this.#db
       .collection(COLLECTIONS.safety)
-      .updateOne({ _id: 'killswitch' }, { $set: { ...state } }, { upsert: true })
+      .updateOne({ _id: 'killswitch' }, killSwitchUpdate(state), { upsert: true })
   }
 
   /** The broker link — wish AND the gateway's ack, one document. See `safety.ts`. */

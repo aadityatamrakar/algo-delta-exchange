@@ -231,7 +231,7 @@ describe('bs_margin_budget', () => {
     expect(m.kind).toBe('rupee')
     expect(m.zeroOff).toBe(true)
     expect(m.help).toBe(
-      'Margin budget in USD for the book: a new straddle whose estimated margin would take the book over it is refused. Stops and closes are never blocked. 0 = off.',
+      'Margin budget in USD for the book: a new straddle whose estimated margin would take the book over it is refused. Stops and closes are never blocked. 0 = off. A LIVE book cannot be armed with 0.',
     )
     expect(readDial('bs_margin_budget', 0)).toBe('off')
   })
