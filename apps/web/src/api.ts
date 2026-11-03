@@ -2350,6 +2350,8 @@ export interface ChainResponse {
   underlying?: string
   expiry?: string
   spot: number | null
+  /** When the index price was last ticked (epoch ms). The chain page's stale banner reads it. */
+  spotAsOf?: number | null
   future: number | null
   /** The instrument master's lot size for this expiry — knowable without a repair search. */
   lotSize?: number | null

@@ -1,0 +1,626 @@
+/**
+ * The option chain page, and nothing else: every selector here starts with
+ * `.chain-`, so no other page can pick up a rule from this file.
+ *
+ * COLOUR IS BUILT FROM THE THEME'S RAMPS with `color-mix`, as comfort.css does
+ * for the P&L pills, so both themes follow without a single hex value:
+ *
+ *   calls        the blue ramp     (group header, ITM wash, OI bars)
+ *   puts         the orange ramp
+ *   spot line    the yellow ramp   (a gold rule with the index price on it)
+ *   IV heat      the purple ramp   (low IV almost clear, the wings deepest)
+ *   bid / ask    green / red text; a changed cell flashes green up, red down
+ *
+ * Unlayered, like responsive.css, so it wins over astryx's `@layer astryx-base`
+ * without `!important`.
+ */
+
+.chain-page {
+  --chain-ce: var(--color-icon-blue);
+  --chain-pe: var(--color-icon-orange);
+  --chain-gold: var(--color-border-yellow);
+  --chain-heat: var(--color-icon-purple);
+  --chain-up: var(--color-icon-green);
+  --chain-down: var(--color-icon-red);
+  --chain-group-h: 30px;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-page p {
+  margin: 0;
+}
+
+/* ------------------------------------------------------------ top line */
+
+.chain-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+.chain-page-title {
+  margin: 0;
+  font-size: var(--text-heading-4-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.chain-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.chain-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-background-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.chain-seg-btn {
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--spacing-1) var(--spacing-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.chain-seg-btn[aria-pressed='true'] {
+  background: var(--color-background-card);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: 0 0 0 1px var(--color-border-emphasized);
+}
+
+.chain-greeks-toggle {
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.chain-greeks-toggle[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--chain-heat) 16%, var(--color-background-card));
+  box-shadow: inset 0 0 0 1px var(--color-border-purple);
+}
+
+/* -------------------------------------------------------- expiry pills */
+
+.chain-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+.chain-pill-group {
+  --chain-group: var(--color-icon-teal);
+  --chain-group-border: var(--color-border-teal);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1-5);
+}
+
+.chain-pill-weekly {
+  --chain-group: var(--color-icon-blue);
+  --chain-group-border: var(--color-border-blue);
+}
+
+.chain-pill-monthly {
+  --chain-group: var(--color-icon-purple);
+  --chain-group-border: var(--color-border-purple);
+}
+
+/* A short coloured tick before each group's name ties it to its pills. */
+.chain-pill-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1-5);
+  margin-inline-end: var(--spacing-0-5);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.chain-pill-label::before {
+  content: '';
+  inline-size: 3px;
+  block-size: 14px;
+  border-radius: var(--radius-full);
+  background: var(--chain-group);
+}
+
+.chain-pill {
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: var(--spacing-1) var(--spacing-3);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-background-card);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  cursor: pointer;
+}
+
+.chain-pill:hover {
+  box-shadow: inset 0 0 0 1px var(--chain-group-border);
+}
+
+.chain-pill[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--chain-group) 20%, var(--color-background-card));
+  box-shadow: inset 0 0 0 1.5px var(--chain-group);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chain-pill:focus-visible,
+.chain-seg-btn:focus-visible,
+.chain-scroll:focus-visible {
+  outline: 2px solid var(--color-border-blue);
+  outline-offset: 2px;
+}
+
+/* -------------------------------------------------------------- header */
+
+.chain-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: var(--spacing-4) var(--spacing-6);
+  padding: var(--spacing-4) var(--spacing-5);
+  border-radius: var(--radius-container);
+  background: var(--color-background-card);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.chain-price-block,
+.chain-expiry-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-0-5);
+  min-width: 0;
+}
+
+.chain-expiry-block {
+  padding-inline-start: var(--spacing-6);
+  border-inline-start: 1px solid var(--color-border);
+}
+
+.chain-price-label,
+.chain-expiry-name,
+.chain-stat dt {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.chain-price-line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+.chain-price {
+  font-size: var(--text-display-3-size);
+  line-height: 1.1;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+}
+
+.chain-change {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  padding: 2px var(--spacing-2);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  background: var(--color-background-muted);
+  white-space: nowrap;
+}
+
+.chain-change-up {
+  color: var(--color-text-green);
+  background: color-mix(in srgb, var(--chain-up) 16%, var(--color-background-card));
+}
+
+.chain-change-down {
+  color: var(--color-text-red);
+  background: color-mix(in srgb, var(--chain-down) 16%, var(--color-background-card));
+}
+
+.chain-asof,
+.chain-expiry-sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.chain-countdown {
+  font-size: var(--text-heading-3-size);
+  line-height: 1.15;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.chain-countdown-near {
+  color: var(--color-text-orange);
+}
+
+.chain-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3) var(--spacing-6);
+  margin: 0;
+  margin-inline-start: auto;
+  align-self: center;
+}
+
+.chain-stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-0-5);
+  min-width: 84px;
+}
+
+.chain-stat dd {
+  margin: 0;
+  font-size: var(--text-heading-5-size);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+/* ---------------------------------------------------------------- table */
+
+/**
+ * The scroller holds both axes, so the header stays put while the strikes
+ * scroll and a narrow window scrolls the table sideways without moving the
+ * page. Its height leaves the header strip and pills on screen at 1440x900.
+ */
+.chain-scroll {
+  overflow: auto;
+  max-block-size: max(320px, calc(100vh - 300px));
+  border-radius: var(--radius-container);
+  background: var(--color-background-card);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  overscroll-behavior: contain;
+}
+
+.chain-table {
+  inline-size: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.chain-table th,
+.chain-table td {
+  padding: 5px var(--spacing-2-5, 10px);
+  text-align: end;
+  white-space: nowrap;
+}
+
+.chain-table thead th {
+  position: sticky;
+  z-index: 2;
+  background: var(--color-background-surface);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.chain-head-group th {
+  top: 0;
+  block-size: var(--chain-group-h);
+  box-sizing: border-box;
+  padding-block: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.chain-head-cols th {
+  top: var(--chain-group-h);
+  font-size: var(--font-size-xs);
+  border-block-end: 1px solid var(--color-border-emphasized);
+}
+
+.chain-group-ce {
+  text-align: start;
+  color: var(--color-text-blue);
+  box-shadow: inset 0 3px 0 var(--chain-ce);
+}
+
+.chain-group-pe {
+  text-align: end;
+  color: var(--color-text-orange);
+  box-shadow: inset 0 3px 0 var(--chain-pe);
+}
+
+.chain-table thead .chain-group-ce {
+  text-align: start;
+}
+
+.chain-table thead .chain-strike-head {
+  top: 0;
+  z-index: 3;
+  text-align: center;
+  color: var(--color-text-primary);
+  border-block-end: 1px solid var(--color-border-emphasized);
+}
+
+.chain-row td,
+.chain-row th {
+  border-block-end: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+
+.chain-row:hover td,
+.chain-row:hover th {
+  background-color: var(--color-tint-hover);
+}
+
+/* The strike column: the spine the two sides hang off. */
+.chain-strike {
+  text-align: center;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  background: var(--color-background-muted);
+  border-inline: 1px solid var(--color-border);
+  min-inline-size: 88px;
+}
+
+.chain-table .chain-strike {
+  text-align: center;
+}
+
+.chain-atm .chain-strike {
+  background: color-mix(in srgb, var(--chain-gold) 38%, var(--color-background-card));
+  box-shadow: inset 0 0 0 1px var(--chain-gold);
+}
+
+/* In the money: calls below the index, puts above. A wash of the side's colour. */
+.chain-ce.chain-itm {
+  background-color: color-mix(in srgb, var(--chain-ce) 12%, transparent);
+}
+
+.chain-pe.chain-itm {
+  background-color: color-mix(in srgb, var(--chain-pe) 11%, transparent);
+}
+
+/* Far from the index: still readable, no longer competing. */
+.chain-far td {
+  opacity: 0.45;
+}
+
+.chain-far .chain-strike {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+/* Figures. */
+.chain-c-bid .chain-v { color: var(--color-icon-green); }
+.chain-c-ask .chain-v { color: var(--color-icon-red); }
+.chain-c-mark .chain-v {
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+}
+.chain-c-delta .chain-v,
+.chain-c-gamma .chain-v,
+.chain-c-theta .chain-v,
+.chain-c-vega .chain-v {
+  color: var(--color-text-secondary);
+}
+
+.chain-td.chain-c-iv {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--chain-heat) calc(var(--heat, 0) * 2.4% + 3%), transparent),
+    color-mix(in srgb, var(--chain-heat) calc(var(--heat, 0) * 2.4% + 3%), transparent)
+  );
+}
+
+.chain-td.chain-c-iv:not([data-heat]) {
+  background-image: none;
+}
+
+/* A missing figure is a quiet dot, not a wall of dashes. */
+.chain-v.chain-missing,
+.chain-stat dd.chain-missing {
+  color: var(--color-text-disabled);
+  font-weight: var(--font-weight-normal);
+}
+
+/* OI bars: calls grow left from the cell's inner edge, puts grow right. */
+.chain-c-oi {
+  position: relative;
+  min-inline-size: 92px;
+}
+
+.chain-oi-bar {
+  position: absolute;
+  inset-block: 4px;
+  border-radius: var(--radius-inner, 3px);
+  pointer-events: none;
+}
+
+.chain-ce .chain-oi-bar {
+  inset-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+  background: color-mix(in srgb, var(--chain-ce) 26%, transparent);
+}
+
+.chain-pe .chain-oi-bar {
+  inset-inline-start: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  background: color-mix(in srgb, var(--chain-pe) 26%, transparent);
+}
+
+.chain-c-oi .chain-v {
+  position: relative;
+}
+
+/* The flash: background only, so a moving quote never nudges its neighbours. */
+.chain-v {
+  display: inline-block;
+  padding-inline: 3px;
+  margin-inline: -3px;
+  border-radius: 3px;
+}
+
+.chain-up {
+  animation: chain-flash-up 900ms ease-out;
+}
+
+.chain-down {
+  animation: chain-flash-down 900ms ease-out;
+}
+
+@keyframes chain-flash-up {
+  from { background-color: color-mix(in srgb, var(--chain-up) 30%, transparent); }
+  to { background-color: transparent; }
+}
+
+@keyframes chain-flash-down {
+  from { background-color: color-mix(in srgb, var(--chain-down) 30%, transparent); }
+  to { background-color: transparent; }
+}
+
+/* ------------------------------------------------------------ spot line */
+
+.chain-spot td {
+  position: relative;
+  padding: 0;
+  block-size: 22px;
+  text-align: center;
+}
+
+.chain-spot-rule {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 50%;
+  block-size: 2px;
+  transform: translateY(-50%);
+  background: var(--chain-gold);
+}
+
+/* Sticky to both edges, so on a narrow screen scrolled sideways the price
+   stays in view instead of sitting in the middle of a table it cannot see. */
+.chain-spot-pill {
+  position: sticky;
+  inset-inline: var(--spacing-3);
+  z-index: 1;
+  display: inline-block;
+  padding: 1px var(--spacing-3);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-yellow);
+  background: color-mix(in srgb, var(--chain-gold) 45%, var(--color-background-card));
+  box-shadow: 0 0 0 1.5px var(--chain-gold);
+}
+
+/* --------------------------------------------------------------- states */
+
+.chain-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  align-items: center;
+  padding: var(--spacing-10) var(--spacing-4);
+  border-radius: var(--radius-container);
+  background: var(--color-background-card);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  text-align: center;
+}
+
+.chain-empty-title {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.chain-empty-sub {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.chain-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1-5);
+}
+
+.chain-skel-header {
+  display: flex;
+  gap: var(--spacing-4);
+  margin-block-end: var(--spacing-3);
+}
+
+.chain-skel {
+  display: block;
+  block-size: 18px;
+  flex: 1;
+  border-radius: var(--radius-inner, 4px);
+  background: linear-gradient(
+    90deg,
+    var(--color-skeleton) 0%,
+    color-mix(in srgb, var(--color-skeleton) 45%, var(--color-background-card)) 50%,
+    var(--color-skeleton) 100%
+  );
+  background-size: 200% 100%;
+  animation: chain-shimmer 1.4s linear infinite;
+}
+
+.chain-skel-price { block-size: 64px; flex: 0 0 260px; }
+.chain-skel-block { block-size: 64px; flex: 0 0 180px; }
+
+.chain-skel-row {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.chain-skel-strike {
+  flex: 0 0 88px;
+}
+
+@keyframes chain-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chain-up,
+  .chain-down,
+  .chain-skel {
+    animation: none;
+  }
+}
+
+/* --------------------------------------------------------------- narrow */
+
+@media (max-width: 719px) {
+  .chain-header {
+    padding: var(--spacing-3);
+  }
+
+  .chain-expiry-block {
+    padding-inline-start: 0;
+    border-inline-start: 0;
+  }
+
+  .chain-stats {
+    margin-inline-start: 0;
+  }
+
+  .chain-skel-price,
+  .chain-skel-block {
+    flex: 1;
+  }
+}
