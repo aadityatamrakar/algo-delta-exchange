@@ -103,6 +103,10 @@ export interface DxOrderRequest {
   readonly reduce_only?: boolean
   /** ≤ 32 chars, unique among OPEN orders. */
   readonly client_order_id?: string
+  /** A stop order: rests `pending` until `stop_price` is reached by `stop_trigger_method`. */
+  readonly stop_order_type?: 'stop_loss_order' | 'take_profit_order'
+  readonly stop_price?: string
+  readonly stop_trigger_method?: 'mark_price' | 'last_traded_price' | 'spot_price'
 }
 
 export interface DxOrder {
@@ -121,6 +125,9 @@ export interface DxOrder {
   readonly reduce_only?: boolean
   readonly cancellation_reason?: string | null
   readonly paid_commission?: string | null
+  readonly stop_order_type?: string | null
+  readonly stop_price?: string | null
+  readonly stop_trigger_method?: string | null
 }
 
 export interface DxFill {
