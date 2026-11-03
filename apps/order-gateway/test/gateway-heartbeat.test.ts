@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   createDeltaPositionsSnapshot,
   createGatewayHeartbeat,
+  DELTA_DEMO_SNAPSHOT_ID,
   DELTA_SNAPSHOT_ID,
   GATEWAY_HEARTBEAT_ID,
   hostOf,
@@ -112,4 +113,39 @@ test('hostOf names the host, and passes through what does not parse', () => {
   assert.equal(hostOf('https://cdn-ind.testnet.deltaex.org'), 'cdn-ind.testnet.deltaex.org')
   assert.equal(hostOf(null), null)
   assert.equal(hostOf('not a url'), 'not a url')
+})
+
+test('the demo account is written under its own id, and the heartbeat says whether the demo rail is up', async () => {
+  const col = sink()
+  const snap = createDeltaPositionsSnapshot({
+    positions: async () => {
+      throw new Error('testnet down')
+    },
+    collection: col,
+    now: () => 9,
+    host: 'cdn-ind.testnet.deltaex.org',
+    log: () => {},
+    id: DELTA_DEMO_SNAPSHOT_ID,
+    broker: 'delta-demo',
+  })
+  await snap.take()
+  assert.deepEqual(col.writes[0]?.filter, { _id: 'delta-demo' })
+  assert.equal(col.writes[0]?.set['broker'], 'delta-demo')
+  assert.match(String(col.writes[0]?.set['error']), /^Delta testnet \/v2\/positions failed: testnet down/)
+
+  const hbCol = sink()
+  const hb = createGatewayHeartbeat({
+    collection: hbCol,
+    events: events([]),
+    now: () => 1,
+    startedAt: 1,
+    pid: 1,
+    broker: 'simulate',
+    host: null,
+    deltaHeartbeatOk: () => null,
+    demoReady: () => true,
+    log: () => {},
+  })
+  await hb.beat()
+  assert.equal(hbCol.writes[0]?.set['demoReady'], true)
 })

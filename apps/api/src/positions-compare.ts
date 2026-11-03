@@ -78,6 +78,7 @@ import { istMinutesOfDay } from './rollup.ts'
 import { COLLECTIONS } from './store.ts'
 import { API_VENUE } from './venue.ts'
 import {
+  DELTA_DEMO_SNAPSHOT_ID,
   DELTA_SNAPSHOT_ID,
   GATEWAY_HEARTBEAT_COLLECTION,
   GATEWAY_HEARTBEAT_ID,
@@ -98,6 +99,11 @@ import { STATE_COLLECTION } from '../../runner/src/state-store.ts'
 export const POSITIONS_COMPARE_COLLECTION = 'desk-positions-compare'
 /** `_id` of that row. Named for the rail, because only one rail is compared. */
 export const POSITIONS_COMPARE_ID = 'live'
+/** `_id` of the DEMO rail's report (DX): paper books on Delta's testnet vs the testnet account. */
+export const POSITIONS_COMPARE_DEMO_ID = 'demo'
+
+/** Which account a comparison is against: production (`live`) or Delta's testnet (`demo`). */
+export type CompareRail = 'live' | 'demo'
 
 /** The gateway's broker snapshot — see `routes/system.ts` for why it is a literal. */
 const BROKER_SNAPSHOT_COLLECTION = 'desk-broker-snapshot'
@@ -181,8 +187,14 @@ export interface PositionsCompareReport {
   readonly asOf: number
   /** The IST day this pass ran on — what the once-a-day summary is keyed by. */
   readonly day: string
-  /** Always `live`. Stated in the document so a reader never has to assume it. */
-  readonly mode: 'live'
+  /**
+   * The desk rail compared: `live`, or `paper` for the DEMO comparison (paper
+   * books on `dx_paper_rail: 'demo'`, against Delta's testnet account). Stated
+   * in the document so a reader never has to assume it.
+   */
+  readonly mode: 'live' | 'paper'
+  /** Present, as `demo`, only on the demo comparison. */
+  readonly rail?: 'demo'
   /**
    * Whether a comparison was actually performed. FALSE MEANS NO VERDICT — every
    * `broker` is null, `divergent` is empty, and `reason` says why.
@@ -470,6 +482,8 @@ export interface CompareInput {
   readonly symbolForToken: (exchangeToken: number) => string | null
   /** The `reason` when `snapshot` is null. Absent: the generic sentence. */
   readonly noSnapshotReason?: string
+  /** Default `live`. */
+  readonly rail?: CompareRail
 }
 
 /** Paper on the simulator: there is no exchange position to compare with. */
@@ -647,7 +661,8 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
   return {
     asOf: now,
     day: istDate(now),
-    mode: 'live',
+    mode: input.rail === 'demo' ? 'paper' : 'live',
+    ...(input.rail === 'demo' ? { rail: 'demo' as const } : {}),
     comparable,
     reason,
     brokerAsOf,
@@ -691,6 +706,8 @@ export interface CompareCard {
 export function compareCardSummary(
   doc: Record<string, unknown> | null,
   nowMs: number,
+  /** Who the desk is compared with, in the card's words. Default "the broker". */
+  against = 'the broker',
 ): CompareCard {
   if (doc === null) {
     return {
@@ -719,7 +736,7 @@ export function compareCardSummary(
   }
   parts.push(
     report.comparable === true
-      ? `${symbols.length} desk contracts compared to the broker`
+      ? `${symbols.length} desk contracts compared to ${against}`
       : `${symbols.length} desk contracts — NOT compared: ${String(report.reason ?? '')}`,
   )
   if (unattributable.length > 0) {
@@ -754,6 +771,11 @@ export function compareCardSummary(
 export interface PositionsCompareOptions {
   readonly intervalMs?: number
   readonly maxBrokerAgeMs?: number
+  /**
+   * Default `live`. `demo` compares against Delta's testnet and never journals
+   * the nightly DIVERGENT row — a rehearsal account is not the order feed's.
+   */
+  readonly rail?: CompareRail
 }
 
 export interface PositionsComparer {
@@ -772,6 +794,7 @@ class Comparer implements PositionsComparer {
   readonly #d: PositionsComparePorts
   readonly #intervalMs: number
   readonly #maxBrokerAgeMs: number
+  readonly #rail: CompareRail
   #running = false
   #last: PositionsCompareReport | null = null
   /** IST day the once-a-day summary has already been published for. */
@@ -785,6 +808,7 @@ class Comparer implements PositionsComparer {
     this.#d = ports
     this.#intervalMs = opts.intervalMs ?? DEFAULT_COMPARE_MS
     this.#maxBrokerAgeMs = opts.maxBrokerAgeMs ?? DEFAULT_MAX_BROKER_AGE_MS
+    this.#rail = opts.rail ?? 'live'
   }
 
   /**
@@ -820,11 +844,12 @@ class Comparer implements PositionsComparer {
         maxBrokerAgeMs: this.#maxBrokerAgeMs,
         symbolForToken: (token) => this.#d.symbolForToken(token),
         ...(noSnapshotReason === undefined ? {} : { noSnapshotReason }),
+        ...(this.#rail === 'demo' ? { rail: 'demo' as const } : {}),
       })
       this.#last = report
       await this.#d.save(report)
       this.#noteInLog(report)
-      await this.#summarise(report, nowMs)
+      if (this.#rail === 'live') await this.#summarise(report, nowMs)
       return report
     } finally {
       this.#running = false
@@ -1080,6 +1105,64 @@ export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
 }
 
 /**
+ * THE DEMO RAIL'S PORTS (DX): paper books whose `dx_paper_rail` is `demo`,
+ * against the testnet account's `/v2/positions` the gateway writes as
+ * `desk-broker-snapshot` `_id: 'delta-demo'`. Testnet product symbols are the
+ * desk's tradingsymbols, so the join is by name (`symbolSpace: 'desk'`). No
+ * runner ledger: dx-runner does not run on this desk. Never journals.
+ */
+export function positionsDemoComparePorts(deps: ApiDeps): PositionsComparePorts {
+  return {
+    now: () => deps.now(),
+    log: (msg, ctx) => deps.log(msg.replace(/^positions compare/, 'positions compare (demo)'), ctx),
+    snapshot: async () =>
+      (await deps.db
+        .collection(BROKER_SNAPSHOT_COLLECTION)
+        .findOne({ _id: DELTA_DEMO_SNAPSHOT_ID })) as Record<string, unknown> | null,
+    noSnapshotReason: async () => {
+      const hb = (await deps.db
+        .collection(GATEWAY_HEARTBEAT_COLLECTION)
+        .findOne({ _id: GATEWAY_HEARTBEAT_ID })) as Record<string, unknown> | null
+      return dxDemoNoSnapshotReason(hb)
+    },
+    books: async () => {
+      const demoTags = new Set(
+        (await deps.store.listBooks('paper')).filter((r) => r.dx_paper_rail === 'demo').map((r) => r.tag),
+      )
+      if (demoTags.size === 0) return []
+      const docs = await deps.store.allBooks('paper')
+      return docs.filter((d) => demoTags.has(d.tag)).map((d) => ({ tag: d.tag, legs: d.legs }))
+    },
+    ledgers: async () => [],
+    symbolForToken: () => null,
+    save: async (report) => {
+      await deps.db
+        .collection(POSITIONS_COMPARE_COLLECTION)
+        .updateOne({ _id: POSITIONS_COMPARE_DEMO_ID }, { $set: { ...report } }, { upsert: true })
+    },
+    load: async () => {
+      const doc = (await deps.db
+        .collection(POSITIONS_COMPARE_COLLECTION)
+        .findOne({ _id: POSITIONS_COMPARE_DEMO_ID })) as Record<string, unknown> | null
+      return doc === null ? null : (doc as unknown as PositionsCompareReport)
+    },
+    journal: async () => {},
+    summarised: async () => true,
+  }
+}
+
+/** Why there is no testnet positions snapshot, from the gateway's heartbeat. Exported for the tests. */
+export function dxDemoNoSnapshotReason(heartbeat: Record<string, unknown> | null): string {
+  if (heartbeat === null) {
+    return 'no gateway heartbeat, so no Delta testnet positions snapshot — the order gateway may not be running'
+  }
+  if (heartbeat['demoReady'] === true) {
+    return 'no Delta testnet positions snapshot yet — the gateway writes one every 30s while the demo rail is up'
+  }
+  return 'no delta-demo key configured (or the demo rail could not start) — demo books have no testnet account to compare against'
+}
+
+/**
  * Why a DX desk has no Delta positions snapshot, from the gateway's heartbeat.
  * Exported for the tests.
  */
@@ -1125,13 +1208,16 @@ export function startPositionsCompare(
   deps: ApiDeps,
   opts: PositionsCompareOptions = {},
 ): { comparer: PositionsComparer; stop: () => void } {
-  const comparer = createPositionsComparer(positionsComparePorts(deps), opts)
+  const comparer = createPositionsComparer(
+    opts.rail === 'demo' ? positionsDemoComparePorts(deps) : positionsComparePorts(deps),
+    opts,
+  )
   const intervalMs = opts.intervalMs ?? DEFAULT_COMPARE_MS
   let stopped = false
   const timer = setInterval(() => {
     if (stopped) return
     void comparer.run(deps.now()).catch((err: unknown) => {
-      deps.log('positions compare pass failed', {
+      deps.log(opts.rail === 'demo' ? 'positions compare (demo) pass failed' : 'positions compare pass failed', {
         error: err instanceof Error ? err.message : String(err),
       })
     })

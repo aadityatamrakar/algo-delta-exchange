@@ -743,7 +743,10 @@ function dxHarness(over: { fixtures?: Fixtures; books?: Partial<Record<'paper' |
       'desk-supervisor-lease': [{ key: 'desk-supervisor', owner: 'ip-10-0-0-1:4242', acquiredAt: NOW - 3_600_000, expiresAt: NOW + 25_000 }],
       'desk-gateway-orders': [],
       'desk-safety': [],
-      'desk-positions-compare': [comparison({ symbols: [] })],
+      'desk-positions-compare': [
+        comparison({ symbols: [] }),
+        comparison({ _id: 'demo', mode: 'paper', rail: 'demo', symbols: [{ symbol: 'C-BTC-80000-041126', broker: -0.05, books: -0.05, ledger: 0, agree: true, claimedBy: ['BTC-A'] }] }),
+      ],
     },
     books: over.books ?? {
       paper: [book({ tag: 'BTC-A' }), book({ tag: 'BTC-B', actual: 'stopped' })],
@@ -770,8 +773,11 @@ test('DX: one supervisor, no runner, the gateway from its heartbeat — all ok',
   const r = await report(dxHarness())
   assert.deepEqual(
     r.components.map((c) => c.id),
-    ['dx-api', 'dx-marketdata', 'dx-gateway', 'dx-supervisor', 'positions-truth', 'mongo'],
+    ['dx-api', 'dx-marketdata', 'dx-gateway', 'dx-supervisor', 'positions-truth', 'positions-truth-demo', 'mongo'],
   )
+  const demo = find(r, 'positions-truth-demo')
+  assert.equal(demo.name, 'Positions truth — demo')
+  assert.match(demo.detail, /1 desk contracts compared to the Delta testnet account/)
   assert.deepEqual(r.components.filter((c) => c.state !== 'ok').map((c) => `${c.id}: ${c.detail}`), [])
   for (const c of r.components) assert.doesNotMatch(c.detail, /XTS|Zerodha/, c.id)
 
@@ -835,4 +841,16 @@ test('DX: an expired lease is stale and says no supervisor is steering; no lease
 test('DX: no BTC index yet is stated on the market-data card', async () => {
   const md = find(await report(dxHarness({ index: null })), 'dx-marketdata')
   assert.match(md.detail, /BTC index NOT RECEIVED/)
+})
+
+test('DX: the demo comparison is its own card, and a divergence there needs attention', async () => {
+  const diverged = find(
+    await report(dxHarness({ fixtures: { 'desk-positions-compare': [comparison({ _id: 'demo', mode: 'paper', rail: 'demo', divergent: ['P-BTC-70000-041126'] })] } })),
+    'positions-truth-demo',
+  )
+  assert.equal(diverged.state, 'attention')
+  const none = find(await report(dxHarness({ fixtures: {} })), 'positions-truth-demo')
+  assert.equal(none.state, 'unknown')
+  // NSE has no demo rail and no demo card.
+  assert.equal((await report(healthy())).components.some((c) => c.id === 'positions-truth-demo'), false)
 })

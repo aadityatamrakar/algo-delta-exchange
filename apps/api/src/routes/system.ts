@@ -65,6 +65,7 @@ import {
   compareCardSummary,
   DEFAULT_COMPARE_MS,
   POSITIONS_COMPARE_COLLECTION,
+  POSITIONS_COMPARE_DEMO_ID,
   POSITIONS_COMPARE_ID,
 } from '../positions-compare.ts'
 import { RUNTIME_COLLECTION } from '../../../runner/src/runtime.ts'
@@ -842,15 +843,19 @@ async function supervisorLease(
  * unreadable broker view stays `ok`-by-age with its reason in the detail line,
  * rather than borrowing an alarm it has no evidence for.
  */
-async function positionsTruth(deps: ApiDeps, nowMs: number): Promise<SystemComponent> {
+async function positionsTruth(
+  deps: ApiDeps,
+  nowMs: number,
+  rail: 'live' | 'demo' = 'live',
+): Promise<SystemComponent> {
   const doc = (await deps.db
     .collection(POSITIONS_COMPARE_COLLECTION)
-    .findOne({ _id: POSITIONS_COMPARE_ID })) as Record<string, unknown> | null
-  const card = compareCardSummary(doc, nowMs)
+    .findOne({ _id: rail === 'demo' ? POSITIONS_COMPARE_DEMO_ID : POSITIONS_COMPARE_ID })) as Record<string, unknown> | null
+  const card = compareCardSummary(doc, nowMs, rail === 'demo' ? 'the Delta testnet account' : 'the broker')
   return component(
     {
-      id: 'positions-truth',
-      name: 'Positions truth',
+      id: rail === 'demo' ? 'positions-truth-demo' : 'positions-truth',
+      name: rail === 'demo' ? 'Positions truth — demo' : 'Positions truth',
       detail: card.detail,
       lastSeenMs: card.lastSeenMs,
       expectedEveryMs: card.expectedEveryMs,
@@ -973,6 +978,11 @@ export async function buildSystemReport(
   }
   await collect('positions-truth', 'Positions truth', DEFAULT_COMPARE_MS, () =>
     positionsTruth(deps, nowMs))
+  if (onDx) {
+    // Paper books on the demo rail vs Delta's testnet account (`positionsDemoComparePorts`).
+    await collect('positions-truth-demo', 'Positions truth — demo', DEFAULT_COMPARE_MS, () =>
+      positionsTruth(deps, nowMs, 'demo'))
+  }
   await collect('mongo', 'MongoDB', null, () => mongo(deps, nowMs))
 
   return { generatedAt: nowMs, components }
