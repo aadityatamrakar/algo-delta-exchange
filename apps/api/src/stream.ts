@@ -337,7 +337,11 @@ export function pnlUpdateFor(prev: PnlRow | undefined, next: PnlRow): PnlUpdate 
     prev.label !== next.label ||
     prev.realised !== next.realised ||
     prev.openLegs !== next.openLegs ||
-    prev.legs.length !== next.legs.length
+    prev.legs.length !== next.legs.length ||
+    // The price source and its fallback list are rare changes and carry the
+    // "incomplete" warning — a full row, never a partial one that drops them.
+    prev.marksSource !== next.marksSource ||
+    !sameStrings(prev.marksFallback ?? [], next.marksFallback ?? [])
   ) {
     return { kind: 'full' }
   }

@@ -26,6 +26,7 @@ import { buildPositions, type Costs, type Marks } from '@algomaker/pnl'
 import type { DeskMode } from './contract.ts'
 import type { ExitQuote, ExitSide, MarkBasis, QuoteCache } from './marks.ts'
 import type { ApiDeps } from './routes/kit.ts'
+import { marksSourceOf, type MarksSource } from './demo-marks.ts'
 import { API_VENUE, isNse, minutesIntoVenueDay, previousVenueDay, venueDayRange, venueSessionOpen, type VenueSpec } from './venue.ts'
 import { PnlStore, pnlKey, splitPnlKey, type FillLoad, type PnlSnapshot } from './pnlstore.ts'
 import {
@@ -168,6 +169,18 @@ export interface PnlRow {
   readonly quotes?: Readonly<Record<string, LegQuote>>
   readonly unpriced: readonly string[]
   readonly complete: boolean
+  /**
+   * Which feed priced the open legs — `delta-demo` (Delta testnet) for a
+   * demo-rail paper book, `delta` otherwise. Absent where the desk has no
+   * venue routing wired (tests, NSE).
+   */
+  readonly marksSource?: MarksSource
+  /**
+   * Demo-marked legs priced at PRODUCTION because no testnet quote has arrived
+   * yet. Non-empty means the figure is not the demo account's: INCOMPLETE,
+   * and shown as such. Always empty on a `delta` row.
+   */
+  readonly marksFallback?: readonly string[]
 }
 
 export interface PnlSummary {
@@ -293,6 +306,75 @@ export function quoteResolverFor(deps: ApiDeps, opts: PnlOptions): QuoteResolver
   return opts.quotes ?? defaultQuoteResolver(deps)
 }
 
+/** The resolvers for ONE book, and the price-source facts its row carries. */
+export interface VenueResolvers {
+  readonly marksOf: MarkResolver
+  readonly quotesOf: QuoteResolver
+  /** Read AFTER `marksOf`/`quotesOf` ran: which feed, and which legs fell back. */
+  readonly marksInfo?: () => { readonly source: MarksSource; readonly fallback: readonly string[] }
+}
+
+/**
+ * The marks for one book, from the feed its position lives on.
+ *
+ * A PRODUCTION book (sim rail, live, or any tag `marksVenue` does not know)
+ * gets exactly `markResolverFor`/`quoteResolverFor`. A DEMO book reads
+ * `deps.demoMarks` first, per leg, on the same exit-side rule; a leg the
+ * testnet has not quoted yet is priced at production and NAMED in
+ * `marksFallback` — never silently. Mark and pair come off the same read, so
+ * the two shown together always describe one book.
+ *
+ * Injected resolvers (`opts.marks`) win, as everywhere: a test that supplies
+ * its own marks gets them.
+ */
+export function venueResolversFor(deps: ApiDeps, opts: PnlOptions, tag: string, mode: DeskMode): VenueResolvers {
+  const venue = deps.marksVenue?.(tag, mode)
+  const base = { marksOf: resolverOf(deps, opts), quotesOf: quoteResolverFor(deps, opts) }
+  if (venue === undefined) return base
+  const demo = deps.demoMarks
+  const prod = deps.marks
+  if (venue !== 'demo' || demo === undefined || prod === undefined || opts.marks !== undefined) {
+    return { ...base, marksInfo: () => ({ source: 'delta', fallback: [] }) }
+  }
+  const readDemo = exitReadFor(deps, demo)
+  const readProd = exitReadFor(deps, prod)
+  const fallback = new Set<string>()
+  const pick = (symbols: readonly string[], exits: ReadonlyMap<string, ExitSide>): Map<string, ExitQuote> => {
+    fallback.clear()
+    const out = new Map<string, ExitQuote>()
+    const master = deps.master.current()
+    for (const symbol of symbols) {
+      const token = master.resolveSymbol(symbol)?.instrumentToken
+      const exit = exits.get(symbol)
+      if (token === undefined || exit === undefined) continue
+      const d = readDemo(token, exit)
+      if (d !== null) {
+        out.set(symbol, d)
+        continue
+      }
+      const p = readProd(token, exit)
+      if (p !== null) {
+        out.set(symbol, p)
+        fallback.add(symbol)
+      }
+    }
+    return out
+  }
+  return {
+    marksOf: (symbols, exits) => {
+      const out: Record<string, number> = {}
+      for (const [s, q] of pick(symbols, exits)) if (Number.isFinite(q.price) && q.price >= 0) out[s] = q.price
+      return out
+    },
+    quotesOf: (symbols, exits) => {
+      const out: Record<string, LegQuote> = {}
+      for (const [s, q] of pick(symbols, exits)) out[s] = { bid: q.bid, ask: q.ask, basis: q.basis, asOf: q.asOf }
+      return out
+    },
+    marksInfo: () => ({ source: marksSourceOf('demo'), fallback: [...fallback].sort() }),
+  }
+}
+
 /**
  * Per open symbol, the ORDER side that would close its net position over this
  * window — the exact position `markOpenLegs` is about to value.
@@ -377,9 +459,6 @@ export async function pnlFromFills(
 ): Promise<PnlSummary> {
   const from = boundary
   const bad = malformedByTag(load.malformed)
-  const marksOf = resolverOf(deps, opts)
-  const quotesOf = quoteResolverFor(deps, opts)
-
   const registry = await deps.store.listStrategies()
   const labels = new Map(registry.map((r) => [r.tag, r.label === '' ? r.tag : r.label]))
   const tags = new Set<string>(registry.map((r) => r.tag))
@@ -404,8 +483,7 @@ export async function pnlFromFills(
         mode,
         fills,
         boundary: from,
-        marksOf,
-        quotesOf,
+        ...venueResolversFor(deps, opts, tag, mode),
         malformed: bad.get(tag) ?? [],
         ...withCosts(opts.costs?.(tag, mode)),
       }),
@@ -454,12 +532,15 @@ export function pnlRowFor(input: {
   quotesOf?: QuoteResolver
   malformed: readonly string[]
   costs?: Costs
+  /** From `venueResolversFor`; read after the resolvers ran. */
+  marksInfo?: () => { readonly source: MarksSource; readonly fallback: readonly string[] }
 }): PnlRow {
   const window = splitFills(input.fills, input.boundary)
   const symbols = symbolsIn(window)
   const exits = exitSidesOf(window)
   const marks = input.marksOf(symbols, exits)
   const quotes = input.quotesOf?.(symbols, exits)
+  const info = input.marksInfo?.()
   const pnl = computeWindowPnl(window, marks, input.costs)
   /**
    * A fill we could not read counts as UNPRICED, not as absent.
@@ -485,6 +566,7 @@ export function pnlRowFor(input: {
     ...(quotes === undefined ? {} : { quotes }),
     unpriced,
     complete,
+    ...(info === undefined ? {} : { marksSource: info.source, marksFallback: info.fallback }),
   }
 }
 
@@ -592,7 +674,7 @@ export async function rollupDate(
     ...(opts.fillLimit === undefined ? {} : { limit: opts.fillLimit }),
   })
   const series = await store.seriesByKey(date)
-  const marksOf = date === venue.dayKey(nowMs) ? resolverOf(deps, opts) : () => ({})
+  const today = date === venue.dayKey(nowMs)
 
   const keys = new Set<string>(series.keys())
   for (const [key, fills] of load.byKey) {
@@ -611,7 +693,8 @@ export async function rollupDate(
         tag,
         mode,
         window,
-        marks: marksOf(symbolsIn(window), exitSidesOf(window)),
+        // Today's report is marked like the live row — demo books off the testnet.
+        marks: today ? venueResolversFor(deps, opts, tag, mode).marksOf(symbolsIn(window), exitSidesOf(window)) : {},
         series: series.get(key) ?? [],
         writtenAt: nowMs,
         ...withCosts(opts.costs?.(tag, mode)),

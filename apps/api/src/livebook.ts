@@ -67,6 +67,7 @@ import {
   lookbackDaysOf,
   markResolverFor,
   quoteResolverFor,
+  venueResolversFor,
   pnlFromFills,
   pnlRowFor,
   type PnlOptions,
@@ -498,16 +499,14 @@ export class LiveBook implements LiveBookPort {
   #rowFor(tag: string, mode: DeskMode, nowMs: number): PnlRow | null {
     const fills = this.#fills.get(pnlKey(tag, mode))
     if (fills === undefined) return null
-    const marksOf = markResolverFor(this.#deps, this.#opts)
-    const quotesOf = quoteResolverFor(this.#deps, this.#opts)
     return pnlRowFor({
       tag,
       label: this.#labels.get(tag) ?? tag,
       mode,
       fills,
       boundary: this.#boundary(nowMs),
-      marksOf,
-      quotesOf,
+      // Per book: a demo-rail book is marked off the testnet (`demo-marks.ts`).
+      ...venueResolversFor(this.#deps, this.#opts, tag, mode),
       // This rail's refusals only — see `#malformed`.
       malformed: malformedFor(this.#malformed.get(pnlKey(tag, mode)) ?? [], tag),
     })

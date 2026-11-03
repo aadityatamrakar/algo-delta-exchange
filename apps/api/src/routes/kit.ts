@@ -17,6 +17,7 @@ import type { Database } from '../store.ts'
 import type { DeskStore } from '../store.ts'
 import type { BridgeService, MasterProvider, RiskGatePort } from '../service.ts'
 import type { QuoteCache } from '../marks.ts'
+import type { MarksVenue } from '../books-registry.ts'
 import type { LiveBookPort } from '../livebook.ts'
 import type { VenueSpec } from '@algomaker/venue'
 
@@ -71,6 +72,13 @@ export interface ApiDeps {
   readonly service: BridgeService
   readonly master: MasterProvider
   readonly marks?: QuoteCache
+  /**
+   * Delta TESTNET quotes (`md.tick.demo`), for demo-rail paper books only —
+   * see `demo-marks.ts`. Absent off Delta and in tests that do not need it.
+   */
+  readonly demoMarks?: QuoteCache
+  /** Which feed marks a book (`RailIndex.venueOf`). Absent: every book is production's. */
+  readonly marksVenue?: (tag: string, mode: string) => MarksVenue
   readonly feedState?: { subscribedTokens: number }
   /**
    * The LAST `md.health` frame marketdata published, and when it arrived here.
