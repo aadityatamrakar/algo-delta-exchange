@@ -193,3 +193,52 @@ test('heartbeat create registers a cancel-orders switch on BTC options; ack send
   assert.equal(calls[1]?.url, 'https://dx.test/v2/heartbeat')
   assert.deepEqual(JSON.parse(calls[1]?.body ?? ''), { heartbeat_id: 'dx-desk', ttl: 30000 })
 })
+
+// ------------------------------------------------ order-book pagination
+
+const ord = (id: number) => ({ id, product_id: 1, size: 1, unfilled_size: 1, side: 'buy', state: 'open' })
+
+test("openOrders follows Delta's after cursor to the last page — the sweep never loses an order past page 1", async () => {
+  const page1 = Array.from({ length: 50 }, (_, i) => ord(i + 1))
+  const { fn, calls } = fakeFetch([
+    { body: { success: true, result: page1, meta: { after: 'C1' } } },
+    { body: { success: true, result: [ord(51), ord(52)], meta: { after: null } } },
+  ])
+  const out = await rest(fn).openOrders()
+  assert.equal(out.length, 52)
+  assert.equal(calls.length, 2)
+  const u0 = new URL(calls[0]?.url ?? '')
+  assert.equal(u0.searchParams.get('states'), 'open,pending')
+  assert.equal(u0.searchParams.get('after'), null)
+  const u1 = new URL(calls[1]?.url ?? '')
+  assert.equal(u1.searchParams.get('after'), 'C1')
+  // Each page is signed over its own query.
+  assert.equal(calls[1]?.headers['signature'], signRequest('test-secret', 'GET', '/v2/orders', u1.search, '', Number(TS)))
+})
+
+test("orderHistory follows the cursor too, from the caller's starting cursor", async () => {
+  const { fn, calls } = fakeFetch([
+    { body: { success: true, result: [ord(1)], meta: { after: 'H1' } } },
+    { body: { success: true, result: [ord(2)], meta: { after: 'H2' } } },
+    { body: { success: true, result: [ord(3)], meta: { after: '' } } },
+  ])
+  const out = await rest(fn).orderHistory({ after: 'START' })
+  assert.deepEqual(out.map((o) => o.id), [1, 2, 3])
+  assert.deepEqual(calls.map((c) => new URL(c.url).searchParams.get('after')), ['START', 'H1', 'H2'])
+})
+
+const endless = (): FakeResponse[] =>
+  Array.from({ length: 40 }, (_, i) => ({ body: { success: true, result: [ord(i)], meta: { after: `C${i}` } } }))
+
+test('openOrders is bounded: a cursor that never ends throws rather than truncating the open book silently', async () => {
+  const { fn, calls } = fakeFetch(endless())
+  await assert.rejects(rest(fn).openOrders(), (e: unknown) => e instanceof DxApiError && e.code === 'pagination')
+  assert.equal(calls.length, 20)
+})
+
+test('orderHistory is bounded: past 20 pages it returns the newest 20 pages (history has no end)', async () => {
+  const { fn, calls } = fakeFetch(endless())
+  const out = await rest(fn).orderHistory()
+  assert.equal(out.length, 20)
+  assert.equal(calls.length, 20)
+})

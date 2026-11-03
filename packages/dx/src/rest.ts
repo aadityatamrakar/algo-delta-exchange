@@ -45,6 +45,9 @@ export class DxApiError extends Error {
   }
 }
 
+/** Most pages of 50 one order read follows (open book or history). */
+export const DX_ORDER_PAGES_MAX = 20
+
 type QueryValue = string | number | undefined
 type Query = Readonly<Record<string, QueryValue>>
 
@@ -150,16 +153,41 @@ export class DxRest {
     return this.#result(await this.#request<DxOrder>('PUT', '/v2/orders', {}, body, true))
   }
 
-  /** Open and untriggered orders. */
+  /**
+   * Open and untriggered orders — EVERY page (Delta serves at most 50 per page
+   * and pages by `meta.after`). Bounded at `DX_ORDER_PAGES_MAX`: an open book
+   * that never ends is an error, never a silent truncation, because the sweep
+   * reads an order missing from here as gone.
+   */
   async openOrders(): Promise<DxOrder[]> {
-    const env = await this.#request<DxOrder[]>('GET', '/v2/orders', { states: 'open,pending', page_size: 50 }, undefined, true)
-    return env.result ?? []
+    return this.#orderPages('/v2/orders', { states: 'open,pending' }, undefined, true)
   }
 
-  /** Closed and cancelled orders, newest first (one page, at most 50). */
+  /**
+   * Closed and cancelled orders, newest first, following the cursor from
+   * `after`. History has no end, so past `DX_ORDER_PAGES_MAX` pages (1,000
+   * orders) it returns the newest ones rather than throwing.
+   */
   async orderHistory(q: { after?: string } = {}): Promise<DxOrder[]> {
-    const env = await this.#request<DxOrder[]>('GET', '/v2/orders/history', { page_size: 50, after: q.after }, undefined, true)
-    return env.result ?? []
+    return this.#orderPages('/v2/orders/history', {}, q.after, false)
+  }
+
+  async #orderPages(path: string, query: Query, start: string | undefined, strict: boolean): Promise<DxOrder[]> {
+    const out: DxOrder[] = []
+    let after = start
+    for (let page = 0; page < DX_ORDER_PAGES_MAX; page++) {
+      const env = await this.#request<DxOrder[]>('GET', path, { ...query, page_size: 50, after }, undefined, true)
+      out.push(...(env.result ?? []))
+      const next = env.meta?.after
+      if (next === null || next === undefined || next === '') return out
+      after = next
+    }
+    if (!strict) return out
+    throw new DxApiError({
+      status: 0,
+      code: 'pagination',
+      message: `GET ${path}: still paging after ${DX_ORDER_PAGES_MAX} pages — the order book was not read whole`,
+    })
   }
 
   async fills(q: { after?: string } = {}): Promise<{ fills: DxFill[]; after?: string }> {
