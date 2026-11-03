@@ -11,6 +11,8 @@
  * belongs somewhere it can be asserted.
  */
 
+import { VENUE } from './venue.ts'
+
 export type Side = 'Buy' | 'Sell'
 
 export interface EntryLeg {
@@ -46,8 +48,8 @@ export function entrySequence(legs: readonly EntryLeg[]): readonly EntryLeg[] {
   return [...legs.filter((l) => sideOf(l) === 'Buy'), ...legs.filter((l) => sideOf(l) === 'Sell')]
 }
 
-/** NFO options tick; matches the server's `marketable.ts` default. */
-const DEFAULT_TICK = 0.05
+/** The venue's options tick (NFO 0.05, Delta 0.1); matches the server's `marketable.ts` default. */
+const DEFAULT_TICK = VENUE.defaultTick
 
 /**
  * A price that CROSSES the touch, so the order fills at once with the limit as

@@ -58,6 +58,8 @@ import {
   type EntryState,
   type PlacedFill,
 } from './entry-plan.ts'
+import { VENUE, exchangeOf, isOnStep, lotsOf } from './venue.ts'
+import { deltaSymbol } from './contract.ts'
 
 /** `1070CE -3000` per line — the same shape the seed file uses. */
 function parseLegs(text: string, symbol: string, expiry: string): EntryLeg[] {
@@ -67,17 +69,25 @@ function parseLegs(text: string, symbol: string, expiry: string): EntryLeg[] {
     .map((l) => l.trim())
     .filter((l) => l !== '')
     .map((line) => {
-      const m = /^(\d+(?:\.\d+)?)\s*(CE|PE)\s+(-?\d+)$/i.exec(line)
+      // The quantity may carry decimals: on DX it is BTC on a 0.001 grid
+      // (`76600CE -0.05`). Off the venue's step it is refused, never rounded.
+      const m = /^(\d+(?:\.\d+)?)\s*(CE|PE)\s+(-?\d+(?:\.\d+)?)$/i.exec(line)
       if (m === null) throw new Error(`cannot read "${line}" — expected e.g. "1070CE -3000"`)
       const strike = Number(m[1])
       const type = (m[2] ?? '').toUpperCase() as 'CE' | 'PE'
+      const qty = Number(m[3])
+      if (!isOnStep(qty, VENUE.qtyStep)) {
+        throw new Error(`"${line}": ${m[3]} is not a multiple of the quantity step ${VENUE.qtyStep}`)
+      }
       return {
         strike,
         type,
-        qty: Number(m[3]),
+        qty,
         // Resolved properly against the master before anything is placed; this
         // is only a provisional label for the review list.
-        tradingsymbol: `${symbol}${monthCode}${strike}${type}`,
+        tradingsymbol: VENUE.id === 'dx'
+          ? deltaSymbol(symbol, strike, type, expiry)
+          : `${symbol}${monthCode}${strike}${type}`,
         instrumentToken: 0,
       }
     })
@@ -580,7 +590,9 @@ function PlaceCard(props: {
 }
 
 export function BookBuildPage(props: { mode: DeskMode }): React.ReactElement {
-  const master = useChainMaster({ symbol: 'BAJFINANCE', expiry: '2026-08-25', lotSize: '750' })
+  const master = useChainMaster(VENUE.id === 'dx'
+    ? { symbol: 'BTC', expiry: '', lotSize: String(VENUE.qtyStep) }
+    : { symbol: 'BAJFINANCE', expiry: '2026-08-25', lotSize: '750' })
   // The fields themselves are the card's business; what the page still needs is
   // the pair every request is keyed on, and the divisor Place sizes from.
   const { symbol, expiry, lotSize, setLotSize } = master
@@ -892,7 +904,8 @@ export function BookBuildPage(props: { mode: DeskMode }): React.ReactElement {
     try {
       const limit = Number(limits[leg.tradingsymbol])
       if (!Number.isFinite(limit) || limit <= 0) throw new Error('enter a limit price first')
-      const lots = Math.abs(leg.qty) / Number(lotSize)
+      // Snapped: 0.57 BTC / 0.001 is 569.999… in floats, and that is 570 contracts.
+      const lots = lotsOf(Math.abs(leg.qty), Number(lotSize))
       const res = await api.submitOrder({
         tag,
         mode: props.mode,
@@ -901,8 +914,8 @@ export function BookBuildPage(props: { mode: DeskMode }): React.ReactElement {
           tradingsymbol: leg.tradingsymbol,
           instrumentToken: leg.instrumentToken,
           lotSize: Number(lotSize),
-          tickSize: 0.05,
-          exchange: 'NFO',
+          tickSize: VENUE.defaultTick,
+          exchange: exchangeOf(VENUE),
         },
         side: sideOf(leg),
         lots,

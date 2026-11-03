@@ -20,6 +20,7 @@
  */
 
 import { baseOrderId, groupOrders, type OrderEvent, type OrderGroup } from './api.ts'
+import { lotsOf } from './venue.ts'
 
 /** The five words an order can end the day as. */
 export type OrderStatusWord = 'Filled' | 'Partial' | 'Rejected' | 'Cancelled' | 'Working'
@@ -325,7 +326,7 @@ export function lotsText(o: ReportOrder): string {
   if (shown === null) return '—'
   const fmt = (q: number): string => {
     if (o.lotSize === null) return `${q}`
-    const lots = q / o.lotSize
+    const lots = lotsOf(q, o.lotSize)
     return Number.isInteger(lots) ? `${lots}` : lots.toFixed(1)
   }
   const unit = o.lotSize === null ? ' qty' : ''

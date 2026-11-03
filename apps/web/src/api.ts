@@ -11,6 +11,7 @@
 // `contract.ts` imports nothing, so this cannot form a cycle. `groupOrders`
 // needs it to tell the Kite packing from the broker's own echo of a symbol.
 import { formatContract } from './contract.ts'
+import { VENUE, type VenueSpec } from './venue.ts'
 
 export type DeskMode = 'paper' | 'live'
 
@@ -464,25 +465,20 @@ export function explain(err: unknown): string {
 }
 
 /**
- * The API base, DERIVED FROM THE PAGE'S OWN HOSTNAME by default.
+ * The API base: THE PAGE'S OWN ORIGIN by default.
  *
- * This is not a convenience — it is what makes the session cookie work.
+ * The dashboard is served (port 5000) by a same-origin server that proxies
+ * `/v1/*` to the api, so the page and the api are one site and the
+ * `SameSite=Strict` session cookie is always sent. Deriving anything else —
+ * the old `hostname:8890` — reintroduces the `localhost` vs `127.0.0.1` trap:
+ * login succeeds, the cookie is stored, the next request arrives anonymous.
  *
- * `localhost` and `127.0.0.1` resolve to the same machine but are DIFFERENT
- * HOSTS, and therefore different SITES. A `SameSite=Strict` cookie set by
- * `127.0.0.1:8890` is never sent from a page served at `localhost:5184`. The
- * failure is silent and looks nothing like its cause: login succeeds, the
- * cookie is stored, the very next request arrives anonymous, and the app bounces
- * straight back to the login page as though the password were wrong.
- *
- * Ports do not affect same-site, so :5184 talking to :8890 on the SAME hostname
- * is fine. Matching the hostname is the whole requirement.
- *
- * An explicit `VITE_DESK_API` still wins, for pointing at a remote bridge — but
- * whoever sets it has to keep the hostname aligned with wherever the dashboard
- * is served, or the cookie silently stops being sent.
+ * An explicit `VITE_DESK_API` still wins, for the vite dev server pointing at
+ * an api on another port — whoever sets it has to keep the hostname aligned
+ * with wherever the dashboard is served, or the cookie silently stops being
+ * sent.
  */
-const BASE =
+const BASE: string =
   import.meta.env['VITE_DESK_API'] ??
   window.location.origin
 
@@ -740,7 +736,8 @@ export interface LoginResult {
 
 // ---------------------------------------------------------------- brokers
 
-export type BrokerKind = 'xts' | 'zerodha'
+/** `delta` is the DX build's one broker (Delta Exchange India). */
+export type BrokerKind = 'xts' | 'zerodha' | 'delta'
 
 /**
  * `unreadable` is NOT `absent`. "No XTS configured" and "XTS configured but the
@@ -2311,6 +2308,51 @@ export interface RepairRunDoc {
   readonly updatedAt: number
 }
 
+/**
+ * One side of one strike on `GET /v1/desk/chain/:symbol`.
+ *
+ * `price` is the MID whenever bid/ask are present — see the bridge's `Quote`.
+ * Everything after `ask` is OPTIONAL and only the DX feed sends it (Delta's
+ * ticker carries mark, sizes, mark IV, OI and greeks; Kite does not). Absent
+ * is rendered as a dash, never as 0.
+ */
+export interface ChainSide {
+  price: number
+  ageMs: number
+  bid?: number | null
+  ask?: number | null
+  oi?: number | null
+  volume?: number | null
+  mark?: number | null
+  bidSize?: number | null
+  askSize?: number | null
+  /** Mark IV as a fraction (0.412 = 41.2%). */
+  iv?: number | null
+  delta?: number | null
+  gamma?: number | null
+  theta?: number | null
+  vega?: number | null
+}
+
+export interface ChainRowWire {
+  strike: number
+  CE?: ChainSide | null
+  PE?: ChainSide | null
+  ceContract?: { tradingsymbol: string; instrumentToken: number }
+  peContract?: { tradingsymbol: string; instrumentToken: number }
+}
+
+export interface ChainResponse {
+  underlying?: string
+  expiry?: string
+  spot: number | null
+  future: number | null
+  /** The instrument master's lot size for this expiry — knowable without a repair search. */
+  lotSize?: number | null
+  rows?: ChainRowWire[]
+  feedAlive?: boolean
+}
+
 export const api = {
   /**
    * The order feed for ONE rail.
@@ -2656,22 +2698,21 @@ export const api = {
    * own tradingsymbol format client-side.
    */
   chain: (underlying: string, expiry: string) =>
-    get<{
-      spot: number | null
-      future: number | null
-      /** The instrument master's lot size for this expiry — knowable without a repair search. */
-      lotSize?: number | null
-      rows?: {
-        strike: number
-        /** `price` is the MID whenever bid/ask are present — see the bridge's `Quote`. */
-        CE?: { price: number; ageMs: number; bid?: number | null; ask?: number | null } | null
-        PE?: { price: number; ageMs: number; bid?: number | null; ask?: number | null } | null
-        ceContract?: { tradingsymbol: string; instrumentToken: number }
-        peContract?: { tradingsymbol: string; instrumentToken: number }
-      }[]
-    }>(
+    get<ChainResponse>(
       `/v1/desk/chain/${encodeURIComponent(underlying)}?expiry=${encodeURIComponent(expiry)}`,
     ),
+  /**
+   * Every listed expiry for an underlying's chain, nearest first. Accepts the
+   * bare array or `{expiries}`; anything else is an empty list, which the
+   * chain page renders as "no expiries listed" rather than a crash.
+   */
+  chainExpiries: (underlying: string) =>
+    get<{ expiries?: unknown } | unknown[]>(
+      `/v1/desk/chain/${encodeURIComponent(underlying)}/expiries`,
+    ).then((r) => {
+      const list = Array.isArray(r) ? r : (r as { expiries?: unknown }).expiries
+      return Array.isArray(list) ? list.filter((e): e is string => typeof e === 'string') : []
+    }),
   /**
    * Every underlying the instrument master lists an option chain for.
    *
@@ -3407,12 +3448,9 @@ export function spansDays(stamps: readonly number[]): boolean {
   return day(lo) !== day(hi)
 }
 
-const IST_CLOCK = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
-})
-
 /**
- * Weekday, 09:15–15:30 IST — this desk's trading session.
+ * The venue's trading session: weekday 09:15–15:30 IST on NSE, always open on
+ * DX (Delta trades 24x7). See `venue.ts`.
  *
  * SHARED, because two pages had to agree about it. The Books page uses it to
  * hold the STALLED alarm outside market hours (a quiet feed at 21:00 is not a
@@ -3426,12 +3464,18 @@ const IST_CLOCK = new Intl.DateTimeFormat('en-GB', {
  * — the browser cannot import from the server packages, so this is the same rule
  * stated in the one place the frontend can share.
  */
-export function inSession(atMs: number): boolean {
-  const parts = IST_CLOCK.formatToParts(new Date(atMs))
-  const part = (t: string): string => parts.find((p) => p.type === t)?.value ?? ''
-  if (part('weekday') === 'Sat' || part('weekday') === 'Sun') return false
-  const mins = Number(part('hour')) * 60 + Number(part('minute'))
-  return mins >= 9 * 60 + 15 && mins <= 15 * 60 + 30
+export function inSession(atMs: number, venue: VenueSpec = VENUE): boolean {
+  return venue.isOpen(atMs)
+}
+
+/**
+ * True at and after the expiry INSTANT — 15:30 IST on NSE, 12:00:00 UTC on DX
+ * (17:30 IST, the settlement). A date-only comparison would call a DX book
+ * live for the 6½ hours after it settled.
+ */
+export function pastExpiry(expiry: string, atMs: number = Date.now(), venue: VenueSpec = VENUE): boolean {
+  const at = venue.expiryInstantMs(expiry)
+  return Number.isFinite(at) && atMs >= at
 }
 
 export function ago(ms: number | null): string {

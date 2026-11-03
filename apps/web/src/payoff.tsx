@@ -146,6 +146,7 @@ import {
 } from './manual-order-plan.ts'
 import { MARK_STALE_MS } from './entry-plan.ts'
 import { formatContract } from './contract.ts'
+import { VENUE, lotsOf, roundToStep } from './venue.ts'
 import { useReauth } from './auth.tsx'
 import { RepairApplyDialog } from './repair-apply.tsx'
 
@@ -259,7 +260,7 @@ function strikeText(k: number): string {
 function lotsText(qty: number, lotSize: number): string {
   const shares = Math.abs(typeof qty === 'number' && Number.isFinite(qty) ? qty : 0)
   if (!(lotSize > 0)) return `${inr(shares)} shares`
-  const lots = shares / lotSize
+  const lots = lotsOf(shares, lotSize)
   if (!Number.isInteger(lots)) return `${inr(shares)} shares`
   return `${inr(lots)} lot${lots === 1 ? '' : 's'}`
 }
@@ -907,7 +908,8 @@ function WhatIfLegDialog(props: {
   }, [strike, type, hasQuote])
 
   const sized = props.lotSize > 0
-  const qty = (sized ? size * props.lotSize : size) * (side === 'Sell' ? -1 : 1)
+  // `lots × lotSize` snapped onto the lot grid: 3 × 0.05 is 0.15000000000000002.
+  const qty = (sized ? roundToStep(size * props.lotSize, props.lotSize) : size) * (side === 'Sell' ? -1 : 1)
   // WHY the button is off, rather than a button that is merely grey.
   const problem =
     !(strike > 0)
@@ -970,7 +972,10 @@ function WhatIfLegDialog(props: {
                   value={size}
                   onChange={setSize}
                   min={0}
-                  isIntegerOnly
+                  // Lots are whole contracts on every venue; a raw quantity is
+                  // whole only on NSE — on DX it is BTC on a 0.001 grid.
+                  isIntegerOnly={sized || VENUE.qtyStep >= 1}
+                  {...(sized || VENUE.qtyStep >= 1 ? {} : { step: VENUE.qtyStep })}
                   width={150}
                   description={
                     sized
@@ -987,7 +992,7 @@ function WhatIfLegDialog(props: {
                   }}
                   hasClear
                   min={0}
-                  step={0.05}
+                  step={VENUE.defaultTick}
                   width={170}
                   description={priceNote !== '' ? priceNote : 'blank = mark at the chain'}
                 />
@@ -1066,7 +1071,7 @@ function netByType(
     if (n === 0) return 'flat'
     const word = n < 0 ? 'sell' : 'buy'
     if (lotSize > 0) {
-      const lots = Math.abs(n) / lotSize
+      const lots = lotsOf(Math.abs(n), lotSize)
       const whole = Number.isInteger(lots) ? String(lots) : lots.toFixed(2)
       return `${word} ${whole} ${lots === 1 ? 'lot' : 'lots'}`
     }
