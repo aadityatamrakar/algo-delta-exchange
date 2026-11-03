@@ -430,3 +430,39 @@ test('MarkClock on DX marks every 5 minutes around the clock, counted from 12:00
   // A new settlement day restarts the count.
   assert.equal(c.next(Date.parse('2026-11-04T12:00:00Z')).markIndexToday, 0)
 })
+
+/** The chain as the host sees it in the first seconds after a book starts: listed, nothing quoted. */
+function unquoted(asOf: number): ChainSnap {
+  const c = chainOf(asOf)
+  return { ...c, strikes: c.strikes.map((s) => ({ strike: s.strike, ce: null, pe: null })) }
+}
+
+test('3 Nov: a book whose first index print beats its first option tick enters as soon as the quotes land', async () => {
+  // Live, the six books decided 2 s after start, before any option tick, and
+  // the start entry was spent — they traded only on a later crossing, minutes
+  // on. The start now waits for the level's quotes.
+  const h = make()
+  h.chain = unquoted
+  await h.host.evaluate()
+  assert.equal(h.client.requests.length, 0, 'nothing to sell at yet')
+  h.chain = (asOf) => chainOf(asOf)
+  h.advance(1_000)
+  await h.host.evaluate()
+  assert.equal(h.client.requests[0]?.trigger, 'bs-entry')
+  assert.deepEqual(opens(h.client.requests[0]).map((o) => o.instrument), ['P-BTC-76600-041126', 'C-BTC-76600-041126'])
+})
+
+test('3 Nov: a jump-2 book sells the nearest level of ITS grid on start, once quoted — not only on a crossing', async () => {
+  // daily-2 and monthly-2 never entered: their start levels (77200 on a 400
+  // grid, 78000 on a 2000 grid) were spent unquoted, and the index never moved
+  // far enough to cross a level of the wider grid. On a 400 grid at 76,592 the
+  // nearest level is 76,400 — a listed strike.
+  const h = make({ dials: dailyDials({ bs_strike_jump: 2 }) })
+  h.chain = unquoted
+  await h.host.evaluate()
+  assert.equal(h.client.requests.length, 0)
+  h.chain = (asOf) => chainOf(asOf)
+  h.advance(1_000)
+  await h.host.evaluate()
+  assert.deepEqual(opens(h.client.requests[0]).map((o) => o.instrument), ['P-BTC-76400-041126', 'C-BTC-76400-041126'])
+})
