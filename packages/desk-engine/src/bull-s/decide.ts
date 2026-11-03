@@ -330,6 +330,9 @@ export function decideBullS(
     ref !== null && Number.isFinite(ref) && ref > 0 && inputs.refAsOf > 0 && nowMs - inputs.refAsOf <= maxAgeMs;
   let crossed: number | null = null;
   let crossing = '';
+  // The reference the crossing is measured FROM, before this pass moves it —
+  // kept so an entry that is only waiting for a quote can leave it unspent.
+  const priorRef = bs.lastRef;
   if (fresh) {
     if (bs.lastRef === 0) {
       if (dials.bs_enter_on_start) {
@@ -490,16 +493,36 @@ export function decideBullS(
   if (bs.groups.some((g) => sameStrike(g.strike, level))) {
     return refuse(`${fmt(level)} already holds a straddle`);
   }
+  /**
+   * UNLISTED IS A FACT, UNQUOTED IS A MOMENT. A level the chain does not list
+   * at all is skipped and the crossing is spent (never substituted). A level it
+   * DOES list whose CE or PE has no quote — or no price to sell at — yet is the
+   * feed not having spoken: the book has just started, a quote is in flight. A
+   * spent crossing there loses the entry for good (3 Nov, six books' first
+   * price landed 2 s after start, before a single tick on the level). So it
+   * WAITS: the reference the crossing is measured from is left where it was
+   * (the start stays a start), its clock moves on so no gap is read, and the
+   * next pass with both prices sells it.
+   */
+  const listed = chain.strikes.some((r) => sameStrike(r.strike, level));
+  const waiting = (what: string): EngineDecision =>
+    hold(
+      withNotes(`${crossing}, but ${what} — waiting for it, the crossing is not spent`, notes),
+      withBs(state, { ...bs, lastRef: priorRef }),
+    );
   const ceQ = quoteOf(chain, level, 'CE');
   const peQ = quoteOf(chain, level, 'PE');
+  if (!listed) {
+    return refuse(`${fmt(level)} is not listed with both a CE and a PE for this expiry — skipped, never substituted`);
+  }
   if (ceQ === null || peQ === null) {
-    return refuse(`${fmt(level)} is not listed with both a CE and a PE quote for this expiry — skipped, never substituted`);
+    return waiting(`${fmt(level)} has no ${ceQ === null ? 'CE' : 'PE'} quote yet`);
   }
   const ceIn = entryPx(ceQ, basis);
   const peIn = entryPx(peQ, basis);
   if (ceIn === null || peIn === null) {
     const side = basis === 0 ? 'last price' : 'bid';
-    return refuse(`${fmt(level)} has no ${side} to sell the ${ceIn === null ? 'CE' : 'PE'} at — skipped`);
+    return waiting(`${fmt(level)} has no ${side} to sell the ${ceIn === null ? 'CE' : 'PE'} at yet`);
   }
 
   const size = bs.size > 0 ? bs.size : firstSize(dials);

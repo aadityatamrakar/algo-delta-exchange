@@ -90,13 +90,41 @@ test('unlisted strike at the level is skipped, never substituted', () => {
   const d = run.tick(80_250, T0 + S, { chain: { strikes: without(ladder) } })
   assert.deepEqual(d.actions, [])
   assert.match(d.reason, /80200 is not listed/)
-  // A level listed with one side missing is just as unlisted.
-  const half = run.tick(80_410, T0 + 2 * S, { chain: { quotes: { [key(80_400, 'PE')]: null } } })
-  assert.deepEqual(half.actions, [])
-  assert.match(half.reason, /80400/)
   assert.deepEqual(run.state.bs.groups.map((g) => g.strike), [80_000], 'no other strike was sold in its place')
   // The crossing was spent: the next tick does not go back for it.
-  assert.deepEqual(opensOf(run.tick(80_420, T0 + 3 * S)), [])
+  assert.deepEqual(opensOf(run.tick(80_260, T0 + 2 * S, { chain: { strikes: without(ladder) } })), [])
+})
+
+test('a LISTED level whose quote has not arrived yet waits — the crossing is not spent', () => {
+  const run = new Run(dialsOf())
+  run.tick(80_090, T0)
+  // 80,400 is listed, its PE has no quote yet.
+  const half = run.tick(80_410, T0 + S, { chain: { quotes: { [key(80_400, 'PE')]: null } } })
+  assert.deepEqual(half.actions, [])
+  assert.match(half.reason, /80400 has no PE quote yet — waiting/)
+  assert.equal(run.state.bs.lastRef, 80_090, 'measured from where it was')
+  // The quote lands: the same crossing sells, and nothing else was put in its place.
+  assert.deepEqual(opensOf(run.tick(80_420, T0 + 2 * S)), ['Sell 80400PE x100', 'Sell 80400CE x100'])
+  assert.deepEqual(run.state.bs.groups.map((g) => g.strike), [80_000, 80_400])
+})
+
+test('the START entry waits for its quotes: a book armed before the first tick on its level still sells it (3 Nov)', () => {
+  // Live, 3 Nov 10:25 UTC: six books started, their first index price came 2 s
+  // later — before any tick on the nearest level — and the start entry was
+  // spent as "not listed". It must wait instead.
+  const run = new Run(dialsOf())
+  const early = run.tick(80_090, T0, {
+    chain: { quotes: { [key(80_000, 'CE')]: null, [key(80_000, 'PE')]: null } },
+  })
+  assert.deepEqual(early.actions, [])
+  assert.match(early.reason, /first price .* waiting for it, the crossing is not spent/)
+  assert.equal(run.state.bs.lastRef, 0, 'still a start')
+  // No bid yet on one wing is the same wait.
+  const noBid = run.tick(80_095, T0 + S, { chain: { quotes: { [key(80_000, 'CE')]: q(null, 812, 810) } } })
+  assert.deepEqual(noBid.actions, [])
+  assert.match(noBid.reason, /no bid to sell the CE at yet/)
+  // Both prices: the start entry goes on.
+  assert.deepEqual(opensOf(run.tick(80_098, T0 + 2 * S)), ['Sell 80000PE x50', 'Sell 80000CE x50'])
 })
 
 test('stop fires only after the summed ask has held ≥ mult × entry for confirm_s; recovery resets the clock', () => {
