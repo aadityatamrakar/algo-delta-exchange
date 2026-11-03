@@ -56,7 +56,10 @@ const straddle: readonly PackageLeg[] = [
   { tradingsymbol: CE, op: 'open', qty: 0.005 },
 ]
 
-function gate(src: OiCapSource | null, opts: { pkg?: readonly PackageLeg[] | null; clock?: { t: number } } = {}) {
+function gate(
+  src: OiCapSource | null,
+  opts: { pkg?: readonly PackageLeg[] | null | Error; clock?: { t: number }; failClosed?: (rail: string) => boolean } = {},
+) {
   const clock = opts.clock ?? { t: NOW }
   const logs: { m: string; ctx?: Record<string, unknown> }[] = []
   const loads: string[] = []
@@ -64,9 +67,12 @@ function gate(src: OiCapSource | null, opts: { pkg?: readonly PackageLeg[] | nul
     sourceFor: (rail) => (rail === 'demo' || rail === 'live' ? src : null),
     loadPackage: async (id) => {
       loads.push(id)
+      if (opts.pkg instanceof Error) throw opts.pkg
       return opts.pkg === undefined ? straddle : opts.pkg
     },
     index: () => INDEX,
+    // As main wires it: live fails closed, demo open.
+    failClosed: opts.failClosed ?? ((rail) => rail === 'live'),
     now: () => clock.t,
     log: (m, ctx) => void logs.push({ m, ...(ctx === undefined ? {} : { ctx }) }),
   })
@@ -157,11 +163,50 @@ test('a manual order with no plan is a package of one', async () => {
   assert.equal(await g.refusal(openOrder(PE), 'manual-pe', 'live'), null)
 })
 
-test('a failed read lets the order through and says so', async () => {
+test('DEMO: a failed read lets the order through and says so', async () => {
   const src: OiCapSource = { async figures() { throw new Error('fetch failed') } }
   const { g, logs } = gate(src)
   assert.equal(await g.refusal(openOrder(PE), 'dec-8#0', 'demo'), null)
-  assert.ok(logs.some((l) => /read failed, not blocking/.test(l.m)))
+  assert.ok(logs.some((l) => /lookup failed, not blocking/.test(l.m)))
+})
+
+test('LIVE fails closed: a read that throws refuses every leg of the opening package', async () => {
+  const src: OiCapSource = { async figures() { throw new Error('master not loaded') } }
+  const { g } = gate(src)
+  const pe = await g.refusal(openOrder(PE), 'dec-20#0', 'live')
+  const ce = await g.refusal(openOrder(CE), 'dec-20#1', 'live')
+  assert.match(String(pe), /^oi-cap: lookup failed — cap figures could not be read: master not loaded/)
+  assert.match(String(pe), /no leg sent/)
+  assert.match(String(ce), /^oi-cap: lookup failed/)
+})
+
+test('LIVE fails closed: a leg with no cap on record refuses the package', async () => {
+  const caps = new Map<string, MasterCap>([[PE, { token: PE_TOKEN, lotSize: 0.001, capUsd: 2_000_000, reduceOnly: false }]])
+  const src = liveOiCapSource({ capOf: (s) => caps.get(s) ?? null, oiContractsOf: () => 1_401, index: () => INDEX })
+  const { g } = gate(src)
+  assert.match(String(await g.refusal(openOrder(PE), 'dec-21#0', 'live')), /^oi-cap: lookup failed — C-BTC-77200-041126 has no cap on record/)
+})
+
+test('LIVE fails closed: a listed cap with no OI on hand (no tick yet) refuses', async () => {
+  const caps = new Map<string, MasterCap>([
+    [CE, { token: CE_TOKEN, lotSize: 0.001, capUsd: 2_000_000, reduceOnly: false }],
+    [PE, { token: PE_TOKEN, lotSize: 0.001, capUsd: 2_000_000, reduceOnly: false }],
+  ])
+  const src = liveOiCapSource({ capOf: (s) => caps.get(s) ?? null, oiContractsOf: (t) => (t === PE_TOKEN ? 1_401 : null), index: () => INDEX })
+  const { g } = gate(src)
+  assert.match(String(await g.refusal(openOrder(PE), 'dec-22#0', 'live')), /^oi-cap: lookup failed — C-BTC-77200-041126: OI not on hand to check against its \$2,000,000 cap/)
+})
+
+test('LIVE fails closed: an unreadable package plan refuses rather than checking one leg', async () => {
+  const { g } = gate(live(new Set()), { pkg: new Error('mongo down') })
+  assert.match(String(await g.refusal(openOrder(PE), 'dec-23#0', 'live')), /^oi-cap: lookup failed — the package plan for dec-23 could not be read: mongo down/)
+})
+
+test('DEMO stays fail-open on the same failures; closes are never checked on either rail', async () => {
+  const src: OiCapSource = { async figures() { throw new Error('fetch failed') } }
+  assert.equal(await gate(src).g.refusal(openOrder(PE), 'dec-24#0', 'demo'), null)
+  assert.equal(await gate(src, { pkg: new Error('mongo down') }).g.refusal(openOrder(PE), 'dec-25#0', 'demo'), null)
+  assert.equal(await gate(src).g.refusal({ tradingsymbol: CE, quantity: 0.005, desk_op: 'close' }, 'dec-26#0', 'live'), null)
 })
 
 // ------------------------------------------------- the demo path, on a real DemoRail

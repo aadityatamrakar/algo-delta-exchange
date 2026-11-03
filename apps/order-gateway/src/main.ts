@@ -2240,6 +2240,8 @@ export async function main(): Promise<void> {
           }))
         },
         index: () => btcIndex,
+        // Operator ruling: live refuses an opening package it cannot check; demo lets Delta decide.
+        failClosed: (rail) => rail === 'live',
         now: () => Date.now(),
         log,
       })

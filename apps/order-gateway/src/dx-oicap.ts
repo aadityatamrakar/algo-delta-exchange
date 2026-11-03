@@ -30,8 +30,12 @@
  * before it routes any leg). An order with no plan to read is a package of one.
  * The verdict is decided once per package and remembered, so every leg gets
  * the same answer. Closes and other exposure-reducing ops are never checked.
- * A failed read lets the order through (logged): Delta's own rejection is the
- * backstop, and an unreachable endpoint must not stop every entry.
+ *
+ * A FAILED LOOKUP (operator ruling, 3 Nov 2026):
+ *   live — FAIL-CLOSED. A read that throws, a leg with no cap on record, a
+ *          capped leg whose OI is not on hand, or a package plan that cannot be
+ *          read refuses the opening package: `oi-cap: lookup failed — …`.
+ *   demo — fail-open (logged): Delta's own rejection is the backstop.
  */
 import { num, oiCapCheck, oiUsdOf, type DxProduct, type DxTicker, type OiCapStatus } from '@algomaker/dx'
 import { baseClientOrderId } from './gateway.ts'
@@ -69,6 +73,8 @@ export interface OiCapGateDeps {
   readonly log: (msg: string, ctx?: Record<string, unknown>) => void
   /** How long a package's verdict is remembered. Default 10 min. */
   readonly verdictTtlMs?: number
+  /** Refuse the package when a lookup fails on this rail (live). Default: never. */
+  readonly failClosed?: (rail: string) => boolean
 }
 
 export interface OiCapOrder {
@@ -212,12 +218,17 @@ export class OiCapGate {
   /** The package refusal, worded for one leg of it. */
   #forLeg(refusal: string | null, symbol: string): string | null {
     if (refusal === null) return null
-    return refusal.includes(`: ${symbol} `)
+    return refusal.includes(symbol)
       ? `${refusal}; the whole opening package is refused, no leg sent`
       : `${refusal}; ${symbol} is refused with it — the whole opening package is refused, no leg sent`
   }
 
   async #decide(source: OiCapSource, rail: string, decisionId: string | null, order: OiCapOrder): Promise<string | null> {
+    const closed = this.#d.failClosed?.(rail) === true
+    const failed = (detail: string, ctx: Record<string, unknown>): string | null => {
+      this.#d.log(closed ? 'oi-cap: lookup failed, package refused (fail-closed)' : 'oi-cap: lookup failed, not blocking (Delta refuses a capped order itself)', { rail, decisionId, detail, ...ctx })
+      return closed ? `oi-cap: lookup failed — ${detail}` : null
+    }
     let legs: readonly PackageLeg[] = [
       { tradingsymbol: order.tradingsymbol, qty: order.quantity, ...(order.desk_op === undefined ? {} : { op: order.desk_op }) },
     ]
@@ -226,6 +237,7 @@ export class OiCapGate {
         const planned = await this.#d.loadPackage(decisionId)
         if (planned !== null && planned.length > 0) legs = planned
       } catch (err) {
+        if (closed) return failed(`the package plan for ${decisionId} could not be read: ${msgOf(err)}`, {})
         this.#d.log('oi-cap: package read failed, checking this leg alone', { decisionId, error: msgOf(err) })
       }
     }
@@ -241,17 +253,21 @@ export class OiCapGate {
     try {
       figures = await source.figures([...opening.keys()])
     } catch (err) {
-      this.#d.log('oi-cap: read failed, not blocking (Delta refuses a capped order itself)', { rail, decisionId, error: msgOf(err) })
-      return null
+      return failed(`cap figures could not be read: ${msgOf(err)}`, {})
     }
     const index = this.#d.index()
     for (const [symbol, qty] of opening) {
       const f = figures.get(symbol)
       if (f === undefined) {
+        if (closed) return failed(`${symbol} has no cap on record`, { symbol })
         this.#d.log('oi-cap: no cap figures for the leg, not checked', { rail, symbol })
         continue
       }
       const s = oiCapCheck({ ...f, orderNotionalUsd: index === null ? 0 : qty * index })
+      // A listed cap whose OI cannot be valued (no tick yet, no index) is a failed lookup, not a pass.
+      if (closed && !s.capped && s.capUsd !== null && s.oiUsd === null) {
+        return failed(`${symbol}: OI not on hand to check against its ${usd(s.capUsd)} cap`, { symbol })
+      }
       if (s.basis === 'no-figures') this.#d.log('oi-cap: OI or cap unknown and no reduce-only flag, not checked', { rail, symbol })
       if (s.capped) {
         // `cap` = enforced on a listed cap with no flag showing; `flag` = Delta flagged it too.
