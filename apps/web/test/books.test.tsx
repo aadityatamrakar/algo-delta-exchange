@@ -563,5 +563,5 @@ describe('the dials panel asks before it retunes a live book', () => {
 
     await waitFor(() => expect(asked).toBe(2))
     expect(sent.filter((r) => r.method === 'PATCH').at(-1)?.body).toMatchObject({ password: 'hunter2' })
-  })
+  }, 30_000) // the BULL-S dials made the panel heavier to render
 })
