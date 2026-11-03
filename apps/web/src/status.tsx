@@ -63,6 +63,7 @@ import { FeedSection } from './pages.tsx'
 import { BrokersSection } from './brokers.tsx'
 import { ModeBadge, useMode } from './mode.tsx'
 import { MarginStatusCard } from './margin.tsx'
+import { DemoFeedLine, demoFeedOf } from './marks-source.tsx'
 
 /**
  * Fast enough to watch a process come back after a restart, slow enough that a
@@ -112,6 +113,7 @@ function ComponentCard(props: { component: SystemComponent }): React.ReactElemen
    * seen at all.
    */
   const seen = c.lastSeenMs === null ? 'never seen' : `last seen ${ago(c.ageMs)}`
+  const demo = demoFeedOf(c.extra)
   return (
     <Card padding={3}>
       <VStack gap={1}>
@@ -123,6 +125,10 @@ function ComponentCard(props: { component: SystemComponent }): React.ReactElemen
             would type into `pm2 restart` are the same string. */}
         <Text size="sm" color="secondary">{c.id}</Text>
         <Text size="sm">{c.detail}</Text>
+        {/* The Delta TESTNET price socket, carried on the market-data card's
+            `extra.demo` — what demo-rail paper books are marked off. Absent
+            on a bridge a deploy behind, and then nothing is said. */}
+        {demo === null ? null : <DemoFeedLine demo={demo} />}
         <Text size="sm" color="secondary">
           {every === null ? seen : `${seen} · ${every}`}
         </Text>
@@ -149,6 +155,13 @@ function SystemsSection(): React.ReactElement {
    * the badge refuses.
    */
   const attention = components.filter((c) => c.state === 'attention')
+  /**
+   * THE TESTNET PRICE SOCKET BEING DOWN is said once, above the grid, as well
+   * as on its card. It does not move the card's state (the process is still
+   * speaking) but it does change what demo-rail books are worth: their legs
+   * fall back to production prices, and each such book says so on its page.
+   */
+  const demoDown = components.some((c) => demoFeedOf(c.extra)?.connected === false)
 
   return (
     <VStack gap={3}>
@@ -169,6 +182,17 @@ function SystemsSection(): React.ReactElement {
           description={
             `${attention.map((c) => c.id).join(', ')} — these are CURRENT and reporting something. ` +
             'The card below carries what each one says; nothing here has been changed by the desk.'
+          }
+        />
+      ) : null}
+
+      {demoDown ? (
+        <Banner
+          status="warning"
+          title="Delta testnet price socket is down"
+          description={
+            'Paper books on the demo rail cannot be marked at testnet prices. Legs with no demo quote ' +
+            'fall back to Delta production prices, and each such book is flagged incomplete.'
           }
         />
       ) : null}

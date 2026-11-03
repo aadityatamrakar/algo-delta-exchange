@@ -341,6 +341,20 @@ function marketdata(deps: ApiDeps, nowMs: number): SystemComponent {
   /** The BTC index (`.DEXBTUSD`, off `md.spot`) and how old it is — DX only. */
   const index = onDx ? deps.marks?.spotQuote('BTC', true) ?? null : null
   const indexAgeMs = index === null ? null : Math.max(0, nowMs - index.asOf)
+  /**
+   * THE TESTNET PRICE SOCKET, which marks demo-rail paper books
+   * (`md.health`'s `demo` line, desk-marketdata's second socket). Passed through whole
+   * on `extra.demo` for the Status card, and stated in the detail — a dropped
+   * one does not move `state` (the process is speaking), but every demo book's
+   * legs fall back to production prices while it is down.
+   */
+  const demoRaw = onDx ? payload['demo'] : undefined
+  const demo =
+    demoRaw !== null && typeof demoRaw === 'object' && typeof (demoRaw as Record<string, unknown>)['connected'] === 'boolean'
+      ? (demoRaw as Record<string, unknown>)
+      : null
+  const demoTokens = typeof demo?.['tokens'] === 'number' ? demo['tokens'] : 0
+  const demoDown = typeof demo?.['downForMs'] === 'number' ? demo['downForMs'] : 0
   const parts = [
     ...(onDx
       ? [
@@ -361,6 +375,13 @@ function marketdata(deps: ApiDeps, nowMs: number): SystemComponent {
     ...(showStale
       ? [`${staleTokens} tokens NOT TICKING (oldest ${Math.round(oldestAgeMs / 1000)}s)`]
       : []),
+    ...(demo === null
+      ? []
+      : [
+          demo['connected'] === true
+            ? `Delta testnet prices: ${demoTokens} contracts`
+            : `Delta testnet price socket DOWN for ${Math.round(demoDown / 1000)}s — demo books fall back to production prices`,
+        ]),
   ]
   return component(
     {
@@ -379,6 +400,7 @@ function marketdata(deps: ApiDeps, nowMs: number): SystemComponent {
         sessionOpen: session,
         ...(showStale ? { staleTokens, oldestAgeMs } : {}),
         ...(onDx ? { btcIndex: index?.price ?? null, btcIndexAgeMs: indexAgeMs } : {}),
+        ...(demo === null ? {} : { demo }),
       },
     },
     nowMs,

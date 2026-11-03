@@ -65,6 +65,38 @@ export function railUsedOf(v: unknown): PaperRail | null {
   return v === 'sim' || v === 'demo' ? v : null
 }
 
+/**
+ * WHOSE PRICES MARK A BOOK: the exchange its position lives on.
+ *
+ * `demo` — Delta's India testnet — for a paper book whose orders are worked
+ * there: the rail the gateway last USED when it has used one (a holding book
+ * stays where it is, and a demo setting with no demo key was simulated), else
+ * the setting (a book about to enter on demo). `prod` — the production feed —
+ * for everything else: sim-rail paper books and every live book.
+ *
+ * The desk's P&L for a demo book must match Delta's demo UPNL, and the demo
+ * account is marked at testnet prices (P-BTC-77000-131126: 1808.5 demo
+ * against 1783.5 production, 3 Nov).
+ */
+export type MarksVenue = 'demo' | 'prod'
+
+export function marksVenueOf(row: {
+  readonly mode: DeskMode | string
+  readonly dx_paper_rail: PaperRail
+  readonly dx_rail_used: PaperRail | null
+}): MarksVenue {
+  if (row.mode !== 'paper') return 'prod'
+  return (row.dx_rail_used ?? row.dx_paper_rail) === 'demo' ? 'demo' : 'prod'
+}
+
+/**
+ * The bus topic Delta-testnet ticks travel on: `md.tick`'s payload exactly,
+ * keyed by the DESK's instrument token (the production product id, matched by
+ * symbol — testnet product ids differ). A separate topic, so no `md.tick`
+ * consumer (bus patterns match whole segments) can ever read a demo price.
+ */
+export const DEMO_TICK_TOPIC = 'md.tick.demo'
+
 export interface BookRow {
   /** The book's key, and the order-bus tag every decision on it arrives under. */
   readonly tag: string

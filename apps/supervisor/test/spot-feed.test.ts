@@ -438,9 +438,9 @@ async function bothBooks(): Promise<Rig> {
 
 // ───────────────────────────────────────────────────────────────── tests
 
-test('the process subscribes to md.spot as well as md.tick', async () => {
+test('the process subscribes to md.spot as well as md.tick (and md.tick.demo)', async () => {
   const r = await bothBooks()
-  assert.deepEqual([...r.bus.handlers.keys()].sort(), ['md.spot', 'md.tick'])
+  assert.deepEqual([...r.bus.handlers.keys()].sort(), ['md.spot', 'md.tick', 'md.tick.demo'])
 })
 
 test('spot ticks land in the ring under the CANONICAL symbol', async () => {

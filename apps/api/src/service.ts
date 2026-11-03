@@ -60,6 +60,8 @@ import type { MarketableConfig } from './marketable.ts'
 // the realised figure below and the card can never disagree about the window.
 import { lookbackDaysOf, type LegQuote } from './pnl-jobs.ts'
 import type { ExitQuote, ExitSide } from './marks.ts'
+import type { MarksVenue } from './books-registry.ts'
+import { marksSourceOf, type MarksSource } from './demo-marks.ts'
 import { PnlStore, pnlKey } from './pnlstore.ts'
 import { feeOf } from './rollup.ts'
 import { paperFillEvent, routedCollection, withOrderContext, type OrderRail, railFor } from './rail.ts'
@@ -238,6 +240,13 @@ export interface PositionsResponse {
    */
   readonly quotes?: Readonly<Record<string, LegQuote>>
   /**
+   * Which feed valued the legs: `delta-demo` (Delta testnet) for a demo-rail
+   * paper book, `delta` otherwise. Absent when venue routing is not wired.
+   */
+  readonly marksSource?: MarksSource
+  /** Demo-marked legs valued at PRODUCTION for want of a testnet quote — incomplete, and shown so. */
+  readonly marksFallback?: readonly string[]
+  /**
    * WHAT THE STRATEGY IS ACTUALLY STEERING BY, when that is not the whole book.
    *
    * Under `delta_shorts_only` / `gamma_shorts_only` — set on every live
@@ -317,6 +326,14 @@ export interface BridgeDeps {
   readonly displayExitQuotes?: (token: number, exit: ExitSide | null) => ExitQuote | null
   /** Spot for display, falling back to the snapshot. Never used to fill. */
   readonly displaySpot?: (underlying: string, token: number | null) => number | null
+  /**
+   * `displayExitQuotes` off the Delta TESTNET cache (`md.tick.demo`), for a
+   * book `marksVenue` calls `demo`. A leg it cannot answer is valued at
+   * production and named in `marksFallback`.
+   */
+  readonly demoDisplayExitQuotes?: (token: number, exit: ExitSide | null) => ExitQuote | null
+  /** Which feed marks a book (`RailIndex.venueOf`). Absent: production for all. */
+  readonly marksVenue?: (tag: string, mode: DeskMode) => MarksVenue
   /**
    * Told about fills the moment they are journalled, so the in-memory book
    * (`livebook.ts`) does not have to wait for its 60s reconcile to see them.
@@ -1689,7 +1706,25 @@ export class BridgeService {
      * an unpriced leg always has. Absent seam (tests with `StaticMarks`) keeps
      * the old display/price chain.
      */
-    const exitQuotes = this.#d.displayExitQuotes
+    const prodExit = this.#d.displayExitQuotes
+    const venue = this.#d.marksVenue?.(tag, mode)
+    const demoExit = venue === 'demo' ? this.#d.demoDisplayExitQuotes : undefined
+    const marksFallback: string[] = []
+    /**
+     * A DEMO book's legs off the testnet first; a leg it has not quoted is
+     * valued at production and named — the page says "incomplete", never
+     * passes production off as the demo account's price.
+     */
+    const exitQuotes =
+      prodExit === undefined || demoExit === undefined
+        ? prodExit
+        : (token: number, exit: ExitSide | null, symbol?: string): ExitQuote | null => {
+            const d = demoExit(token, exit)
+            if (d !== null) return d
+            const p = prodExit(token, exit)
+            if (p !== null && symbol !== undefined) marksFallback.push(symbol)
+            return p
+          }
     const quotes: Record<string, LegQuote> = {}
     let anyStale = false
     let asOf: number | null = null
@@ -1697,7 +1732,7 @@ export class BridgeService {
       const token = l.instrument.instrumentToken
       const exit: ExitSide = l.qty > 0 ? 'Sell' : 'Buy'
       const eq: ExitQuote | null =
-        exitQuotes !== undefined && token !== undefined ? exitQuotes(token, exit) : null
+        exitQuotes !== undefined && token !== undefined ? exitQuotes(token, exit, l.instrument.tradingsymbol) : null
       const dm =
         exitQuotes === undefined && display !== undefined && token !== undefined ? display(token) : null
       const mark = exitQuotes !== undefined ? (eq?.price ?? null) : (dm?.price ?? this.#d.marks.price(l.instrument))
@@ -1846,6 +1881,7 @@ export class BridgeService {
       // The pair each leg was valued off — only when the exit-side seam is
       // wired, so a StaticMarks test response looks exactly as it always did.
       ...(exitQuotes !== undefined ? { quotes } : {}),
+      ...(venue === undefined ? {} : { marksSource: marksSourceOf(venue), marksFallback }),
       /** True only when EVERY leg priced — market or model. The dashboard
        *  must not show a net delta as authoritative when it is MISSING legs;
        *  a model-priced leg is included (and named in `fallbackPriced`), so it

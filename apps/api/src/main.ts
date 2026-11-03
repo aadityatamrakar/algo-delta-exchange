@@ -21,6 +21,8 @@ import { BridgeService, type MasterProvider, type RiskGatePort } from './service
 import { LiveRail, PaperRail } from './rail.ts'
 import { WsTransportClient } from '@algomaker/bus'
 import { QuoteCache } from './marks.ts'
+import { RailIndex } from './demo-marks.ts'
+import { DEMO_TICK_TOPIC } from './books-registry.ts'
 import { createBridgeServer } from './server.ts'
 import { DeskStream } from './stream.ts'
 import { LiveBook } from './livebook.ts'
@@ -319,7 +321,21 @@ export async function main(): Promise<void> {
    * `ApiDeps` bag, which takes the service.
    */
   let liveBook: LiveBook | null = null
-  bus.subscribe<{
+  /**
+   * DELTA TESTNET QUOTES (`md.tick.demo`) — demo-rail paper books are filled
+   * there, so they are marked there (`demo-marks.ts`). Their own cache: a demo
+   * price can never reach a production book, an order price or `desk-marks`.
+   * `rails` says which books are demo-marked, refreshed from the registry.
+   */
+  const onDx = API_VENUE.id === 'dx'
+  const demoMarks = onDx
+    ? new QuoteCache({
+        feedDeadAfterMs: Number(process.env['DESK_FEED_DEAD_AFTER_MS'] ?? 120_000),
+        staleAfterMs: Number(process.env['DESK_MARK_STALE_AFTER_MS'] ?? 60_000),
+      })
+    : null
+  const rails = new RailIndex()
+  type TickPayload = {
     token: number
     price: number
     ts: number
@@ -337,9 +353,9 @@ export async function main(): Promise<void> {
     gamma?: number
     theta?: number
     vega?: number
-  }>('md.tick', (m) => {
-    const p = m.payload
-    marks.update(p.token, p.price, p.ts, {
+  }
+  const onTick = (cache: QuoteCache, p: TickPayload): void => {
+    cache.update(p.token, p.price, p.ts, {
       oi: p.oi,
       volume: p.volume,
       bid: p.bid,
@@ -367,11 +383,26 @@ export async function main(): Promise<void> {
      * feature is not allowed to cost that.
      */
     try {
-      liveBook?.onTick(m.payload.token)
+      liveBook?.onTick(p.token)
     } catch (err) {
       log('live book tick failed — marks are unaffected', { error: String(err) })
     }
-  })
+  }
+  bus.subscribe<TickPayload>('md.tick', (m) => onTick(marks, m.payload))
+  if (demoMarks !== null) {
+    bus.subscribe<TickPayload>(DEMO_TICK_TOPIC, (m) => onTick(demoMarks, m.payload))
+    const refreshRails = async (): Promise<void> => {
+      try {
+        rails.set([...(await store.listBooks('paper')), ...(await store.listBooks('live'))])
+      } catch (err) {
+        log('rail index refresh failed — keeping the last one', { error: String(err) })
+      }
+    }
+    await refreshRails()
+    log('demo-rail marks wired', { demoBooks: rails.demoCount })
+    const railTimer = setInterval(() => void refreshRails(), Number(process.env['DESK_RAIL_INDEX_MS'] ?? 15_000))
+    railTimer.unref()
+  }
   bus.subscribe<{ underlying: string; price: number; ts: number }>('md.spot', (m) => {
     marks.updateSpot(m.payload.underlying, m.payload.price)
   })
@@ -662,6 +693,12 @@ export async function main(): Promise<void> {
     displayMarks: (token) => marks.displayMark(token),
     displayExitQuotes: (token, exit) => marks.displayExitQuote(token, exit),
     displaySpot: (underlying, token) => marks.displaySpot(underlying, token),
+    ...(demoMarks === null
+      ? {}
+      : {
+          demoDisplayExitQuotes: (token, exit) => demoMarks.displayExitQuote(token, exit),
+          marksVenue: (tag, mode) => rails.venueOf(tag, mode),
+        }),
     // Fills reach the in-memory book the moment they are journalled, so a
     // position appears on screen without waiting for the 60s reconcile. Reads
     // `liveBook` through the closure because the book does not exist yet.
@@ -718,6 +755,9 @@ export async function main(): Promise<void> {
     ...(riskGate === undefined ? {} : { risk: riskGate }),
     master: masterProvider,
     marks,
+    ...(demoMarks === null
+      ? {}
+      : { demoMarks, marksVenue: (tag: string, mode: string) => rails.venueOf(tag, mode) }),
     feedState,
     feedHealth,
     busConnected: () => bus.connected,

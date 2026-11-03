@@ -170,6 +170,9 @@ export interface PnlRowDelta {
   total?: number | null
   complete?: boolean
   unpriced?: string[]
+  /** The row's price source and production-price fallback, when they moved. */
+  marksSource?: PnlStrategy['marksSource']
+  marksFallback?: string[]
   /** Only the legs that moved. */
   legs?: PnlLegDelta[]
 }
@@ -378,6 +381,8 @@ export function mergeRow(base: PnlStrategy, d: PnlRowDelta): PnlStrategy {
   if (has(d, 'total')) out.total = d.total ?? null
   if (has(d, 'complete')) out.complete = d.complete === true
   if (has(d, 'unpriced')) out.unpriced = [...(d.unpriced ?? [])]
+  if (has(d, 'marksSource') && d.marksSource !== undefined) out.marksSource = d.marksSource
+  if (has(d, 'marksFallback')) out.marksFallback = [...(d.marksFallback ?? [])]
   const legs = d.legs
   if (legs !== undefined && legs.length > 0) {
     const byName = new Map(legs.map((l) => [l.tradingsymbol, l]))

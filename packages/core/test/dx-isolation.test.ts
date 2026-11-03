@@ -77,7 +77,7 @@ const RULES: readonly { readonly what: string; readonly re: RegExp }[] = [
   { what: 'the live desk database by name', re: /(?:getSiblingDB|\.db)\(\s*['"`]algomaker(?!_dx)[\w-]*['"`]/g },
   { what: "the live pm2 namespace 'desk'", re: /\bnamespace\s*:\s*['"`]desk['"`]/g },
   { what: 'the live pm2 namespace on a pm2 command line', re: new RegExp(`\\bpm2\\)?\\s+${PM2_VERB}\\s+(?:--?\\S+\\s+)*desk(?![-\\w.])`, 'gi') },
-  { what: 'a live pm2 app name', re: new RegExp(`\\b(?:name|app)\\s*(?::|\\(|===?)\\s*['"\`]desk-${APPS}\\b`, 'g') },
+  { what: 'a live pm2 app name', re: new RegExp(`\\b(?:name|app)\\s*(?::|\\(|===?)\\s*['"\`]desk-${APPS}['"\`]`, 'g') }, // closing quote: a collection like 'desk-gateway-heartbeat' is not an app name
   { what: 'a live pm2 app name on a pm2 command line', re: new RegExp(`\\bpm2\\)?\\s+${PM2_VERB}\\s+(?:--?\\S+\\s+)*desk-${APPS}\\b`, 'gi') },
   { what: 'a live pm2 app name after --only', re: new RegExp(`--only\\s+desk-${APPS}\\b`, 'g') },
   { what: 'a filter on the live pm2 app prefix', re: /startsWith\(\s*['"`]desk-['"`]\s*\)/g },
