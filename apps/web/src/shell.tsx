@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ago, explain } from './api.ts'
+import { VENUE, type VenueSpec } from './venue.ts'
 
 /**
  * `login` IS NOT A ROUTE. The gate owns `#/login` and renders the login page
@@ -29,7 +30,7 @@ import { ago, explain } from './api.ts'
  */
 export type Route =
   | 'positions' | 'strategies' | 'books'
-  | 'reports' | 'broker' | 'status' | 'controls' | 'build'
+  | 'reports' | 'broker' | 'status' | 'controls' | 'build' | 'chain'
 
 /**
  * NO ROUTE CARRIES A MODE ANY MORE.
@@ -66,6 +67,8 @@ export const ROUTES: readonly { id: Route; label: string; hash: string; nav?: fa
    * a different one, for every bookmark and every link.
    */
   { id: 'build', label: 'Build', hash: '#/build', nav: false },
+  /** The option chain: per strike CE | strike | PE, live. Read-only. */
+  { id: 'chain', label: 'Option chain', hash: '#/chain' },
   { id: 'reports', label: 'Reports', hash: '#/reports' },
   /**
    * WAS PRECEDED BY 'Orders', which is gone (2026-08-16).
@@ -132,8 +135,24 @@ const ROUTE_IDS: readonly Route[] = ROUTES.map((r) => r.id)
  * `nav: false` says only that the header does not offer it, because something
  * else does — the Books page's "Build a book" button, for `#/build`.
  */
-export const NAV_ROUTES: readonly { id: Route; label: string; hash: string }[] =
-  ROUTES.filter((r) => r.nav !== false)
+export function navRoutesFor(venue: VenueSpec): readonly { id: Route; label: string; hash: string }[] {
+  const hidden = venue.id === 'dx' ? DX_HIDDEN : NSE_HIDDEN
+  return ROUTES.filter((r) => r.nav !== false && !hidden.has(r.id))
+}
+
+/**
+ * Tabs one venue's build does not offer. The routes themselves still resolve,
+ * so a bookmark lands on a page rather than nowhere.
+ *
+ *  - DX: `broker` is the NSE broker's own order book (XTS/Kite) read against
+ *    ours — there is no such page for Delta.
+ *  - NSE: `chain` is the DX build's option-chain page (BTC); the NSE desk
+ *    reads its chains on Build and in the Manual Order dialog, unchanged.
+ */
+const DX_HIDDEN: ReadonlySet<Route> = new Set<Route>(['broker'])
+const NSE_HIDDEN: ReadonlySet<Route> = new Set<Route>(['chain'])
+
+export const NAV_ROUTES: readonly { id: Route; label: string; hash: string }[] = navRoutesFor(VENUE)
 
 /**
  * Hashes from the split-page era, mapped forward.

@@ -64,6 +64,8 @@ import {
 } from './api.ts'
 import { BULK_LIVE_STATEMENT, dayGuardStatement, liveStatement } from './live-copy.ts'
 import { formatContract, parseContract } from './contract.ts'
+import { cash, currencySymbol } from './format.ts'
+import { VENUE } from './venue.ts'
 import { PHONE, usePoll, useMedia } from './shell.tsx'
 import { ModeBadge } from './mode.tsx'
 import { useReauth, withReauth, type Reauth } from './auth.tsx'
@@ -175,8 +177,10 @@ function guardCompact(n: number): string {
   if (typeof n !== 'number' || !Number.isFinite(n)) return '—'
   const trim = (v: number): string => String(Math.round(v * 10) / 10)
   const a = Math.abs(n)
-  if (a >= 1e7) return `${trim(n / 1e7)}Cr`
-  if (a >= 1e5) return `${trim(n / 1e5)}L`
+  // Lakhs and crores are rupee units; a USD limit reads in k and M.
+  if (VENUE.currency === 'USD' && a >= 1e6) return `${trim(n / 1e6)}M`
+  if (VENUE.currency === 'INR' && a >= 1e7) return `${trim(n / 1e7)}Cr`
+  if (VENUE.currency === 'INR' && a >= 1e5) return `${trim(n / 1e5)}L`
   if (a >= 1_000) return `${trim(n / 1_000)}k`
   return trim(n)
 }
@@ -208,7 +212,7 @@ export function guardBadgeLabel(fired: DayGuardFired): string {
   // Written out rather than `signed()`, which formats a plain number: this
   // sentence is read on its own with no column header above it saying rupees,
   // and the sign is the half that decides whether it is a good day or a bad one.
-  const money = `${n < 0 ? '-' : '+'}₹${inr(Math.abs(n))}`
+  const money = `${n < 0 ? '-' : '+'}${cash(Math.abs(n))}`
   return `guard: ${fired.trigger} hit ${money} at ${at} — stopped for the day`
 }
 
@@ -675,7 +679,7 @@ function SettingsDialog(props: {
               */}
               <Heading level={4}>Day guard</Heading>
               <NumberInput
-                label="Daily target (₹)"
+                label={`Daily target (${currencySymbol()})`}
                 value={target}
                 onChange={setTarget}
                 min={0}
@@ -683,14 +687,14 @@ function SettingsDialog(props: {
                 description="Switches this strategy off for the day once it has made this much. 0 or blank means no target."
               />
               <NumberInput
-                label="Daily stop-loss (₹)"
+                label={`Daily stop-loss (${currencySymbol()})`}
                 value={stop}
                 onChange={setStop}
                 min={0}
                 isIntegerOnly
                 // POSITIVE. A signed field is a control that can be armed
                 // backwards, and nothing on the page would look wrong.
-                description="A POSITIVE number: 3000 stops this strategy for the day at a ₹3,000 loss. 0 or blank means no stop."
+                description={`A POSITIVE number: 3000 stops this strategy for the day at a ${cash(3000)} loss. 0 or blank means no stop.`}
               />
               <Text color="secondary" size="sm">
                 Both limits apply to each rail separately, on today's P&L. Paper comes back
