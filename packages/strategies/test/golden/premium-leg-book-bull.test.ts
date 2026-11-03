@@ -1,12 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import path from 'node:path'
-import { runLegacyShadow, type RecordedLegacyOrder } from '@algomaker/legacy-shadow-runner'
 import { makeTestContext, replay, diffIntents, type ReplayTick, type RecordedOrder } from '@algomaker/strategy-kit'
 import { PremiumLegBookStrategy } from '../../src/premium-leg-book/strategy.ts'
 import { BULL_S_1 } from '../../src/premium-leg-book/configs/bull-s.ts'
 
-const SLIVE = path.join(import.meta.dirname, '..', '..', '..', '..', 'archive', 'server', 'slive')
+/**
+ * THE TAPE. Each golden day below is a fixed tick sequence, and `LEGACY_*` is the order sequence the
+ * legacy `archive/server/slive/bull-s-1.js` emitted for it, recorded on 3 Nov 2026 just before the
+ * archive was deleted (it ran unmodified under the legacy shadow runner). The ported strategy must
+ * still emit exactly that sequence. This file is the parity reference for the BULL-S decide path.
+ */
 
 const FUT = { tradingsymbol: 'BANKNIFTY-FUT', instrumentToken: 999001, lotSize: 35, tickSize: 0.05, exchange: 'NFO' }
 const CE = { tradingsymbol: 'BANKNIFTY50000CE', instrumentToken: 999002, lotSize: 35, tickSize: 0.05, exchange: 'NFO' }
@@ -15,32 +18,23 @@ const CE2 = { tradingsymbol: 'BANKNIFTY50100CE', instrumentToken: 999004, lotSiz
 // bull-s-1.js's sendOrder() always computes `ce_s = atm + farOtm` AND `pe_s = atm - farOtm` off the
 // SAME atm, with farOtm=0 (D7 — otmSelector faked to 0), so a group's CE and PE legs always share
 // the SAME strike as the atm that opened them. For a second group at atm=50100, that leg is
-// 50100PE, not 49900PE — this fixture must match that or the legacy run throws on an undefined
-// `currentExpiryOptions['50100PE']` lookup.
+// 50100PE, not 49900PE — the recorded tape below has it so (the legacy run threw on an undefined
+// `currentExpiryOptions['50100PE']` lookup otherwise).
 const PE2 = { tradingsymbol: 'BANKNIFTY50100PE', instrumentToken: 999005, lotSize: 35, tickSize: 0.05, exchange: 'NFO' }
 
-const OPTIONS_FIXTURE = {
-  '50000CE': { instrument_token: CE.instrumentToken, tradingsymbol: CE.tradingsymbol, strike: 50000, lot_size: 35 },
-  '50000PE': { instrument_token: PE.instrumentToken, tradingsymbol: PE.tradingsymbol, strike: 50000, lot_size: 35 },
-  '50100CE': { instrument_token: CE2.instrumentToken, tradingsymbol: CE2.tradingsymbol, strike: 50100, lot_size: 35 },
-  '50100PE': { instrument_token: PE2.instrumentToken, tradingsymbol: PE2.tradingsymbol, strike: 50100, lot_size: 35 },
-};
+const LEGACY_DAY_1: readonly RecordedOrder[] = [
+  { symbol: 'BANKNIFTY50000CE', side: 'SELL', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000PE', side: 'SELL', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000PE', side: 'BUY', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000CE', side: 'BUY', lots: 1, orderType: 'MARKET' },
+]
 
-function toRecorded(legacy: readonly RecordedLegacyOrder[]): RecordedOrder[] {
-  return legacy.map((o) => ({ symbol: o.tradingsymbol, side: o.side, lots: o.lots, orderType: 'MARKET' }))
-}
-
-async function runLegacySide(ticks: { instrument_token: number; last_price: number }[][]): Promise<RecordedOrder[]> {
-  const run = await runLegacyShadow({
-    legacyFile: path.join(SLIVE, 'bull-s-1.js'),
-    futureToken: FUT.instrumentToken,
-    currentExpiryOptions: OPTIONS_FIXTURE,
-    nowMs: Date.UTC(2026, 6, 24, 3, 46, 0),
-  })
-  for (const batch of ticks) await run.tick(batch)
-  run.stop()
-  return toRecorded(run.orders)
-}
+const LEGACY_DAY_3: readonly RecordedOrder[] = [
+  { symbol: 'BANKNIFTY50000CE', side: 'SELL', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000PE', side: 'SELL', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50100CE', side: 'SELL', lots: 2, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50100PE', side: 'SELL', lots: 2, orderType: 'MARKET' },
+]
 
 async function runPortedSide(ticks: ReplayTick[], seedQuotes: { token: number; lastPrice: number }[] = []): Promise<RecordedOrder[]> {
   const parts = makeTestContext({ nowMs: Date.UTC(2026, 6, 24, 3, 46, 0) })
@@ -56,12 +50,8 @@ async function runPortedSide(ticks: ReplayTick[], seedQuotes: { token: number; l
   return [...res.orders]
 }
 
-test('golden day 1 — entry + combined-stop: legacy and ported emit the SAME order sequence', async () => {
-  const legacyOrders = await runLegacySide([
-    [{ instrument_token: FUT.instrumentToken, last_price: 50000 }, { instrument_token: CE.instrumentToken, last_price: 100 }, { instrument_token: PE.instrumentToken, last_price: 100 }],
-    [{ instrument_token: CE.instrumentToken, last_price: 130 }, { instrument_token: PE.instrumentToken, last_price: 120 }], // combined 250 = (100+100)*1.25 -> stop fires
-  ])
-  assert.ok(legacyOrders.length > 0, 'sanity: legacy side must not be vacuously empty')
+test('golden day 1 — entry + combined-stop: the ported strategy emits the recorded legacy order sequence', async () => {
+  const legacyOrders = LEGACY_DAY_1
 
   const portedOrders = await runPortedSide(
     [
@@ -80,9 +70,7 @@ test('golden day 1 — entry + combined-stop: legacy and ported emit the SAME or
 })
 
 test('golden day 2 — flat day, no crossover, no trigger: legacy and ported both emit ZERO orders', async () => {
-  const legacyOrders = await runLegacySide([
-    [{ instrument_token: FUT.instrumentToken, last_price: 0 }], // last_price 0: no real tick yet, no crossover math possible
-  ])
+  const legacyOrders: RecordedOrder[] = [] // legacy saw only a last_price 0 tick: no crossover math, no orders
   const portedOrders = await runPortedSide([])
   const diff = diffIntents(legacyOrders, portedOrders)
   assert.equal(diff.match, true, diff.differences.join('\n'))
@@ -90,11 +78,7 @@ test('golden day 2 — flat day, no crossover, no trigger: legacy and ported bot
 })
 
 test('golden day 3 — D9 pyramid: TWO re-adds, size grows 1 -> 2 -> 3, UNCAPPED, diff still clean', async () => {
-  const legacyOrders = await runLegacySide([
-    [{ instrument_token: FUT.instrumentToken, last_price: 50000 }, { instrument_token: CE.instrumentToken, last_price: 100 }, { instrument_token: PE.instrumentToken, last_price: 100 }], // group 1 @ 50000, size 1
-    [{ instrument_token: FUT.instrumentToken, last_price: 50100 }, { instrument_token: CE2.instrumentToken, last_price: 90 }, { instrument_token: PE2.instrumentToken, last_price: 90 }], // group 2 @ 50100, size 2
-  ])
-  assert.ok(legacyOrders.length > 0, 'sanity: legacy side must not be vacuously empty')
+  const legacyOrders = LEGACY_DAY_3
   const portedOrders = await runPortedSide(
     [
       { ts: 0, quote: { token: FUT.instrumentToken, lastPrice: 50000, ts: 0 } },

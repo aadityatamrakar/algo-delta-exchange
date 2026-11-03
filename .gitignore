@@ -65,7 +65,7 @@ apps/web/dist/
 *.tsbuildinfo
 .claude/
 
-# Written into the repo root by legacy archive/server tools (seen 2026-09-15).
+# Written into the repo root by the retired legacy server tools (seen 2026-09-15).
 # Nothing live reads them; they are scratch output, never source.
 optionConfig_*.json
 cancelledOrders.json

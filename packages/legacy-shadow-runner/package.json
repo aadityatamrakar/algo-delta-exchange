@@ -1,9 +1,0 @@
-{
-  "name": "@algomaker/legacy-shadow-runner",
-  "version": "1.0.0",
-  "description": "Drives an UNMODIFIED server/slive/*.js legacy strategy file under a mocked clock with an intercepted Kite feed, capturing every order it would place. Used only for Phase C golden-master verification of the 7 no-logic-split legacy files.",
-  "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "node --test test/*.test.ts" },
-  "engines": { "node": ">=22" }
-}

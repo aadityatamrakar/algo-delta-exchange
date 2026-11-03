@@ -1,70 +1,34 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import path from 'node:path'
-import { runLegacyShadow, type RecordedLegacyOrder } from '@algomaker/legacy-shadow-runner'
 import { makeTestContext, replay, diffIntents, type ReplayTick, type RecordedOrder } from '@algomaker/strategy-kit'
 import { PremiumLegBookStrategy } from '../../src/premium-leg-book/strategy.ts'
 import { LION_S25_2 } from '../../src/premium-leg-book/configs/lion-s25.ts'
 
-const SLIVE = path.join(import.meta.dirname, '..', '..', '..', '..', 'archive', 'server', 'slive')
+/**
+ * The order sequence the legacy `archive/server/slive/lion-s25-2.js` emitted for the golden day below
+ * (entry batch FUT 50010 / CE 100 / PE 100, its 5 s + 5 s bootstrap, then CE 130, then PE 130),
+ * recorded on 3 Nov 2026 just before the archive was deleted. The ported strategy must still match it.
+ */
+const LEGACY_GOLDEN_DAY: readonly RecordedOrder[] = [
+  { symbol: 'BANKNIFTY50000CE', side: 'SELL', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000PE', side: 'SELL', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000CE', side: 'BUY', lots: 1, orderType: 'MARKET' },
+  { symbol: 'BANKNIFTY50000PE', side: 'BUY', lots: 1, orderType: 'MARKET' },
+]
 
 const FUT = { tradingsymbol: 'BANKNIFTY-FUT', instrumentToken: 999001, lotSize: 35, tickSize: 0.05, exchange: 'NFO' }
 const CE = { tradingsymbol: 'BANKNIFTY50000CE', instrumentToken: 999002, lotSize: 35, tickSize: 0.05, exchange: 'NFO' }
 const PE = { tradingsymbol: 'BANKNIFTY50000PE', instrumentToken: 999003, lotSize: 35, tickSize: 0.05, exchange: 'NFO' }
 
-const OPTIONS_FIXTURE = {
-  '50000CE': { instrument_token: CE.instrumentToken, tradingsymbol: CE.tradingsymbol, strike: 50000, lot_size: 35 },
-  '50000PE': { instrument_token: PE.instrumentToken, tradingsymbol: PE.tradingsymbol, strike: 50000, lot_size: 35 },
-};
-
-function toRecorded(legacy: readonly RecordedLegacyOrder[]): RecordedOrder[] {
-  return legacy.map((o) => ({ symbol: o.tradingsymbol, side: o.side, lots: o.lots, orderType: 'MARKET' }))
-}
-
 test('golden day — ONLY the stopped leg exits, the other stays open (per-leg, not combined)', async () => {
-  const run = await runLegacyShadow({
-    legacyFile: path.join(SLIVE, 'lion-s25-2.js'),
-    futureToken: FUT.instrumentToken,
-    currentExpiryOptions: OPTIONS_FIXTURE,
-    nowMs: Date.UTC(2026, 6, 24, 3, 46, 0),
-  })
-  // Seed ticksCache with the entry batch BEFORE advancing the bootstrap timers: the nested
-  // setTimeout at t=10s calls `placeTrade(true)` directly (a FORCED entry, not gated on a
-  // subsequent tick) and reads ce_ltp/pe_ltp straight out of ticksCache at that instant — so the
-  // entry premiums must already be there, or lion-s25-2.js throws on an undefined lookup at t=5s
-  // reading `ticksCache[futureToken].last_price` before any tick has ever arrived.
-  // 50010, not 50000: landing EXACTLY on the strike grid makes lastQuote === new_ATM_Strike
-  // after entry, and lion-s25-2.js's isCrossover check (`>=` AND `<=` against the SAME grid
-  // value) then re-fires on EVERY later tick regardless of token — including the CE/PE ticks
-  // below — triggering an unrelated RE-ENTRY cascade (a real legacy quirk, but a separate one
-  // from C3 — see I5) that would conflate two different findings into one fixture. Landing a
-  // few points off the grid keeps the crossover a one-time event, as it is on every other
-  // golden day in this suite, isolating C3's actual bug: the orphaned surviving leg.
-  await run.tick([
-    { instrument_token: FUT.instrumentToken, last_price: 50010 },
-    { instrument_token: CE.instrumentToken, last_price: 100 },
-    { instrument_token: PE.instrumentToken, last_price: 100 },
-  ])
-  await run.advance(11_000) // lion-s25-2.js's own 5s+5s bootstrap sequence; startTrade=true, forced entry fires
-  // CE alone crosses its OWN 1.25x trigger (125); PE stays well under its trigger.
-  await run.tick([{ instrument_token: CE.instrumentToken, last_price: 130 }])
-  // C3: extend PAST the point where CE alone has stopped, to where PE's OWN trigger (125)
-  // is ALSO crossed. Legacy keeps CE and PE as two fully independent optionOrders entries
-  // (lion-s25-2.js:143-160) — CE stopping never touches PE's own forEach entry, so PE's
-  // stop fires on its own BUY here regardless of CE's fate. The shipped fixture stopped
-  // exactly one tick short of this, at the point where C3's bug (one leg's stop marking the
-  // WHOLE group closed) was invisible because nothing else was ever checked afterward.
-  await run.tick([{ instrument_token: PE.instrumentToken, last_price: 130 }])
-  run.stop()
-  const legacyOrders = toRecorded(run.orders)
-  assert.ok(legacyOrders.length > 0, 'sanity: legacy side must not be vacuously empty')
+  const legacyOrders = LEGACY_GOLDEN_DAY
 
   const parts = makeTestContext({ nowMs: Date.UTC(2026, 6, 24, 3, 46, 0) })
   parts.md.setUnderlying('BANKNIFTY', 260105, 100)
   parts.md.setFuture('BANKNIFTY', FUT)
   parts.md.setOption('BANKNIFTY', 50000, 'CE', CE)
   parts.md.setOption('BANKNIFTY', 50000, 'PE', PE)
-  // legacy's forced entry reads CE=100/PE=100 out of ticksCache at bootstrap end (both seeded from
+  // legacy's forced entry read CE=100/PE=100 out of ticksCache at bootstrap end (both seeded from
   // the SAME batch above) — replay() delivers ticks one at a time, so both legs' quotes must be
   // seeded before the FUT crossover tick, or #openGroup bails out entirely (ceQ/peQ still null).
   parts.md.setQuote({ token: CE.instrumentToken, lastPrice: 100, ts: 0 })
