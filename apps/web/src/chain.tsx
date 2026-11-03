@@ -28,11 +28,11 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'rea
 import { Banner } from '@astryxdesign/core/Banner'
 import { api, type ChainRowWire, type ChainSide } from './api.ts'
 import { asOf, usePoll } from './shell.tsx'
-import { VENUE } from './venue.ts'
+import { DX, VENUE } from './venue.ts'
 import {
   atmIv, atmStraddle, atmStrike, expiryLabel, expiryPillLabel, daysToExpiry, formatCountdown,
   groupExpiries, heatStep, indexChange, isFar, itmSides, maxPain, oiWalls, putCallRatio, settlesAt,
-  spotLineIndex, wallRank, type OiWalls,
+  perContractText, spotLineIndex, unitsLine, wallRank, type OiWalls,
 } from './chain-model.ts'
 import { OiChart } from './chain-oi-chart.tsx'
 import './chain.css'
@@ -47,6 +47,13 @@ const EXPIRIES_POLL_MS = 60_000
 export const SPOT_STALE_MS = 10_000
 
 const LOCALE = VENUE.currency === 'USD' ? 'en-US' : 'en-IN'
+
+/**
+ * The chain page is Delta's BTC chain (it is hidden on the NSE build), so its
+ * units are Delta's: 0.001 BTC contracts, 85 INR per USD — from packages/venue,
+ * not from this build's VENUE, which a test or an NSE bundle would make NSE.
+ */
+const CHAIN_VENUE = VENUE.id === 'dx' ? VENUE : DX
 
 /** The muted mark for a figure the feed did not send. */
 export const MISSING = '·'
@@ -193,9 +200,15 @@ function SideCells(props: {
   strike: number
   view: SideView
   cols: readonly ColKey[]
+  contractSize: number
 }): React.ReactElement {
   const { side, itm, oiPct, heat, rank } = props.view
   const title = sideTitle(props.type, props.strike, side)
+  /** A price cell's hover leads with what one contract of it costs. */
+  const priceTitle = (v: number | null | undefined): string => {
+    const each = perContractText(v, props.contractSize, CHAIN_VENUE.inrPerUnit)
+    return each === null ? title : `${each}\n\n${title}`
+  }
   const sideCls = props.type === 'Call' ? 'chain-ce' : 'chain-pe'
   const quoted = side !== null && side !== undefined
   return (
@@ -210,7 +223,7 @@ function SideCells(props: {
             key={key}
             className={`chain-td ${sideCls} chain-c-${key}${itm ? ' chain-itm' : ''}${rank === null ? '' : ` chain-wall chain-wall-${rank}`}`}
             style={isHeat ? ({ '--heat': heat } as React.CSSProperties) : undefined}
-            title={title}
+            title={key === 'bid' || key === 'ask' || key === 'mark' ? priceTitle(value) : title}
             data-itm={itm ? 'true' : 'false'}
             data-heat={isHeat ? heat : undefined}
           >
@@ -266,6 +279,8 @@ interface RowProps {
   /** Highlighted from the OI chart (or from hovering this row). */
   readonly hot: boolean
   readonly onHot: (strike: number | null) => void
+  /** BTC per contract, for the per-contract cost on the price cells' hover. */
+  readonly contractSize: number
 }
 
 const ChainRow = memo(
@@ -279,14 +294,15 @@ const ChainRow = memo(
         onMouseEnter={() => props.onHot(props.strike)}
         onMouseLeave={() => props.onHot(null)}
       >
-        <SideCells type="Call" strike={props.strike} view={props.ce} cols={props.ceCols} />
+        <SideCells type="Call" strike={props.strike} view={props.ce} cols={props.ceCols} contractSize={props.contractSize} />
         <th scope="row" className="chain-strike">{upTo(props.strike, 2)}</th>
-        <SideCells type="Put" strike={props.strike} view={props.pe} cols={props.peCols} />
+        <SideCells type="Put" strike={props.strike} view={props.pe} cols={props.peCols} contractSize={props.contractSize} />
       </tr>
     )
   },
   (a, b) =>
     a.strike === b.strike && a.atm === b.atm && a.far === b.far && a.hot === b.hot && a.onHot === b.onHot
+    && a.contractSize === b.contractSize
     && a.ceCols === b.ceCols && a.peCols === b.peCols
     && sameView(a.ce, b.ce) && sameView(a.pe, b.pe),
 )
@@ -320,6 +336,8 @@ export function ChainTable(props: {
   /** The strike highlighted from the OI chart, and the setter both share. */
   hot?: number | null
   onHot?: (strike: number | null) => void
+  /** BTC per contract; the instrument master's lot size, else Delta's 0.001. */
+  contractSize?: number
 }): React.ReactElement {
   const { rows, spot } = props
   const ceCols = useMemo(() => callColumns(props.density, props.greeks), [props.density, props.greeks])
@@ -372,6 +390,7 @@ export function ChainTable(props: {
         peCols={peCols}
         hot={props.hot === r.strike}
         onHot={onHot}
+        contractSize={props.contractSize ?? CHAIN_VENUE.qtyStep}
       />,
     )
   })
@@ -618,6 +637,7 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
   const spot = data?.spot ?? null
   const walls = oiWalls(rows, spot)
   const pain = maxPain(rows)
+  const contractSize = typeof data?.lotSize === 'number' && data.lotSize > 0 ? data.lotSize : CHAIN_VENUE.qtyStep
 
   // The first index price seen on this page, for "change since opened".
   const openSpot = useRef<{ underlying: string; spot: number } | null>(null)
@@ -697,6 +717,7 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
           pain={pain}
         />
       ) : null}
+      {data !== null ? <p className="chain-units">{unitsLine(contractSize, CHAIN_VENUE.inrPerUnit)}</p> : null}
 
       {expiry !== null && data !== null && rows.length === 0 ? (
         <div className="chain-empty-state">
@@ -744,6 +765,7 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
           walls={walls}
           hot={hot}
           onHot={setHot}
+          contractSize={contractSize}
         />
       ) : null}
     </div>

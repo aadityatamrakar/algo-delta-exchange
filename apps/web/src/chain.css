@@ -278,6 +278,14 @@
   color: var(--color-text-primary);
 }
 
+/* The units line: quiet, directly under the header strip. */
+.chain-page .chain-units {
+  margin-block-start: calc(-1 * var(--spacing-2));
+  padding-inline: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
 /* ---------------------------------------------------------------- table */
 
 /**

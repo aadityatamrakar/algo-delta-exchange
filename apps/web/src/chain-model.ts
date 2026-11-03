@@ -281,3 +281,27 @@ export function compactNumber(v: number): string {
   if (a >= 1e3) return `${trim(v / 1e3)}K`
   return `${Math.round(v)}`
 }
+
+/**
+ * What one contract of a quote costs: the price is USD per 1 BTC, a contract
+ * is `contractSize` BTC (0.001 on Delta). `$0.10 per contract · ₹8.74` for a
+ * 102.81 mark at 85 INR/USD. The rupee figure is taken from the unrounded USD,
+ * so the two never disagree by a rounding step. Sub-cent amounts keep four
+ * decimals — "$0.00" would hide a real price.
+ */
+export function perContractText(price: number | null | undefined, contractSize: number, inrPerUsd: number): string | null {
+  if (!finite(price) || !(contractSize > 0)) return null
+  const usd = price * contractSize
+  const inr = usd * inrPerUsd
+  const money = (v: number, sym: string): string => {
+    const digits = Math.abs(v) > 0 && Math.abs(v) < 0.01 ? 4 : 2
+    return `${sym}${v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
+  }
+  return `${money(usd, '$')} per contract · ${money(inr, '₹')}`
+}
+
+/** The units line under the header strip. */
+export function unitsLine(contractSize: number, inrPerUsd: number): string {
+  const size = contractSize.toLocaleString('en-US', { maximumFractionDigits: 8 })
+  return `Prices in USD per 1 BTC · 1 contract = ${size} BTC · OI in contracts · ₹ at ${inrPerUsd}/USD`
+}
