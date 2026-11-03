@@ -241,5 +241,11 @@ module.exports = {
       },
       { max_memory_restart: '900M' },
     ),
+
+    /**
+     * ONE-PORT WEB FRONT: serves apps/web/dist and proxies /v1 (HTTP + websocket)
+     * to desk-api. No bus dependency; holds no credentials.
+     */
+    app('dx-web', 'bin/dx-web.mjs', { DESK_WEB_PORT: '5000' }),
   ],
 }
