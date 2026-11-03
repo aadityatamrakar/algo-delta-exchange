@@ -48,7 +48,7 @@ export function entrySequence(legs: readonly EntryLeg[]): readonly EntryLeg[] {
   return [...legs.filter((l) => sideOf(l) === 'Buy'), ...legs.filter((l) => sideOf(l) === 'Sell')]
 }
 
-/** The venue's options tick (NFO 0.05, Delta 0.1); matches the server's `marketable.ts` default. */
+/** The venue's options tick (Delta 0.1); matches the server's `marketable.ts` default. */
 const DEFAULT_TICK = VENUE.defaultTick
 
 /**

@@ -28,11 +28,6 @@ export function lotsOf(qty: number, lotSize: number): number {
   return Math.abs(r - n) < 1e-9 * Math.max(1, Math.abs(n)) ? n : r
 }
 
-/** The exchange segment an order names: NFO on NSE, DELTA on DX. */
-export function exchangeOf(venue: VenueSpec): string {
-  return venue.id === 'dx' ? 'DELTA' : 'NFO'
-}
-
 /**
  * This build's venue. The env is passed EXPLICITLY: the package's default is
  * `process.env`, which a browser does not have. `import.meta.env` is vite's;

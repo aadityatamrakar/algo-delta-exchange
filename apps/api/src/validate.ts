@@ -84,7 +84,7 @@ export function aggressionPctError(raw: unknown): string | null {
   if (raw < 0 || raw > MAX_AGGRESSION_PCT) {
     return (
       `aggressionPct ${raw} is outside [0, ${MAX_AGGRESSION_PCT}] — it is a FRACTION of the mark, ` +
-      `so 2% is 0.02. At ${raw} a ₹40 short would be bought back at ₹${(40 * (1 + raw)).toFixed(2)}.`
+      `so 2% is 0.02. At ${raw} a $40 short would be bought back at $${(40 * (1 + raw)).toFixed(2)}.`
     )
   }
   return null

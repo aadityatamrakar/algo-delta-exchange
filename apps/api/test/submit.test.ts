@@ -583,19 +583,19 @@ test('a RELEASED broker link refuses a LIVE order — the exit too — and never
 
   const entry = await svc.submit(req({ mode: 'live', clientOrderId: 'coid-live-entry' }))
   assert.equal(entry.accepted, false)
-  assert.match(entry.reason, /^broker link:/)
+  assert.match(entry.reason, /^live execution paused/)
   assert.match(entry.reason, /key needed elsewhere/)
-  assert.match(entry.reason, /reconnected from Controls/)
+  assert.match(entry.reason, /resumed from Controls/)
 
   const exit = await svc.submit(
     req({ mode: 'live', clientOrderId: 'coid-live-exit', side: 'Sell', reducesExposure: true }),
   )
   assert.equal(exit.accepted, false, 'an exit cannot be placed by a logged-out gateway either')
-  assert.match(exit.reason, /^broker link:/)
+  assert.match(exit.reason, /^live execution paused/)
   assert.equal(live.routed.length, 0)
 
   // The refusal is journalled like every other gate's, under the live rail.
-  const blocked = store.docs('desk-order-events').filter((e) => /broker link/.test(String(e['error'] ?? e['reason'] ?? '')))
+  const blocked = store.docs('desk-order-events').filter((e) => /live execution paused/.test(String(e['error'] ?? e['reason'] ?? '')))
   assert.ok(blocked.length >= 1, 'the refusal is in the order events')
 
   // Paper never spoke to XTS: the rehearsal carries on while the key is elsewhere.

@@ -680,10 +680,10 @@ test('an unknown path is left for the next route module', async () => {
   assert.equal(await h.route(ctx), false)
 })
 
-test('a RELEASED broker link is named FIRST in the gateway detail, with the gateway\'s ack', async () => {
+test('paused live execution is named FIRST in the gateway detail', async () => {
   /**
    * The one reading on this page where "broker not reachable" is the intended
-   * state. An operator who released the session must not be sent to restart a
+   * state. An operator who paused live execution must not be sent to restart a
    * gateway that is doing exactly what it was told.
    */
   const asked = find(
@@ -703,9 +703,9 @@ test('a RELEASED broker link is named FIRST in the gateway detail, with the gate
     'dx-gateway',
   )
   assert.equal(asked.state, 'ok', 'the process is alive — the broker is off by choice')
-  assert.match(asked.detail, /^XTS session RELEASED by aaditya/)
+  assert.match(asked.detail, /^Live execution PAUSED by aaditya/)
   assert.match(asked.detail, /key needed elsewhere/)
-  assert.match(asked.detail, /NOT confirmed/)
+  assert.match(asked.detail, /refuses every live order/)
 
   const done = find(
     await report(
@@ -720,6 +720,6 @@ test('a RELEASED broker link is named FIRST in the gateway detail, with the gate
     ),
     'dx-gateway',
   )
-  assert.match(done.detail, /gateway logged out/)
+  assert.match(done.detail, /^Live execution PAUSED by aaditya/)
   assert.equal((done.extra?.['brokerLink'] as { applied?: string } | undefined)?.applied, 'released')
 })

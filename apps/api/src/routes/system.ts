@@ -444,8 +444,8 @@ async function gateway(deps: ApiDeps, nowMs: number): Promise<SystemComponent> {
         name: 'Order gateway',
         detail:
           (linkText === null ? '' : `${linkText} · `) +
-          `no broker snapshot — this desk's gateway writes none (simulate or delta; the XTS ` +
-          `writer is gone), so its liveness cannot be observed from here; ${trace}. ` +
+          `no broker snapshot — this desk's gateway writes none (simulate or delta), ` +
+          `so its liveness cannot be observed from here; ${trace}. ` +
           `${pending} orders pending`,
         lastSeenMs: null,
         expectedEveryMs: CADENCE.gateway.every,
@@ -488,17 +488,13 @@ async function gateway(deps: ApiDeps, nowMs: number): Promise<SystemComponent> {
   )
 }
 
-/** One phrase for a released link — wish, who, and whether the gateway has done it. Null when connected. */
+/** One phrase for paused live execution — who, when and why. Null when live execution is on. */
 function brokerLinkText(link: BrokerLinkState, nowMs: number): string | null {
   if (link.desired !== 'released') return null
   const who = link.setBy === '' ? 'operator' : link.setBy
   const when = link.setAt === 0 ? '' : ` ${humanAge(nowMs - link.setAt)} ago`
   const why = link.reason === '' ? '' : ` (${link.reason})`
-  const ack =
-    link.applied === 'released'
-      ? `gateway logged out${link.appliedError === '' ? '' : ` with errors: ${link.appliedError}`}`
-      : 'gateway has NOT confirmed the logout yet'
-  return `XTS session RELEASED by ${who}${when}${why} — ${ack}`
+  return `Live execution PAUSED by ${who}${when}${why} — the desk refuses every live order until it is resumed`
 }
 
 /**

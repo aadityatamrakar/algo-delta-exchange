@@ -686,13 +686,11 @@ export interface KillSwitch {
 }
 
 /**
- * The broker link — the operator's "turn XTS off" switch.
+ * The broker link — the operator's "pause live execution" switch.
  *
- * TWO HALVES IN ONE DOCUMENT. `desired`/`reason`/`setBy`/`setAt` are the WISH
- * this dashboard writes; `applied`/`appliedAt`/`appliedError` are the order
- * gateway's ACK, written when it has actually logged out (or back in). Right
- * after a release the two disagree for a couple of seconds, and the page must
- * show that honestly rather than claim the session is gone.
+ * `desired`/`reason`/`setBy`/`setAt` are the WISH this dashboard writes, and the
+ * api refuses every live order while `desired` is `released`. The `applied*`
+ * ack fields are legacy: the Delta gateway writes none, so the page ignores them.
  */
 export interface BrokerLink {
   desired: 'connected' | 'released'
@@ -2388,8 +2386,8 @@ export const api = {
     }),
   brokerLink: () => get<BrokerLink>('/v1/desk/broker-link'),
   /**
-   * Same asymmetry as the kill switch: RELEASING (log the gateway out of XTS,
-   * stop live execution) carries no password; RECONNECTING does. No `setBy` —
+   * Same asymmetry as the kill switch: PAUSING live execution (`released`)
+   * carries no password; RESUMING (`connected`) does. No `setBy` —
    * the server stamps the authenticated principal.
    */
   setBrokerLink: (desired: 'connected' | 'released', reason: string, password?: string) =>

@@ -52,7 +52,7 @@ import {
   ApiError, api, ago, closeAllFailed, explain, inSession, inr, inrCompact,
   localTime, signed, sign,
   NOWRAP, RED,
-  type BookDiff, type BookMargin, type BookSummary, type BrokerFunds, type BrokerLink, type CloseAllResult, type DeskMode,
+  type BookDiff, type BookMargin, type BookSummary, type BrokerFunds, type CloseAllResult, type DeskMode,
   type FeedStatus, type PositionsResponse,
 } from './api.ts'
 import {
@@ -1256,8 +1256,8 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
               ? `SPAN ${inr(bookMargin.brokerSpan ?? 0, 0)} + exposure ${inr(bookMargin.brokerExposure ?? 0, 0)}` +
                 `${bookMargin.premiumPaid ? ` + premium paid ${inr(bookMargin.premiumPaid, 0)}` : ''}` +
                 `${bookMargin.calibrated === true
-                    ? `\nAt broker rates (span x${(bookMargin.spanRatio ?? 1).toFixed(3)}, exposure x${(bookMargin.exposureRatio ?? 1).toFixed(3)} vs Zerodha).`
-                    : '\nAT ZERODHA RATES — no broker ratio available, so this understates what XTS charges.'}` +
+                    ? `\nAt broker rates (span x${(bookMargin.spanRatio ?? 1).toFixed(3)}, exposure x${(bookMargin.exposureRatio ?? 1).toFixed(3)} vs the calculator).`
+                    : '\nAT CALCULATOR BASE RATES — no broker ratio available, so this may understate what the broker charges.'}` +
                 '\nStandalone: what this book alone would cost. Per-book figures do ' +
                 'not sum to account utilisation — SPAN scans the whole portfolio at once.' +
                 `${bookMargin.ok === false && bookMargin.diagnostic ? `\nLast refresh failed: ${bookMargin.diagnostic}` : ''}`
@@ -1849,38 +1849,12 @@ const RELEASE_STATEMENT =
   'already open are unaffected either way: the halt never blocked an exit.'
 
 /**
- * What reconnecting the broker link makes possible, in the operator's terms.
- * Reconnecting is the password-gated direction: it puts the gateway back on
- * the XTS key and makes live orders placeable again.
+ * What resuming live execution makes possible, in the operator's terms.
+ * Resuming is the password-gated direction: it makes live orders placeable again.
  */
-const RECONNECT_STATEMENT =
-  'Reconnecting logs the order gateway back in to XTS. Live orders become placeable again ' +
-  'for every strategy switched on for LIVE, and any other login on this API key will be ' +
-  'invalidated by the gateway\u2019s session.'
-
-/**
- * The gateway's side of the broker link, in one line — WHAT IT HAS DONE, not
- * what was asked. The wish and the ack disagree for a couple of seconds after
- * every press (the gateway polls at 2s), and for as long as a reconnect login
- * keeps failing; both of those must read as exactly that.
- */
-function linkAck(link: BrokerLink): { text: string; warn: boolean } {
-  const at = link.appliedAt === 0 ? '' : ` at ${new Date(link.appliedAt).toLocaleTimeString()}`
-  const err = link.appliedError === '' ? '' : ` — ${link.appliedError}`
-  if (link.desired === 'released') {
-    return link.applied === 'released'
-      ? { text: `logged out${at}${err}`, warn: link.appliedError !== '' }
-      : { text: 'logout PENDING — waiting for the gateway to confirm (polls every 2s)', warn: true }
-  }
-  if (link.applied === 'connected') return { text: `logged in${at}`, warn: false }
-  if (link.applied === 'released') {
-    return {
-      text: link.appliedError === '' ? 'reconnecting…' : `reconnect FAILED${at}${err}; the gateway retries every 30s`,
-      warn: true,
-    }
-  }
-  return { text: 'no answer from the gateway yet', warn: false }
-}
+const RESUME_STATEMENT =
+  'Resuming live execution lets the desk send live orders to Delta again for every ' +
+  'strategy switched on for LIVE.'
 
 /**
  * The result of a close-all, said in full.
@@ -1926,7 +1900,7 @@ function CloseAllReport(props: { symbol: string; style: string; result: CloseAll
             </Text>
           ))}
           {r.unpriceable.length > 0 ? (
-            <Text size="sm">{`Sent as MARKET, no mark to price them: ${r.unpriceable.join(', ')}`}</Text>
+            <Text size="sm">{`No mark to price them, sent at the fast (aggressive limit) price: ${r.unpriceable.join(', ')}`}</Text>
           ) : null}
           {r.book.length > 0 ? (
             <Text size="sm">
@@ -1962,45 +1936,45 @@ export function ControlsPage(props: { mode: DeskMode }): React.ReactElement {
   const [haltNote, setHaltNote] = useState<string | null>(null)
   const reauth = useReauth()
   /**
-   * THE BROKER LINK — global like the halt, and polled FAST because the thing
-   * the operator is waiting on is the gateway's ack, which lands within ~2s of
-   * the press. See `linkAck`.
+   * LIVE EXECUTION — the broker-link document, global like the halt. The api
+   * enforces it itself (every live order refused while `released`), so there
+   * is no gateway ack to wait on.
    */
-  const { data: link, error: linkError, refresh: refreshLink } = usePoll(() => api.brokerLink(), 2000)
+  const { data: link, error: linkError, refresh: refreshLink } = usePoll(() => api.brokerLink(), 4000)
   const [linkNote, setLinkNote] = useState<string | null>(null)
 
   /**
-   * RELEASING asks for nothing; RECONNECTING asks for the password. Same
-   * shape as `toggle` below, and the same 403-retry: the server is the
-   * authority on which direction needs re-auth.
+   * PAUSING asks for nothing; RESUMING asks for the password. Same shape as
+   * `toggle` below, and the same 403-retry: the server is the authority on
+   * which direction needs re-auth.
    */
   const toggleLink = async (): Promise<void> => {
     if (link === null) return
-    const reconnecting = link.desired === 'released'
+    const resuming = link.desired === 'released'
     let password: string | null = null
-    if (reconnecting) {
-      password = await reauth.ask(RECONNECT_STATEMENT)
+    if (resuming) {
+      password = await reauth.ask(RESUME_STATEMENT)
       if (password === null) return
     }
     setBusy(true)
     try {
       for (;;) {
         try {
-          const desired = reconnecting ? 'connected' : 'released'
-          const reason = reconnecting ? '' : 'released from dashboard'
+          const desired = resuming ? 'connected' : 'released'
+          const reason = resuming ? '' : 'paused from dashboard'
           if (password === null) await api.setBrokerLink(desired, reason)
           else await api.setBrokerLink(desired, reason, password)
           setLinkNote(
-            reconnecting
-              ? 'Reconnect requested — the gateway logs back in to XTS within a few seconds.'
-              : 'XTS session RELEASED — the gateway is logging out. Live orders are refused until you reconnect; ' +
-                'paper trading and Zerodha market data carry on.',
+            resuming
+              ? 'Live execution resumed — live orders can reach Delta again.'
+              : 'Live execution PAUSED — every live order, exits included, is refused until you resume. ' +
+                'Paper trading carries on.',
           )
           refreshLink()
           return
         } catch (err) {
           if (err instanceof ApiError && err.reauthRequired) {
-            const again = await reauth.ask(RECONNECT_STATEMENT, err.message)
+            const again = await reauth.ask(RESUME_STATEMENT, err.message)
             if (again === null) return
             password = again
             continue
@@ -2194,41 +2168,35 @@ export function ControlsPage(props: { mode: DeskMode }): React.ReactElement {
       <Card padding={3}>
         <VStack gap={2}>
           <HStack justify="between" align="center" wrap="wrap">
-            <Heading level={3}>XTS session</Heading>
+            <Heading level={3}>Live execution</Heading>
             <Badge
               variant={link === null ? 'neutral' : link.desired === 'released' ? 'error' : 'success'}
-              label={link === null ? '…' : link.desired === 'released' ? 'RELEASED' : 'connected'}
+              label={link === null ? '…' : link.desired === 'released' ? 'PAUSED' : 'on'}
             />
           </HStack>
           {/*
-            GLOBAL, LIKE THE HALT, and it says what it actually does: XTS
-            issues one interactive session per API key, so "use the key
-            elsewhere" means the gateway must log out — socket, REST and login
-            — and stay out until told. That is the whole reason this exists.
+            GLOBAL, LIKE THE HALT, and it says what it actually does: the api
+            refuses every live order while paused, so nothing new reaches the
+            Delta gateway. It does not cancel orders already resting at Delta.
           */}
           <Text color="secondary" size="sm">
-            <b>Releasing logs the order gateway out of XTS</b> — the order websocket, every REST
-            call and the login itself — so the API key can be used somewhere else. Live orders,
-            exits included, are refused until you reconnect. Paper trading and Zerodha market data
-            are unaffected.
+            <b>Pausing stops every live order to Delta</b> — exits included — until you resume.
+            Orders already resting at Delta are not cancelled. Paper trading is unaffected.
           </Text>
           {linkError !== null ? <Text size="sm" style={RED}>{linkError}</Text> : null}
           {linkNote !== null ? <Banner status="info" title={linkNote} /> : null}
-          {link !== null ? (
+          {link !== null && link.desired === 'released' ? (
             <VStack gap={1}>
-              <Row label="Gateway" value={linkAck(link).text} {...(linkAck(link).warn ? { tone: 'warn' as const } : {})} />
-              {link.desired === 'released' ? (
-                <Row
-                  label="Released by"
-                  value={`${link.setBy === '' ? 'unknown' : link.setBy}${link.setAt === 0 ? '' : ` at ${new Date(link.setAt).toLocaleString()}`}${link.reason === '' ? '' : ` — ${link.reason}`}`}
-                />
-              ) : null}
+              <Row
+                label="Paused by"
+                value={`${link.setBy === '' ? 'unknown' : link.setBy}${link.setAt === 0 ? '' : ` at ${new Date(link.setAt).toLocaleString()}`}${link.reason === '' ? '' : ` — ${link.reason}`}`}
+              />
             </VStack>
           ) : null}
           <HStack gap={2} wrap="wrap">
             <Button
               variant={link?.desired === 'released' ? 'secondary' : 'destructive'}
-              label={link?.desired === 'released' ? 'Reconnect XTS session' : 'Release XTS session — stop live execution'}
+              label={link?.desired === 'released' ? 'Resume live execution' : 'Pause live execution — Delta'}
               isDisabled={busy || link === null}
               onClick={() => void toggleLink()}
             />
@@ -2245,9 +2213,10 @@ export function ControlsPage(props: { mode: DeskMode }): React.ReactElement {
           </HStack>
           <Text color="secondary" size="sm">
             Flattens every leg in one decision, so a retry cannot double-sell. Works while the kill
-            switch is engaged. <b>Fast</b> is MARKET — certain fill, uncontrolled price.
-            <b> Limit</b> prices through the mark so it still crosses; a leg with no mark falls back
-            to MARKET rather than being left open.
+            switch is engaged. Delta takes limit orders only. <b>Fast</b> is an aggressive limit
+            well through the price — near-certain fill, loosely controlled price.
+            <b> Limit</b> prices just through the mark so it still crosses; a leg with no mark falls
+            back to the fast price rather than being left open.
           </Text>
           {/*
             A FAILED LIST IS NOT AN EMPTY DESK.
@@ -2286,7 +2255,7 @@ export function ControlsPage(props: { mode: DeskMode }): React.ReactElement {
             </HStack>
           ) : null}
           <HStack gap={2} wrap="wrap">
-            <Button variant="destructive" label={`Close all — fast (MARKET), ${mode}`} isDisabled={busy || chosen === null} onClick={() => void closeAll('fast')} />
+            <Button variant="destructive" label={`Close all — fast (aggressive limit), ${mode}`} isDisabled={busy || chosen === null} onClick={() => void closeAll('fast')} />
             <Button variant="secondary" label={`Close all — limit, ${mode}`} isDisabled={busy || chosen === null} onClick={() => void closeAll('limit')} />
           </HStack>
           {closeError !== null && closeError.mode === mode ? (

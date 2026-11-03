@@ -512,8 +512,8 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
   let reason = ''
   if (snapshot === null) {
     reason =
-      'no broker snapshot — this desk\'s gateway publishes none (simulate or delta; the XTS ' +
-      'writer is gone), so there is nothing to compare against'
+      'no broker snapshot — this desk\'s gateway publishes none (simulate or delta), ' +
+      'so there is nothing to compare against'
   } else if (snapshot['ok'] !== true) {
     const err = typeof snapshot['error'] === 'string' && snapshot['error'] !== ''
       ? snapshot['error']

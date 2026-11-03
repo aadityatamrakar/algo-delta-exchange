@@ -827,18 +827,16 @@ async function handleKillSwitchSet(deps: DeskDeps, ctx: RouteCtx): Promise<boole
 }
 
 /**
- * The broker link — release the XTS session, or reconnect it.
+ * The broker link — pause live execution (`released`) or resume it (`connected`).
  *
- * THE SAME ASYMMETRY AS THE KILL SWITCH, for the same reason. RELEASING stops
- * live execution and logs the gateway out: the safe direction, so it carries
- * no password — a prompt in front of "let go of the broker" would be a delay
- * in front of the brake. RECONNECTING makes real money placeable again, so it
- * re-authenticates like releasing the halt does (spec §5).
+ * THE SAME ASYMMETRY AS THE KILL SWITCH, for the same reason. PAUSING stops
+ * live execution: the safe direction, so it carries no password — a prompt in
+ * front of it would be a delay in front of the brake. RESUMING makes real
+ * money placeable again, so it re-authenticates like releasing the halt does
+ * (spec §5).
  *
- * The bridge writes the WISH; the gateway does the work and acks into the
- * same document (`apps/order-gateway/src/broker-link.ts`). The answer here is
- * the whole document, so the caller sees "asked" beside the gateway's last
- * word — which on a fresh release is still "connected" until the poll lands.
+ * The bridge writes the wish and enforces it itself (`brokerLinkRefusal`, in
+ * `submit.ts` and `service.ts`). The answer here is the whole document.
  */
 async function handleBrokerLinkSet(deps: DeskDeps, ctx: RouteCtx): Promise<boolean> {
   const { send, log } = ctx
@@ -862,14 +860,14 @@ async function handleBrokerLinkSet(deps: DeskDeps, ctx: RouteCtx): Promise<boole
     typeof body['reason'] === 'string' ? body['reason'] : '',
     ctx.principal.name,
   )
-  log(desired === 'released' ? 'BROKER LINK RELEASED — gateway will log out of XTS' : 'broker link: reconnect requested', {
+  log(desired === 'released' ? 'LIVE EXECUTION PAUSED — live orders are refused' : 'live execution resumed', {
     reason: state.reason,
     setBy: state.setBy,
   })
   await auditLog(deps).record({
     principal: ctx.principal,
     source: '/v1/desk/broker-link',
-    action: desired === 'released' ? 'RELEASED the XTS session' : 'reconnected the XTS session',
+    action: desired === 'released' ? 'PAUSED live execution' : 'resumed live execution',
     detail: { desired, reason: state.reason },
   })
   send(200, state)
@@ -1680,8 +1678,7 @@ async function handleBrokerSnapshot(deps: ApiDeps, ctx: RouteCtx): Promise<boole
     send(200, {
       available: false,
       reason:
-        'no broker snapshot — this desk\'s gateway publishes none (simulate or delta; ' +
-        'the XTS writer is gone)',
+        'no broker snapshot — this desk\'s gateway publishes none (simulate or delta)',
     })
     return true
   }
@@ -1751,8 +1748,7 @@ async function handleBrokerFunds(deps: ApiDeps, ctx: RouteCtx): Promise<boolean>
     send(200, {
       available: false,
       reason:
-        'no broker snapshot — this desk\'s gateway publishes none (simulate or delta; ' +
-        'the XTS writer is gone)',
+        'no broker snapshot — this desk\'s gateway publishes none (simulate or delta)',
     })
     return true
   }

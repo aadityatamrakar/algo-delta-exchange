@@ -58,12 +58,11 @@ import {
   type EntryState,
   type PlacedFill,
 } from './entry-plan.ts'
-import { VENUE, exchangeOf, isOnStep, lotsOf } from './venue.ts'
+import { VENUE, isOnStep, lotsOf } from './venue.ts'
 import { deltaSymbol } from './contract.ts'
 
-/** `1070CE -3000` per line — the same shape the seed file uses. */
+/** `76000CE -0.05` per line — the same shape the seed file uses. */
 function parseLegs(text: string, symbol: string, expiry: string): EntryLeg[] {
-  const monthCode = expiry.slice(0, 7)
   return text
     .split('\n')
     .map((l) => l.trim())
@@ -72,7 +71,7 @@ function parseLegs(text: string, symbol: string, expiry: string): EntryLeg[] {
       // The quantity may carry decimals: on DX it is BTC on a 0.001 grid
       // (`76600CE -0.05`). Off the venue's step it is refused, never rounded.
       const m = /^(\d+(?:\.\d+)?)\s*(CE|PE)\s+(-?\d+(?:\.\d+)?)$/i.exec(line)
-      if (m === null) throw new Error(`cannot read "${line}" — expected e.g. "1070CE -3000"`)
+      if (m === null) throw new Error(`cannot read "${line}" — expected e.g. "76000CE -0.05"`)
       const strike = Number(m[1])
       const type = (m[2] ?? '').toUpperCase() as 'CE' | 'PE'
       const qty = Number(m[3])
@@ -85,9 +84,7 @@ function parseLegs(text: string, symbol: string, expiry: string): EntryLeg[] {
         qty,
         // Resolved properly against the master before anything is placed; this
         // is only a provisional label for the review list.
-        tradingsymbol: VENUE.id === 'dx'
-          ? deltaSymbol(symbol, strike, type, expiry)
-          : `${symbol}${monthCode}${strike}${type}`,
+        tradingsymbol: deltaSymbol(symbol, strike, type, expiry),
         instrumentToken: 0,
       }
     })
@@ -375,7 +372,7 @@ function StructureCard(props: {
           />
         </HStack>
         <Text size="sm" color="secondary">
-          One leg per line, as `1070CE -3000` — negative is short, quantity in contracts.
+          One leg per line, as `76000CE -0.05` — negative is short, quantity in BTC.
         </Text>
         <textarea
           value={props.legText}
@@ -630,7 +627,7 @@ export function BookBuildPage(props: { mode: DeskMode }): React.ReactElement {
    * suffix nobody asked for would make every book's name harder to read.
    */
   const [suffix, setSuffix] = useState('')
-  const [legText, setLegText] = useState('1150CE 3000\n960PE 3000\n1070CE -3000\n1030PE -3000')
+  const [legText, setLegText] = useState('80000CE 0.05\n72000PE 0.05\n78000CE -0.05\n74000PE -0.05')
   const [targetPnl, setTargetPnl] = useState('60000')
   const [marginCap, setMarginCap] = useState('5000000')
 
@@ -915,7 +912,7 @@ export function BookBuildPage(props: { mode: DeskMode }): React.ReactElement {
           instrumentToken: leg.instrumentToken,
           lotSize: Number(lotSize),
           tickSize: VENUE.defaultTick,
-          exchange: exchangeOf(VENUE),
+          exchange: 'DELTA',
         },
         side: sideOf(leg),
         lots,
