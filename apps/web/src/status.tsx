@@ -178,7 +178,7 @@ function SystemsSection(): React.ReactElement {
           title={`${stale.length} of ${components.length} components have not written recently`}
           description={
             `${stale.map((c) => c.id).join(', ')} — each card below states the age measured and the cadence expected. ` +
-            'Outside market hours some of these are quiet for honest reasons; the age is reported, not judged.'
+            'Some of these are quiet for honest reasons; the age is reported, not judged.'
           }
         />
       ) : null}
@@ -511,7 +511,7 @@ function OrderFailuresSection(): React.ReactElement {
       ) : null}
 
       <Text color="secondary" size="sm">
-        Every refused submission — the freeze limit, the kill switch, a risk gate, a broker
+        Every refused submission — an order-size cap, the kill switch, a risk gate, a broker
         reject. A refusal never reaches the broker, so it is on no other screen; the full
         lifecycle of any one of these is in its own book's order log.
       </Text>

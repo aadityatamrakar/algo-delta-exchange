@@ -49,21 +49,16 @@ export const DEFAULT_KILL_SWITCH: KillSwitchState = {
 // ------------------------------------------------------------ broker link
 
 /**
- * THE BROKER LINK — the operator's "turn XTS off" switch.
+ * THE BROKER LINK — the operator's "pause live execution" switch.
  *
- * XTS issues one interactive session per API key, so using the key anywhere
- * else means the gateway must LOG OUT and stay out. The switch lives beside the
- * kill switch in `desk-safety` (`_id: 'broker-link'`); this bridge writes the
- * WISH and the gateway answers with an ACK (`apps/order-gateway/src/
- * broker-link.ts` owns the transitions). Two halves in one document so the
- * dashboard can tell "asked" from "done" — and see why a reconnect failed.
+ * Stored beside the kill switch in `desk-safety` (`_id: 'broker-link'`). The
+ * bridge writes the WISH and refuses every live order while it reads
+ * `released` (`brokerLinkRefusal`, enforced in `submit.ts` and `service.ts`),
+ * so nothing new reaches the Delta gateway. The `applied*` half is a legacy
+ * ack field: the Delta gateway writes none, so the dashboard no longer shows it.
  *
- * UNLIKE THE KILL SWITCH IT BLOCKS EXITS TOO, on the live rail only. That is
- * not a policy about exposure, it is the absence of a broker: a logged-out
- * gateway cannot place a close any more than an open, and letting the close
- * through here would fold the book as flat while the position stayed live at
- * the broker (the C-1 trace in `main.ts`). Paper is untouched — it never
- * spoke to XTS.
+ * UNLIKE THE KILL SWITCH IT BLOCKS EXITS TOO, on the live rail only. Paper is
+ * untouched.
  */
 export type BrokerLinkDesired = 'connected' | 'released'
 
@@ -121,8 +116,8 @@ export function brokerLinkRefusal(
   if (mode !== 'live' || link.desired !== 'released') return null
   const why = link.reason === '' ? '' : ` (${link.reason})`
   return (
-    `broker link: the XTS session is released by operator${why}; live orders — exits included — ` +
-    'are refused until it is reconnected from Controls. Paper is unaffected'
+    `live execution paused by operator${why}: live orders to Delta — exits included — ` +
+    'are refused until it is resumed from Controls. Paper is unaffected'
   )
 }
 

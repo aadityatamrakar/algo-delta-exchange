@@ -135,7 +135,7 @@ describe('/v1/desk/broker-link', () => {
     const line = h.inserted.find((d) => d['source'] === '/v1/desk/broker-link')
     assert.ok(line, 'no audit line')
     assert.equal(line['principal'], 'aaditya')
-    assert.match(String(line['action']), /RELEASED the XTS session/)
+    assert.match(String(line['action']), /PAUSED live execution/)
   })
 
   test('RECONNECTING re-authenticates — no password is a 403 that asks for one', async () => {
@@ -152,7 +152,7 @@ describe('/v1/desk/broker-link', () => {
     assert.equal(ok.status, 200)
     assert.deepEqual(h.writes, [{ desired: 'connected', reason: '', setBy: 'aaditya' }])
     const line = h.inserted.find((d) => d['source'] === '/v1/desk/broker-link')
-    assert.match(String(line?.['action']), /reconnected the XTS session/)
+    assert.match(String(line?.['action']), /resumed live execution/)
   })
 
   test('a machine token cannot reconnect', async () => {

@@ -222,7 +222,7 @@ html {
  *
  * `height: auto` and `white-space: normal` come as a pair with it. astryx
  * buttons are fixed-height and no-wrap, and this app has labels like "Engage
- * kill switch — both rails" and "Close all — fast (MARKET), paper" — at 390px
+ * kill switch — both rails" and "Close all — fast (aggressive limit), paper" — at 390px
  * a nowrap label makes the BUTTON wider than the screen, which is one of the
  * things that used to push the document sideways. Letting the label wrap inside
  * a taller button is the fix; without `height: auto` the second line would spill

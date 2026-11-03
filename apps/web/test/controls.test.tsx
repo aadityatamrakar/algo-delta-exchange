@@ -75,57 +75,38 @@ describe('controls', () => {
     expect(screen.getByRole('button', { name: 'Engage kill switch — both rails' })).toBeTruthy()
   })
 
-  test('the XTS session card says what releasing does, and a release posts the wish without a password', async () => {
+  test('the live execution card says what pausing does, and a pause posts the wish without a password', async () => {
     let link: Record<string, unknown> = LINK_CONNECTED
     const sent = mount('paper', (path, method) => {
       if (path === '/v1/desk/broker-link' && method === 'POST') {
-        // The bridge answers with the wish written and the gateway's STALE ack
-        // — it has not polled yet — exactly as the real route does.
-        link = { ...LINK_CONNECTED, desired: 'released', reason: 'released from dashboard', setBy: 'aaditya', setAt: 5 }
+        link = { ...LINK_CONNECTED, desired: 'released', reason: 'paused from dashboard', setBy: 'aaditya', setAt: 5 }
         return { body: link }
       }
       if (path === '/v1/desk/broker-link') return { body: link }
       return null
     })
-    await screen.findByText('XTS session')
-    // Names the mechanism — socket, REST, login — and what carries on.
-    await screen.findByText(/logs the order gateway out of XTS/)
-    await screen.findByText(/Paper trading and Zerodha market data/)
-    const release = await screen.findByRole('button', { name: 'Release XTS session — stop live execution' })
-    act(() => { release.click() })
+    await screen.findByText('Live execution')
+    await screen.findByText(/Pausing stops every live order to Delta/)
+    await screen.findByText(/Orders already resting at Delta are not cancelled/)
+    expect(screen.queryByText(/XTS|Zerodha/)).toBe(null)
+    const pause = await screen.findByRole('button', { name: 'Pause live execution — Delta' })
+    act(() => { pause.click() })
 
     await waitFor(() => {
       const post = sent.find((r) => r.path === '/v1/desk/broker-link' && r.method === 'POST')
-      expect(post?.body).toEqual({ desired: 'released', reason: 'released from dashboard' })
+      expect(post?.body).toEqual({ desired: 'released', reason: 'paused from dashboard' })
     })
-    await screen.findByText(/XTS session RELEASED — the gateway is logging out/)
-    // The badge follows the WISH; the gateway line follows the ACK — and until
-    // the gateway confirms, it must say so rather than claim the logout happened.
-    await screen.findByText('RELEASED')
-    await screen.findByText(/logout PENDING — waiting for the gateway to confirm/)
-    await screen.findByRole('button', { name: 'Reconnect XTS session' })
+    await screen.findByText(/Live execution PAUSED — every live order, exits included, is refused/)
+    await screen.findByText('PAUSED')
+    await screen.findByText(/Paused by/)
+    await screen.findByRole('button', { name: 'Resume live execution' })
   })
 
-  test('a confirmed logout reads as done', async () => {
-    const link = {
-      ...LINK_CONNECTED, desired: 'released', setBy: 'aaditya', setAt: 5, applied: 'released', appliedAt: 6,
-    }
-    mount('live', (path) => (path === '/v1/desk/broker-link' ? { body: link } : null))
-    await screen.findByText(/^logged out at /)
-    await screen.findByText(/Released by/)
-  })
-
-  test('a failed reconnect names the failure instead of claiming the session is back', async () => {
-    const link = {
-      ...LINK_CONNECTED, desired: 'connected', applied: 'released', appliedAt: 6,
-      appliedError: 'reconnect failed: XTS login failed: e-session-0002',
-    }
-    mount('live', (path) => (path === '/v1/desk/broker-link' ? { body: link } : null))
-    await screen.findByText(/reconnect FAILED/)
-    await screen.findByText(/e-session-0002/)
-    // The wish is connected, so the badge says so — the gateway line is what
-    // carries the truth.
-    await screen.findByText('connected')
+  test('a running desk reads as on, with no gateway-ack line', async () => {
+    mount('live', (path) => (path === '/v1/desk/broker-link' ? { body: LINK_CONNECTED } : null))
+    await screen.findByText('on')
+    expect(screen.queryByText(/Paused by/)).toBe(null)
+    expect(screen.queryByText(/logged (in|out)|reconnect/i)).toBe(null)
   })
 
   test('a partly failed close-all is reported as a failure, in detail', async () => {
@@ -146,8 +127,8 @@ describe('controls', () => {
       return null
     })
 
-    await screen.findByRole('button', { name: 'Close all — fast (MARKET), paper' })
-    act(() => { screen.getByRole('button', { name: 'Close all — fast (MARKET), paper' }).click() })
+    await screen.findByRole('button', { name: 'Close all — fast (aggressive limit), paper' })
+    act(() => { screen.getByRole('button', { name: 'Close all — fast (aggressive limit), paper' }).click() })
 
     // It used to render "Close-all BHEL (fast): 1 fills" — a success line for a
     // book that is still open, because the client type dropped every field
@@ -180,7 +161,7 @@ describe('controls', () => {
 
   test('the close-all buttons name the rail they act on', async () => {
     const sent = mount('live', (path) => (path === '/v1/desk/books' ? books('BHEL') : null))
-    await screen.findByRole('button', { name: 'Close all — fast (MARKET), live' })
+    await screen.findByRole('button', { name: 'Close all — fast (aggressive limit), live' })
     await waitFor(() =>
       expect(sent.some((r) => r.url.includes('/v1/desk/books?mode=live'))).toBe(true))
   })

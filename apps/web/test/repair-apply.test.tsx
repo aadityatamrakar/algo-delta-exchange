@@ -89,7 +89,7 @@ const MARGIN: RepairPreflightResponse['margin'] = {
   warnings: [],
 }
 
-/** The same figures at Zerodha's own rates — no calibration was applied. */
+/** The same figures at the calculator's base rates — no calibration was applied. */
 const UNCALIBRATED: RepairPreflightResponse['margin'] = {
   ...MARGIN,
   broker: { ...BROKER, calibrated: false },
@@ -376,7 +376,7 @@ describe('the preview', () => {
     })
     await screen.findByText('TCS 2440 PE')
     const panel = screen.getByRole('group', { name: /margin/i })
-    expect(within(panel).getByText(/at Zerodha’s own rates \(no calibration available\)/)).toBeTruthy()
+    expect(within(panel).getByText(/at the calculator’s base rates \(no calibration available\)/)).toBeTruthy()
   })
 
   /**

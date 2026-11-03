@@ -395,7 +395,7 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
     ),
     dl_rupee_hold_s: meta(
       'seconds',
-      "HOLD BOOKS ONLY: the book backstop and target fire only on a reading that has stood this long — a carried book's first marks at 09:15 mix two sessions' prices. A flat book acts at once. An intraday book acts on the first mark whatever this says; 0 makes a hold book do the same.",
+      "HOLD BOOKS ONLY: the book backstop and target fire only on a reading that has stood this long — a carried book's first marks after a feed gap can be stale. A flat book acts at once. An intraday book acts on the first mark whatever this says; 0 makes a hold book do the same.",
     ),
 
     // ── The open ────────────────────────────────────────────────────────────
@@ -489,12 +489,12 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
     dl_max_spread_pct: meta('fraction', 'Widest spread as a share of mid — or dl_max_spread_abs, whichever is larger.'),
     dl_max_spread_abs: meta(
       'rupee',
-      'Widest spread in rupees — the floor under dl_max_spread_pct, because 2% of a ₹3 option is six paise.',
+      'Widest spread in dollars — the floor under dl_max_spread_pct, because 2% of a $3 option is six cents.',
     ),
     dl_spot_stale_s: meta('seconds', 'Spot older than this refuses NEW RISK only; the four exits still run.'),
 
     // ── Clock and pacing ────────────────────────────────────────────────────
-    dl_warmup_min: meta('clock', 'Warm-up ends. The detector runs from 09:15 but places no order before this.'),
+    dl_warmup_min: meta('clock', 'Warm-up ends. The detector runs from the day start but places no order before this.'),
     dl_flatten_passive_min: meta('clock', 'Start flattening passively.'),
     dl_flatten_urgent_min: meta('clock', 'Flatten urgently.'),
     dl_flat_by_min: meta('clock', 'Must be flat. Anything left over goes to the blind ladder.'),
@@ -611,7 +611,7 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
     ),
     pb_late_trail_start: meta(
       'rupee',
-      'Trade profit that arms the trailing floor from pb_late_min on — less than the morning figure, because winners run late (a book up ₹2,000 at 13:00 never finished below it). A floor armed this way trails the peak made since it armed, not the morning\'s best. 0 = off.',
+      'Trade profit that arms the trailing floor from pb_late_min on — less than the morning figure, because winners run late. A floor armed this way trails the peak made since it armed, not the morning\'s best. 0 = off.',
       { zeroOff: true },
     ),
     pb_late_min: meta('clock', 'The IST minute the late trail start takes over.'),
@@ -649,7 +649,7 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
     ),
     pb_target_max_frac: meta(
       'fraction',
-      "The take profit's ceiling on a whole debit spread: never more than this share of the most the held spread can make (its width × lots × lot size, less the debit), so a rupee target above a narrow spread's maximum still fires. Applies only while the book is exactly one spread with every short held; beside a pyramid's extra long the plain target applies. 0 = off.",
+      "The take profit's ceiling on a whole debit spread: never more than this share of the most the held spread can make (its width × lots × lot size, less the debit), so a dollar target above a narrow spread's maximum still fires. Applies only while the book is exactly one spread with every short held; beside a pyramid's extra long the plain target applies. 0 = off.",
       { zeroOff: true },
     ),
     pb_flip_confirm_s: meta(
@@ -726,7 +726,7 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
     ),
     pb_wing_spread_abs: meta(
       'rupee',
-      "The widest spread in rupees at which a PROTECTIVE (bought) leg is still bought — the larger of this, dl_max_spread_abs and dl_max_spread_pct of its mid. Looser than a sale's bar, because the far wing is the fly's protection and quotes wide; buying at the ask costs half the spread.",
+      "The widest spread in dollars at which a PROTECTIVE (bought) leg is still bought — the larger of this, dl_max_spread_abs and dl_max_spread_pct of its mid. Looser than a sale's bar, because the far wing is the fly's protection and quotes wide; buying at the ask costs half the spread.",
     ),
 
     // ── Reversal Spread ─────────────────────────────────────────────────────

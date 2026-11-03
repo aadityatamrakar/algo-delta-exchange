@@ -584,8 +584,9 @@ function FlattenDialog(props: {
                   while the strategy is switched off.`}
               </Text>
               <Text size="sm" color="secondary">
-                <b>Fast</b> is MARKET: certain fill, uncontrolled price. <b>Limit</b> prices through
-                the mark so it still crosses; a leg with no mark falls back to MARKET rather than
+                Delta takes limit orders only. <b>Fast</b> is an aggressive limit well through the
+                price: near-certain fill, loosely controlled price. <b>Limit</b> prices just through the
+                mark so it still crosses; a leg with no mark falls back to the fast price rather than
                 being left open.
               </Text>
               {result !== null ? (
@@ -1906,14 +1907,14 @@ export function StrategyPage(props: { tag: string; mode: DeskMode }): React.Reac
             (why.length > 0
               ? why.join('; ')
               : 'The desk accepted the request but routed no order.') +
-            ' Outside market hours the feed goes quiet and an exit cannot be priced;' +
+            ' With no live quote an exit cannot be priced;' +
             ' the position is unchanged.',
         )
         return
       }
       setClosed(
         `Closed ${formatContract(l.tradingsymbol)} — ${r.fills.length} order(s) routed` +
-          (r.unpriceable.length > 0 ? `, ${r.unpriceable.length} as MARKET (no mark)` : '') +
+          (r.unpriceable.length > 0 ? `, ${r.unpriceable.length} at the fast price (no mark)` : '') +
           (r.skips.length > 0 ? `, ${r.skips.length} skipped` : ''),
       )
     } catch (err) {

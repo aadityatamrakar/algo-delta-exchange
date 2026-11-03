@@ -287,7 +287,7 @@ function MarginBlock(props: { margin: VerifyMarginResponse; now: BookMargin | nu
   /** A failed refresh is as much a reason to distrust the figure as an old one. */
   const nowStale = props.now?.stale === true || props.now?.ok === false
   const nowAge = ago(props.now?.ageMs ?? null)
-  /** Both at broker rates, or both at Zerodha's. Anything else is not a difference. */
+  /** Both at broker rates, or both at the calculator's base rates. Anything else is not a difference. */
   const sameRates = b !== null && now !== null && (b.calibrated === true) === (props.now?.calibrated === true)
   const notes = sentences(props.margin.warnings)
   return (
@@ -312,7 +312,7 @@ function MarginBlock(props: { margin: VerifyMarginResponse; now: BookMargin | nu
               `${inr(b.exposure)} + premium paid ${inr(b.premiumPaid)}, ` +
               (b.calibrated === true
                 ? 'at this account’s calibrated rates rather than the calculator’s headline.'
-                : 'at Zerodha’s own rates (no calibration available) rather than the calculator’s headline.')}
+                : 'at the calculator’s base rates (no calibration available) rather than its headline.')}
           </Text>
         )}
         {b === null ? null : now === null ? (
@@ -329,8 +329,8 @@ function MarginBlock(props: { margin: VerifyMarginResponse; now: BookMargin | nu
         ) : (
           <Text size="sm">
             {'No difference is shown: the two figures are at different rates — ' +
-              `the repaired book above at ${b.calibrated === true ? 'this account’s calibrated' : 'Zerodha’s own'} ` +
-              `rates, the book’s current figure at ${props.now?.calibrated === true ? 'this account’s calibrated' : 'Zerodha’s own'} ` +
+              `the repaired book above at ${b.calibrated === true ? 'this account’s calibrated' : 'the calculator’s base'} ` +
+              `rates, the book’s current figure at ${props.now?.calibrated === true ? 'this account’s calibrated' : 'the calculator’s base'} ` +
               `rates (priced ${nowAge}${nowStale ? ', stale or failed' : ''}). Subtracting one from the other ` +
               'would invent a change that is only the multiplier.'}
           </Text>

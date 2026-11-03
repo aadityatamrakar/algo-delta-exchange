@@ -195,7 +195,7 @@ describe('close-all is tag-aware (server-side review carry-in)', () => {
     // than one book.
     const secondBook = await screen.findByRole('button', { name: `${SYMBOL} · ${TAG_B} (2)` })
     secondBook.click()
-    const closeBtn = await screen.findByRole('button', { name: 'Close all — fast (MARKET), paper' })
+    const closeBtn = await screen.findByRole('button', { name: 'Close all — fast (aggressive limit), paper' })
     closeBtn.click()
 
     await waitFor(() => {
@@ -242,7 +242,7 @@ describe('close-all is tag-aware (server-side review carry-in)', () => {
         </ModeProvider>
       </AuthProvider>,
     )
-    const closeBtn = await screen.findByRole('button', { name: 'Close all — fast (MARKET), paper' })
+    const closeBtn = await screen.findByRole('button', { name: 'Close all — fast (aggressive limit), paper' })
     closeBtn.click()
 
     // THE REFUSAL IS ACTIONABLE, not a dead-end error string: both candidate

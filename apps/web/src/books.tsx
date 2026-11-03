@@ -779,8 +779,8 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
           deleting === null
             ? ''
             : (deletingLegs > 0
-                ? `${deleting.row.tag} still holds ${deletingLegs} leg(s). They will be CLOSED AT ` +
-                  `MARKET first, and the book erased only if that leaves it flat. ` 
+                ? `${deleting.row.tag} still holds ${deletingLegs} leg(s). They will be CLOSED FIRST ` +
+                  `(fast: an aggressive limit), and the book erased only if that leaves it flat. ` 
                 : '') +
               `This erases the book from ${props.mode} for good — its registry row, its recorded ` +
               `position and its switch on the Strategies page. It cannot be undone, and the tag ` +

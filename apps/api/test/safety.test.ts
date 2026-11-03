@@ -322,11 +322,11 @@ test('the broker link refuses LIVE only, exits included, and names the reason an
   const released = { desired: 'released' as const, reason: 'key needed elsewhere' }
   const live = brokerLinkRefusal('live', released)
   assert.ok(live !== null)
-  assert.match(live, /^broker link:/)
+  assert.match(live, /^live execution paused/)
   assert.match(live, /key needed elsewhere/)
   assert.match(live, /exits included/)
   assert.match(live, /Controls/)
-  // Paper never spoke to XTS.
+  // Paper is never paused.
   assert.equal(brokerLinkRefusal('paper', released), null)
   // And a connected link is no gate at all.
   assert.equal(brokerLinkRefusal('live', { desired: 'connected', reason: '' }), null)
