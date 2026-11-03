@@ -11,6 +11,8 @@
  *   instrument         `dx-sync.ts`, at boot, every 15 min, after 12:00 UTC
  *   dx-settlements     `dx-sync.ts`, Delta's published settlement prices
  *   desk-marks         the display snapshot, every 60 s, as on NSE
+ *   md.tick.demo       the testnet feed: demo-rail books' contracts only, at
+ *                      the prices Delta marks the demo account with
  *
  * Delta trades 24x7, so `session` on `md.health` is always true and the stale
  * counts always mean something.
@@ -27,10 +29,15 @@ import { ensureMarksIndex, MARKS_COLLECTION, pruneOrphanMarks } from './marks-st
 import { DxFeed, DX_UNDERLYING, type DxFeedHealth } from './dx-feed.ts'
 import { DX_SETTLEMENTS_COLLECTION, DX_SYNC_EVERY_MS, dxSyncDue, runDxSync, type DxCollection } from './dx-sync.ts'
 import type { DxNormaliser, DxPublicSocketFactory, DxRestPort } from './dx-ports.ts'
+import { DEMO_TICK_TOPIC, marksVenueOf } from '../../api/src/books-registry.ts'
 import type { InstrumentRow } from '@algomaker/instruments'
 
 export const DX_REST_URL = 'https://api.india.delta.exchange'
 export const DX_PUBLIC_WS_URL = 'wss://public-socket.india.delta.exchange'
+/** Delta India TESTNET public socket — the prices the demo account is marked at. */
+export const DX_DEMO_WS_URL = 'wss://socket-ind-pub.testnet.deltaex.org'
+/** How often the demo set (demo-rail books' chains and legs) is re-read. */
+export const DX_DEMO_REFRESH_MS = 30_000
 export const DEFAULT_DX_STALE_MS = 180_000
 
 function log(msg: string, ctx?: Record<string, unknown>): void {
@@ -62,6 +69,47 @@ export function feedInstruments(rows: readonly InstrumentRow[]): {
 }
 
 /**
+ * WHAT THE TESTNET FEED CARRIES: only what demo-marked books need.
+ *
+ * Every option of the chain a demo-marked registry row names (a book about to
+ * enter there), plus every leg a demo-marked book holds — a held leg even when
+ * it has left the master (expired and settling), keyed by the token the book
+ * stored. Demo-marked is `marksVenueOf`: a paper book on the demo rail, by the
+ * rail the gateway used, else its setting. Sim-rail and live books add
+ * nothing: their marks are production's.
+ *
+ * Tokens are the DESK's (production product ids); the socket subscribes by
+ * symbol, and testnet's own product ids are never used.
+ */
+export function demoInstruments(input: {
+  readonly rows: readonly InstrumentRow[]
+  readonly registry: readonly (Parameters<typeof marksVenueOf>[0] & { tag: string; symbol: string; expiry: string })[]
+  readonly books: readonly {
+    readonly tag: string
+    readonly mode: string
+    readonly legs: readonly { readonly instrument: { readonly tradingsymbol: string; readonly instrumentToken?: number | undefined } }[]
+  }[]
+}): { token: number; symbol: string }[] {
+  const demo = input.registry.filter((r) => marksVenueOf(r) === 'demo')
+  const chains = new Set(demo.filter((r) => r.expiry !== '').map((r) => `${r.symbol}|${r.expiry}`))
+  const demoTags = new Set(demo.map((r) => `${r.tag}|${r.mode}`))
+  const out = new Map<string, number>()
+  for (const r of input.rows) {
+    if ((r.instrument_type === 'CE' || r.instrument_type === 'PE') && chains.has(`${r.name}|${r.expiry}`)) {
+      out.set(r.tradingsymbol, r.instrument_token)
+    }
+  }
+  for (const b of input.books) {
+    if (!demoTags.has(`${b.tag}|${b.mode}`)) continue
+    for (const l of b.legs) {
+      const t = l.instrument.instrumentToken
+      if (t !== undefined && !out.has(l.instrument.tradingsymbol)) out.set(l.instrument.tradingsymbol, t)
+    }
+  }
+  return [...out].map(([symbol, token]) => ({ token, symbol }))
+}
+
+/**
  * `md.health` on Delta: the NSE payload's field set, so the api, the traders
  * app and the Status card read it unchanged. The Kite-only fields are present
  * and null (`freezeSyncDay`, `bseFreezeSyncDay`, `enctokenLastVerifiedAt`):
@@ -75,6 +123,8 @@ export function dxHealthPayload(a: {
   nowMs: number
   lastSyncMs: number
   staleAfterMs: number
+  /** The testnet price socket, when this process runs one. Its own line, never folded into the prod figures. */
+  demo?: { url: string; health: DxFeedHealth }
 }): Record<string, unknown> {
   const { feed, nowMs } = a
   return {
@@ -91,6 +141,7 @@ export function dxHealthPayload(a: {
     freezeSyncDay: null,
     bseFreezeSyncDay: null,
     enctokenLastVerifiedAt: null,
+    ...(a.demo === undefined ? {} : { demo: { url: a.demo.url, ...a.demo.health } }),
   }
 }
 
@@ -154,9 +205,47 @@ export async function mainDx(clients: DxClients = realDxClients()): Promise<void
     log,
   })
 
+  /**
+   * THE TESTNET FEED (demo-rail books). Same parsing, its own socket, its own
+   * topic (`md.tick.demo`), no index, and NOT in the `desk-marks` snapshot —
+   * that collection is production's display marks. `DESK_DX_DEMO_WS_URL=off`
+   * runs without it.
+   */
+  const demoUrl = process.env['DESK_DX_DEMO_WS_URL'] ?? DX_DEMO_WS_URL
+  const demoFeed =
+    demoUrl === 'off'
+      ? null
+      : new DxFeed({
+          url: demoUrl,
+          socket: clients.socket,
+          publish: (topic, payload, ts) => bus.publish(topic, payload, ts),
+          staleAfterMs,
+          log: (msg, ctx) => log(`demo: ${msg}`, ctx),
+          tickTopic: DEMO_TICK_TOPIC,
+          spot: false,
+        })
+  let masterRows: readonly InstrumentRow[] = []
+  let demoCount = -1
+  const refreshDemo = async (): Promise<void> => {
+    if (demoFeed === null) return
+    try {
+      const want = demoInstruments({
+        rows: masterRows,
+        registry: [...(await store.listBooks('paper')), ...(await store.listBooks('live'))],
+        books: [...(await store.allBooks('paper')), ...(await store.allBooks('live'))],
+      })
+      demoFeed.setInstruments(want, null)
+      if (want.length !== demoCount) log('demo feed contracts', { contracts: want.length })
+      demoCount = want.length
+    } catch (err) {
+      log('demo feed refresh failed, keeping the last set', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   const applyRows = (rows: readonly InstrumentRow[]): void => {
     const { options, spotToken } = feedInstruments(rows)
     feed.setInstruments(options, spotToken)
+    masterRows = rows
     log('instrument master loaded', { options: options.length, spot: spotToken })
   }
 
@@ -208,7 +297,12 @@ export async function mainDx(clients: DxClients = realDxClients()): Promise<void
   // Stored rows first, so the feed is subscribing while the first sync runs.
   applyRows(await loadStoredInstruments(instrumentCol))
   feed.start()
+  await refreshDemo()
+  demoFeed?.start()
   await sync()
+  await refreshDemo()
+  const demoTimer = setInterval(() => void refreshDemo(), DX_DEMO_REFRESH_MS)
+  demoTimer.unref()
 
   const syncTimer = setInterval(() => {
     if (dxSyncDue(Date.now(), lastSyncMs)) void sync()
@@ -245,7 +339,17 @@ export async function mainDx(clients: DxClients = realDxClients()): Promise<void
 
   const healthTimer = setInterval(() => {
     const nowMs = Date.now()
-    bus.publish('md.health', dxHealthPayload({ feed: feed.health(), nowMs, lastSyncMs, staleAfterMs }), nowMs)
+    bus.publish(
+      'md.health',
+      dxHealthPayload({
+        feed: feed.health(),
+        nowMs,
+        lastSyncMs,
+        staleAfterMs,
+        ...(demoFeed === null ? {} : { demo: { url: demoUrl, health: demoFeed.health() } }),
+      }),
+      nowMs,
+    )
   }, 10_000)
   healthTimer.unref()
 
@@ -254,6 +358,7 @@ export async function mainDx(clients: DxClients = realDxClients()): Promise<void
   const shutdown = (signal: string): void => {
     log(`${signal} received, shutting down`)
     feed.close()
+    demoFeed?.close()
     void bus.close().then(() => mongo.close()).then(() => process.exit(0))
     setTimeout(() => process.exit(1), 10_000).unref()
   }

@@ -115,6 +115,14 @@ export interface DxFeedDeps {
   readonly staleAfterMs: number
   readonly now?: () => number
   readonly log?: (msg: string, ctx?: Record<string, unknown>) => void
+  /**
+   * The topic ticks go out on. `md.tick` (the default) for the production
+   * feed; `md.tick.demo` for the testnet feed, whose prices must never reach
+   * an `md.tick` consumer.
+   */
+  readonly tickTopic?: string
+  /** Subscribe and publish `.DEXBTUSD` (default true). The testnet feed does not: the index stays production's. */
+  readonly spot?: boolean
 }
 
 export interface DxInstrument {
@@ -185,7 +193,7 @@ export class DxFeed {
       this.#connected = true
       // A fresh connection holds no subscription of ours: replay everything.
       this.#sent.clear()
-      this.#socket?.subscribe('spot_price', [DX_SPOT_SYMBOL])
+      if (this.#d.spot !== false) this.#socket?.subscribe('spot_price', [DX_SPOT_SYMBOL])
       this.#subscribePending()
       this.#d.log?.('dx feed connected', { symbols: this.#sent.size })
     } else if (!up && this.#connected) {
@@ -217,8 +225,8 @@ export class DxFeed {
         const p = dxTickPayload(f.quote, token, ts)
         if (p === null) return
         this.#seen(token, p, ts)
-        this.#d.publish('md.tick', p, ts)
-      } else if (f.kind === 'spot') {
+        this.#d.publish(this.#d.tickTopic ?? 'md.tick', p, ts)
+      } else if (f.kind === 'spot' && this.#d.spot !== false) {
         const p = dxSpotPayload(f, ts)
         if (p === null) return
         this.#d.publish('md.spot', p, ts)
