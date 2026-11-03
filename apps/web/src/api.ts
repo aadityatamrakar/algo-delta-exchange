@@ -2475,7 +2475,28 @@ export interface ChainResponse {
   feedAlive?: boolean
 }
 
+/**
+ * One row of the shared `desk-alerts` contract, as `/v1/desk/alerts` serves
+ * it: written by the gateway's exchange-backstop loop, dx-watchdog and the
+ * engine; forwarded to Telegram by dx-watchdog.
+ */
+export interface DeskAlert {
+  id: string
+  at: number
+  severity: 'critical' | 'warn' | 'info'
+  source: string
+  mode: DeskMode
+  key: string
+  message: string
+  tag?: string
+  forwardedAt?: number
+}
+
 export const api = {
+  /** Unacked desk alerts, newest first. */
+  alerts: () => get<{ alerts?: DeskAlert[] }>('/v1/desk/alerts'),
+  /** Hide one from the banner, stamped with the signed-in operator. Fixes nothing. */
+  ackAlert: (id: string) => post<{ ok: boolean }>(`/v1/desk/alerts/${encodeURIComponent(id)}/ack`, {}),
   /**
    * The order feed for ONE rail.
    *
