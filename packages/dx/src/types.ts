@@ -81,6 +81,8 @@ export interface DxTicker {
   /** True while open interest is over the product's cap: closing orders only. */
   readonly oi_reduce_only_mode?: boolean
   readonly quotes?: DxTickerQuotes | null
+  /** Absolute order price limits; an order outside them is rejected. */
+  readonly price_band?: { readonly lower_limit?: string | null; readonly upper_limit?: string | null } | null
   readonly greeks?: DxTickerGreeks | null
   /** MICROseconds. */
   readonly timestamp?: number

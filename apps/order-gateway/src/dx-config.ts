@@ -29,10 +29,37 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined
 }
 
+/** The API key a broker-store card holds: the sealed secret's, else meta's; undefined when none. */
+export function storedApiKey(card: { meta: Record<string, unknown>; secret: Record<string, unknown> }): string | undefined {
+  return firstString(card.secret['apiKey'], card.meta['apiKey'])
+}
+
+/**
+ * THE OTHER CARD'S KEY, for the cross-rail guard: the other `desk-brokers`
+ * card read directly (never via whichever rail happens to be built — a
+ * simulate box builds no live rail, so a live-key-only comparison compared
+ * against nothing), plus the other rail's env key. A read that fails is
+ * nothing to compare against, never a reason to stop the boot.
+ */
+async function otherKeys(
+  otherCardKey: (() => Promise<string | undefined>) | undefined,
+  envKey: string | undefined,
+): Promise<readonly string[]> {
+  let card: string | undefined
+  try {
+    card = otherCardKey === undefined ? undefined : firstString(await otherCardKey())
+  } catch {
+    card = undefined
+  }
+  return [card, firstString(envKey)].filter((k): k is string => k !== undefined)
+}
+
 export async function loadDxConfig(
   read: () => Promise<{ meta: Record<string, unknown>; secret: Record<string, unknown> }>,
   env: NodeJS.ProcessEnv,
   logFn: (m: string, c?: Record<string, unknown>) => void,
+  /** The `delta-demo` card's stored key — a testnet key in the live card is refused. */
+  opts: { readonly otherCardKey?: () => Promise<string | undefined> } = {},
 ): Promise<DxConfig> {
   const { meta, secret } = await read()
   const seen = { store: false, env: false }
@@ -67,6 +94,9 @@ export async function loadDxConfig(
   // Production credentials never go to the testnet.
   assertRailHost('live', cfg.baseUrl)
   assertRailHost('live', cfg.wsUrl)
+  if ((await otherKeys(opts.otherCardKey, env['DX_DEMO_API_KEY'])).includes(cfg.apiKey)) {
+    throw new Error('Delta live carries the same API key as the demo (testnet) card — refusing to use a demo key on the live rail')
+  }
   logFn('Delta config resolved', { source: cfg.source, baseUrl: cfg.baseUrl, wsUrl: cfg.wsUrl })
   return cfg
 }
@@ -83,7 +113,16 @@ export async function loadDxDemoConfig(
   read: () => Promise<{ meta: Record<string, unknown>; secret: Record<string, unknown> }>,
   env: NodeJS.ProcessEnv,
   logFn: (m: string, c?: Record<string, unknown>) => void,
-  opts: { readonly liveApiKey?: string } = {},
+  opts: {
+    readonly liveApiKey?: string
+    /**
+     * The `delta` card's stored key, read straight from the broker store
+     * whatever `DESK_BROKER` says — `liveApiKey` is undefined on a box that
+     * never built the live rail, which is exactly when a real key typed into
+     * the demo card went unnoticed.
+     */
+    readonly otherCardKey?: () => Promise<string | undefined>
+  } = {},
 ): Promise<DxConfig> {
   const { meta, secret } = await read()
   const seen = { store: false, env: false }
@@ -117,7 +156,11 @@ export async function loadDxDemoConfig(
   }
   assertRailHost('demo', cfg.baseUrl)
   assertRailHost('demo', cfg.wsUrl)
-  if (opts.liveApiKey !== undefined && opts.liveApiKey === cfg.apiKey) {
+  const real = [
+    ...(opts.liveApiKey === undefined ? [] : [opts.liveApiKey]),
+    ...(await otherKeys(opts.otherCardKey, env['DX_API_KEY'])),
+  ]
+  if (real.includes(cfg.apiKey)) {
     throw new Error('Delta demo carries the same API key as production — refusing to use a real key on the demo rail')
   }
   logFn('Delta demo config resolved', { source: cfg.source, baseUrl: cfg.baseUrl, wsUrl: cfg.wsUrl })
