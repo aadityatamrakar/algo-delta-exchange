@@ -38,13 +38,26 @@ export function isDemoHost(url: string): boolean {
   return host === TESTNET_DOMAIN || host.endsWith(`.${TESTNET_DOMAIN}`)
 }
 
+/** Delta Exchange India's own hosts — REST and the two sockets. Nothing else is production. */
+const PROD_HOSTS = new Set(['api.india.delta.exchange', 'socket.india.delta.exchange', 'public-socket.india.delta.exchange'])
+
+/** Is this URL one of Delta Exchange India's production hosts, over TLS? */
+export function isProdHost(url: string): boolean {
+  const u = parse(url)
+  return u !== null && (u.protocol === 'https:' || u.protocol === 'wss:') && PROD_HOSTS.has(u.hostname.toLowerCase())
+}
+
 /**
- * Throw unless `url` is a host the `rail`'s credentials may be sent to.
+ * Throw unless `url` is a host the `rail`'s credentials may be sent to. BOTH
+ * directions are allowlists, over TLS (`https:`/`wss:`):
  *
- *   demo → a testnet host only, over TLS (`https:`/`wss:`). Allowlist: anything
- *          that is not provably testnet is refused, production included.
- *   live → anything but testnet. The production host is the operator's
- *          `baseUrl` to choose; testnet is the one place it must never be.
+ *   demo → a testnet host (`*.testnet.deltaex.org`) only.
+ *   live → Delta Exchange India's production hosts only
+ *          (`api.india.delta.exchange` and its sockets).
+ *
+ * The live side was "anything but testnet" until 3 Nov, when a demo key was
+ * saved into the production card with the testnet URL — overwriting the real
+ * key. A production slot that accepts any host is one that accepts that.
  */
 export function assertRailHost(rail: DxCredentialRail, url: string): void {
   const u = parse(url)
@@ -59,6 +72,14 @@ export function assertRailHost(rail: DxCredentialRail, url: string): void {
     return
   }
   if (isDemoHost(url)) {
-    throw new Error(`Delta production credentials must never be sent to the testnet; refusing '${url}'`)
+    throw new Error(
+      `Delta production credentials must never be sent to the testnet; refusing '${url}' — ` +
+        'a testnet key belongs on the Delta Demo (testnet) card',
+    )
+  }
+  if (!isProdHost(url)) {
+    throw new Error(
+      `Delta production credentials may only be sent to Delta Exchange India (${DX_PROD_REST_URL}); refusing '${url}'`,
+    )
   }
 }

@@ -36,7 +36,7 @@ import {
 import type { OrderIntent } from '@algomaker/order-bus'
 import { DxAdapter, DxOrderError, DxRest, type DxTradingClient } from '@algomaker/dx'
 import { DX_USER_AGENT, type DxConfig } from './dx-config.ts'
-import { chooseRail, stampedPaperRail, type PaperRailChoice } from './dx-edge.ts'
+import { chooseRail, stampedPaperRail, type OrderRail, type PaperRailChoice } from './dx-edge.ts'
 import { orderMode } from './journal.ts'
 
 /** What the demo rail needs of a REST client (a fake in tests). */
@@ -267,43 +267,102 @@ export class DemoRail implements BrokerAdapter {
 
 // ------------------------------------------------------------ the router
 
+/** One order's adapter, and the rail it is, and why — for the journal and the book row. */
+export interface Routed<A> {
+  readonly adapter: A | Pick<BrokerAdapter, 'placeOrder'>
+  readonly rail: OrderRail
+  readonly note: string
+}
+
+/** What the router needs to know of a paper book. */
+export interface PaperBookState {
+  /** The operator's setting: `demo` (default) or forced `sim`. */
+  readonly setting: PaperRailChoice
+  /** Does the book hold legs (or is that unreadable — then it is taken as held)? */
+  readonly held: boolean
+  /** The rail its last order went to, null before any. */
+  readonly lastUsed: PaperRailChoice | null
+}
+
+export type DemoReadiness = { readonly ok: true } | { readonly ok: false; readonly why: string }
+
+const RAIL_WORDS: Record<PaperRailChoice, string> = { demo: 'Delta testnet', sim: 'simulator' }
+
 /**
- * WHICH ADAPTER ONE ORDER DOCUMENT GOES TO, asked per order (`adapterFor`).
+ * WHICH ADAPTER ONE ORDER DOCUMENT GOES TO, asked per order (`adapterFor`) —
+ * the operator's ruling of 3 Nov: PAPER → Delta demo, LIVE → Delta.
  *
- *   - `chooseRail` decides: live → production (only with the live rail on),
- *     demo → the demo rail, everything else → the simulator.
- *   - A PAPER document not yet placed reads its book's `dx_paper_rail` and is
- *     STAMPED with the answer before anything is sent, so every later tranche,
- *     the chasers, the sweeps and the cancel drains all see one rail for it.
- *     A stamped document never reads the book again: a switch applies from the
- *     book's next order, never mid-order.
- *   - No demo rail (not the Delta venue): nothing is read or stamped.
- *   - The book's rail cannot be read, or the stamp cannot be written: the
- *     order is REFUSED with the reason. It is never guessed onto a rail.
+ *   - LIVE is `chooseRail` exactly as before: production only with the live
+ *     rail on, else the simulator. Never demo; nothing is read or stamped.
+ *   - A PAPER document not yet placed:
+ *       1. a book that HOLDS LEGS stays on the rail its last order went to
+ *          (`lastUsed`; none recorded = the simulator, where every leg before
+ *          the demo rail was opened) until it is flat — a close must reach the
+ *          exchange its open went to. Held on testnet with no usable demo key
+ *          → refused, never closed on the simulator.
+ *       2. a book set to `sim` → the simulator.
+ *       3. otherwise (`demo`, the default) → testnet when a `delta-demo` key is
+ *          stored and its last Test passed; else the simulator, and the note
+ *          says why.
+ *     The document is STAMPED with the rail before anything is sent (every
+ *     tranche, chaser, sweep and cancel then follows it) and the book row is
+ *     told where its order went (`stamp`).
+ *   - A stamped document keeps its rail; nothing is read again.
+ *   - No demo rail (not the Delta venue): the simulator, nothing read.
+ *   - Anything unreadable or unwritable: the order is REFUSED with the reason.
  */
 export function createAdapterRouter<A extends Pick<BrokerAdapter, 'placeOrder'>>(deps: {
   readonly env: Readonly<Record<string, string | undefined>>
   readonly simulator: A
   readonly live: A | null
   readonly demo: A | null
-  readonly bookRail: (tag: string) => Promise<PaperRailChoice>
-  readonly stamp: (doc: Record<string, unknown>, rail: PaperRailChoice) => Promise<void>
-}): (doc: Record<string, unknown>) => Promise<A | Pick<BrokerAdapter, 'placeOrder'>> {
+  readonly bookState: (tag: string) => Promise<PaperBookState>
+  readonly demoReady: () => Promise<DemoReadiness>
+  readonly stamp: (doc: Record<string, unknown>, rail: PaperRailChoice, note: string) => Promise<void>
+}): (doc: Record<string, unknown>) => Promise<Routed<A>> {
   return async (doc) => {
-    if (deps.demo === null || orderMode(doc) !== 'paper' || stampedPaperRail(doc) !== null) {
+    const stamped = stampedPaperRail(doc)
+    if (deps.demo === null || orderMode(doc) !== 'paper' || stamped !== null) {
       const rail = chooseRail(doc, deps.env, 'sim')
-      if (rail === 'live') return deps.live ?? deps.simulator
-      if (rail === 'demo' && deps.demo !== null) return deps.demo
-      return deps.simulator
+      if (rail === 'live') {
+        return deps.live === null
+          ? { adapter: deps.simulator, rail: 'sim', note: '' }
+          : { adapter: deps.live, rail: 'live', note: '' }
+      }
+      if (rail === 'demo' && deps.demo !== null) return { adapter: deps.demo, rail: 'demo', note: 'placed on the Delta testnet' }
+      return { adapter: deps.simulator, rail: 'sim', note: stamped === 'sim' ? 'placed on the simulator' : '' }
     }
-    let book: PaperRailChoice
+    let rail: PaperRailChoice
+    let note: string
     try {
-      book = await deps.bookRail(String(doc['tag'] ?? ''))
-      await deps.stamp(doc, book)
+      const book = await deps.bookState(String(doc['tag'] ?? ''))
+      if (book.held) {
+        rail = book.lastUsed ?? 'sim'
+        note = `holds legs opened on the ${RAIL_WORDS[rail]} — stays there until flat`
+        if (rail === 'demo') {
+          const ready = await deps.demoReady()
+          if (!ready.ok) {
+            return {
+              adapter: refusing(`the book holds legs on the Delta testnet but the demo key is not usable — ${ready.why}`),
+              rail: 'demo',
+              note: `refused — ${ready.why}`,
+            }
+          }
+        }
+      } else if (book.setting === 'sim') {
+        rail = 'sim'
+        note = 'simulator — the book is set to Sim'
+      } else {
+        const ready = await deps.demoReady()
+        rail = ready.ok ? 'demo' : 'sim'
+        note = ready.ok ? 'Delta testnet — demo key verified' : `simulator — ${ready.why}`
+      }
+      await deps.stamp(doc, rail, note)
     } catch (err) {
-      return refusing(`the book's paper rail could not be settled — ${err instanceof Error ? err.message : String(err)}`)
+      const why = `the book's paper rail could not be settled — ${err instanceof Error ? err.message : String(err)}`
+      return { adapter: refusing(why), rail: 'sim', note: `refused — ${why}` }
     }
-    return chooseRail({ ...doc, dx_paper_rail: book }, deps.env, book) === 'demo' ? deps.demo : deps.simulator
+    return { adapter: rail === 'demo' ? deps.demo : deps.simulator, rail, note }
   }
 }
 
@@ -313,4 +372,32 @@ function refusing(why: string): Pick<BrokerAdapter, 'placeOrder'> {
       throw new BrokerOrderError(`order ${intent.clientOrderId} NOT placed: ${why}`, 'fatal')
     },
   }
+}
+
+/**
+ * Is the stored `delta-demo` key usable? Stored AND its last Test passed —
+ * the operator's rule. A new key resets `lastVerifiedAt` (`BrokerStore.save`),
+ * so a key nobody has tested routes nothing to testnet.
+ */
+export function demoKeyReadiness(row: Record<string, unknown> | null): DemoReadiness {
+  const sealed = row?.['secret']
+  if (typeof sealed !== 'string' || sealed === '') return { ok: false, why: 'no Delta Demo key stored' }
+  const err = typeof row?.['lastError'] === 'string' ? (row['lastError'] as string) : ''
+  if (err !== '') return { ok: false, why: `the Delta Demo key's last Test failed (${err.slice(0, 160)})` }
+  if (typeof row?.['lastVerifiedAt'] !== 'number') return { ok: false, why: 'the Delta Demo key has not passed Test yet' }
+  return { ok: true }
+}
+
+/**
+ * Does a `desk-books` document hold legs? No document is flat; a leg array
+ * that cannot be read is HELD — unknown is never flat.
+ */
+export function holdsLegs(doc: Record<string, unknown> | null): boolean {
+  if (doc === null) return false
+  const legs = doc['legs']
+  if (!Array.isArray(legs)) return true
+  return legs.some((l) => {
+    const q = (l as { qty?: unknown } | null)?.qty
+    return typeof q !== 'number' || !Number.isFinite(q) || q !== 0
+  })
 }

@@ -48,6 +48,32 @@ export const DELTA_BASE_URL = 'https://api.india.delta.exchange'
 /** Delta's testnet REST — the demo rail's host. Never the production one. */
 export const DELTA_DEMO_BASE_URL = 'https://cdn-ind.testnet.deltaex.org'
 
+/**
+ * ONE CARD, ONE EXCHANGE (3 Nov). The demo key was once saved into the live
+ * card with the testnet URL, overwriting the real key. The api now refuses
+ * that save (400); this says so BEFORE the save, in plain words, and keeps the
+ * Save button off. Blank is allowed (the demo card defaults to testnet).
+ */
+export function hostRefusal(kind: BrokerKind, url: string): string | null {
+  const raw = url.trim()
+  if (raw === '') return null
+  let u: URL | null = null
+  try { u = new URL(raw) } catch { u = null }
+  const host = u?.hostname.toLowerCase() ?? ''
+  const tls = u?.protocol === 'https:'
+  const testnet = host === 'testnet.deltaex.org' || host.endsWith('.testnet.deltaex.org')
+  if (kind === 'delta') {
+    if (tls && host === 'api.india.delta.exchange') return null
+    return testnet
+      ? `This card only takes ${DELTA_BASE_URL}. That is the Delta TESTNET — a demo key belongs on the Delta Demo (testnet) card below, and saving it here would replace the real key.`
+      : `This card only takes ${DELTA_BASE_URL}, Delta Exchange India's production host. '${raw}' is not it.`
+  }
+  if (tls && testnet) return null
+  return host === 'api.india.delta.exchange'
+    ? `This card only takes a Delta testnet host (${DELTA_DEMO_BASE_URL}). That is PRODUCTION — the real key belongs on the Delta Exchange India card above.`
+    : `This card only takes a Delta testnet host (${DELTA_DEMO_BASE_URL}). '${raw}' is not one.`
+}
+
 interface FieldSpec { key: string; label: string; hint?: string; default?: string }
 
 /**
@@ -69,7 +95,7 @@ const FIELDS: Record<BrokerKind, { label: string; secret: FieldSpec[]; meta: Fie
         key: 'baseUrl',
         label: 'Base URL',
         default: DELTA_BASE_URL,
-        hint: 'Delta Exchange India REST. Change it only to point at a different Delta host.',
+        hint: 'Delta Exchange India REST — the production host only. A testnet key goes on the Delta Demo (testnet) card.',
       },
     ],
   },
@@ -85,8 +111,8 @@ const FIELDS: Record<BrokerKind, { label: string; secret: FieldSpec[]; meta: Fie
         label: 'Base URL',
         default: DELTA_DEMO_BASE_URL,
         hint:
-          "Delta's testnet REST. Orders from paper books set to the Demo rail go here, signed " +
-          'with these testnet keys — never the live ones.',
+          "Delta's testnet REST — a testnet host only. Paper books trade here once this key passes " +
+          'Test (a book can be forced onto the simulator in its Dials). Never the live key.',
       },
     ],
   },
@@ -180,9 +206,10 @@ function EditDialog(props: {
 
   const filled = spec.secret.filter((f) => (secret[f.key] ?? '') !== '')
   const partial = filled.length > 0 && filled.length < spec.secret.length
+  const refused = hostRefusal(props.kind, metaText('baseUrl'))
 
   const save = async (): Promise<void> => {
-    if (partial) return
+    if (partial || refused !== null) return
     setBusy(true)
     setError(null)
     try {
@@ -213,6 +240,10 @@ function EditDialog(props: {
               {error !== null ? <Banner status="error" title="Could not save" description={error} /> : null}
 
               <TextInput label="Label" value={label} onChange={setLabel} />
+
+              {refused !== null ? (
+                <Banner status="error" title="Wrong exchange for this card" description={refused} />
+              ) : null}
 
               {spec.meta.map((f) => (
                 <TextInput
@@ -259,7 +290,7 @@ function EditDialog(props: {
                 variant="primary"
                 label={filled.length === 0 ? 'Save (credential unchanged)' : 'Save credential'}
                 isLoading={busy}
-                isDisabled={busy || partial}
+                isDisabled={busy || partial || refused !== null}
                 onClick={() => void save()}
               />
             </HStack>

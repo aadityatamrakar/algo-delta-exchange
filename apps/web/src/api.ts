@@ -1609,19 +1609,24 @@ export interface BookRow {
   createdAt: number
   updatedAt: number
   /**
-   * Where a PAPER book's orders go: the simulator (`sim`) or Delta's testnet
-   * (`demo`). Optional only because a desk that predates the demo rail does
-   * not send it — read it through `paperRailOf`, which says `sim` then.
+   * A PAPER book's rail SETTING: `demo` (the default — Delta's testnet when a
+   * verified Delta Demo key exists, else the simulator) or `sim` (forced onto
+   * the simulator). Optional only because an older api does not send it —
+   * read it through `paperRailOf`.
    */
   dx_paper_rail?: PaperRail
+  /** Where the gateway actually sent this book's last order; null before any. */
+  dx_rail_used?: PaperRail | null
+  /** Why — e.g. "simulator — no Delta Demo key stored". */
+  dx_rail_note?: string
 }
 
 /** A paper book's rail. Mirrors `dx_paper_rail` in `apps/api/src/books-registry.ts`. */
 export type PaperRail = 'sim' | 'demo'
 
-/** The rail a row names; anything but an exact `demo` is the simulator, as the gateway reads it. */
+/** The setting a row names; only an exact `sim` forces the simulator, as the gateway reads it. */
 export function paperRailOf(row: Pick<BookRow, 'dx_paper_rail'>): PaperRail {
-  return row.dx_paper_rail === 'demo' ? 'demo' : 'sim'
+  return row.dx_paper_rail === 'sim' ? 'sim' : 'demo'
 }
 
 /**
@@ -2619,10 +2624,10 @@ export const api = {
         { mode, tradingsymbol, decisionId, style },
       ),
     /**
-     * SWITCH A PAPER BOOK'S RAIL — the simulator or Delta's testnet. Takes
-     * effect on the book's next order. Refused (409) while the book holds legs
-     * or has a decision working: a close on the other rail would book a
-     * position that rail never held. Render the server's message.
+     * SET A PAPER BOOK'S RAIL — `demo` (Delta's testnet when a verified demo
+     * key exists) or `sim` (forced simulator). Takes effect on the book's next
+     * order; a book holding legs keeps them on the rail they were opened on
+     * until flat (the gateway's rule). Render any error as the server wrote it.
      */
     setPaperRail: (tag: string, rail: PaperRail) =>
       post<BookRow>(`/v1/desk/books/registry/${encodeURIComponent(tag)}/paper-rail`, { mode: 'paper', rail }),

@@ -21,7 +21,7 @@ import assert from 'node:assert/strict'
 import { BrokerOrderError, type PlacedOrder } from '@algomaker/brokers'
 import type { OrderIntent } from '@algomaker/order-bus'
 import type { DxOrder, DxOrderRequest, DxProduct } from '@algomaker/dx'
-import { DemoRail, createAdapterRouter, type DemoRest } from '../src/dx-demo.ts'
+import { DemoRail, createAdapterRouter, demoKeyReadiness, holdsLegs, type DemoRest, type PaperBookState } from '../src/dx-demo.ts'
 import type { DxConfig } from '../src/dx-config.ts'
 
 const PROD_TOKEN = 161669
@@ -267,75 +267,125 @@ test('onBuilt runs once, with the REST client and the config, so the socket and 
 
 const LIVE_ENV = { DESK_BROKER: 'delta', DESK_DX_LIVE: '1' }
 
-function router(over: { env?: Record<string, string>; book?: (tag: string) => Promise<'sim' | 'demo'>; stamp?: (doc: Record<string, unknown>, rail: 'sim' | 'demo') => Promise<void>; demo?: boolean; live?: boolean } = {}) {
+type Ready = { ok: true } | { ok: false; why: string }
+
+function router(over: {
+  env?: Record<string, string>
+  book?: Partial<PaperBookState> | (() => Promise<PaperBookState>)
+  ready?: Ready
+  stamp?: () => Promise<void>
+  demo?: boolean
+  live?: boolean
+} = {}) {
   const sim = { name: 'sim', placeOrder: async () => { throw new Error('sim') } }
   const live = { name: 'live', placeOrder: async () => { throw new Error('live') } }
   const demo = { name: 'demo', placeOrder: async () => { throw new Error('demo') } }
   const reads: string[] = []
-  const stamps: [unknown, string][] = []
+  const stamps: [unknown, string, string][] = []
   const route = createAdapterRouter({
     env: over.env ?? {},
     simulator: sim,
     live: over.live === false ? null : live,
     demo: over.demo === false ? null : demo,
-    bookRail: async (tag) => {
+    bookState: async (tag) => {
       reads.push(tag)
-      return over.book === undefined ? 'sim' : await over.book(tag)
+      if (typeof over.book === 'function') return await over.book()
+      return { setting: 'demo', held: false, lastUsed: null, ...(over.book ?? {}) }
     },
-    stamp: async (doc, rail) => {
-      stamps.push([doc['clientOrderId'], rail])
-      if (over.stamp !== undefined) await over.stamp(doc, rail)
+    demoReady: async () => over.ready ?? { ok: true },
+    stamp: async (doc, rail, note) => {
+      stamps.push([doc['clientOrderId'], rail, note])
+      if (over.stamp !== undefined) await over.stamp()
     },
   })
   return { route, sim, live, demo, reads, stamps }
 }
 
-test('router: a paper order on a demo book goes to the demo rail, and the document is stamped demo', async () => {
-  const r = router({ book: async () => 'demo' })
-  assert.equal(await r.route({ clientOrderId: 'o1', tag: 'BK', mode: 'paper' }), r.demo)
-  assert.deepEqual(r.reads, ['BK'])
-  assert.deepEqual(r.stamps, [['o1', 'demo']])
+const PAPER = { clientOrderId: 'o1', tag: 'BK', mode: 'paper' }
+
+test('router: PAPER goes to the Delta testnet when a demo key is stored and verified — stamped demo', async () => {
+  const r = router()
+  const got = await r.route(PAPER)
+  assert.equal(got.adapter, r.demo)
+  assert.equal(got.rail, 'demo')
+  assert.deepEqual(r.stamps, [['o1', 'demo', 'Delta testnet — demo key verified']])
 })
 
-test('router: a paper order on a sim book goes to the simulator, stamped sim', async () => {
-  const r = router()
-  assert.equal(await r.route({ clientOrderId: 'o1', tag: 'BK', mode: 'paper' }), r.sim)
-  assert.deepEqual(r.stamps, [['o1', 'sim']])
+test('router: no usable demo key → the SIMULATOR, and the note says why', async () => {
+  for (const why of ['no Delta Demo key stored', 'the Delta Demo key has not passed Test yet']) {
+    const r = router({ ready: { ok: false, why } })
+    const got = await r.route(PAPER)
+    assert.equal(got.adapter, r.sim)
+    assert.equal(got.rail, 'sim')
+    assert.equal(got.note, `simulator — ${why}`)
+    assert.deepEqual(r.stamps, [['o1', 'sim', `simulator — ${why}`]])
+  }
+})
+
+test("router: a book overridden to 'sim' stays on the simulator even with a verified demo key", async () => {
+  const r = router({ book: { setting: 'sim' } })
+  const got = await r.route(PAPER)
+  assert.equal(got.adapter, r.sim)
+  assert.match(got.note, /set to Sim/)
+})
+
+test('router: a HOLDING book stays on the rail its last order went to — a close reaches the exchange its open did', async () => {
+  // Opened on the simulator before the key existed; the key is verified now.
+  const simHeld = router({ book: { held: true, lastUsed: 'sim' } })
+  assert.equal((await simHeld.route(PAPER)).adapter, simHeld.sim)
+  // Legs from before the demo rail existed: no record = the simulator.
+  const legacy = router({ book: { held: true, lastUsed: null } })
+  const got = await legacy.route(PAPER)
+  assert.equal(got.adapter, legacy.sim)
+  assert.match(got.note, /stays there until flat/)
+  // Opened on testnet, book since set to Sim: the close still goes to testnet.
+  const demoHeld = router({ book: { held: true, lastUsed: 'demo', setting: 'sim' } })
+  assert.equal((await demoHeld.route(PAPER)).adapter, demoHeld.demo)
+})
+
+test('router: legs held on testnet with no usable key are REFUSED — never closed on the simulator', async () => {
+  const r = router({ book: { held: true, lastUsed: 'demo' }, ready: { ok: false, why: 'no Delta Demo key stored' } })
+  const got = await r.route(PAPER)
+  assert.notEqual(got.adapter, r.sim)
+  await assert.rejects(() => got.adapter.placeOrder(intent()), /holds legs on the Delta testnet.*no Delta Demo key stored/)
+  assert.deepEqual(r.stamps, [])
 })
 
 test('router: a stamped document keeps its rail — the book is not read, nothing is re-stamped', async () => {
-  const r = router({ book: async () => 'sim' })
-  assert.equal(await r.route({ clientOrderId: 'o1', tag: 'BK', mode: 'paper', dx_paper_rail: 'demo' }), r.demo)
+  const r = router({ book: { setting: 'sim' } })
+  assert.equal((await r.route({ ...PAPER, dx_paper_rail: 'demo' })).adapter, r.demo)
+  assert.equal((await r.route({ ...PAPER, dx_paper_rail: 'sim' })).adapter, r.sim)
   assert.deepEqual(r.reads, [])
   assert.deepEqual(r.stamps, [])
 })
 
-test('router: a LIVE order goes to production with the live rail on, the simulator without — never demo, book never read', async () => {
-  const on = router({ env: LIVE_ENV, book: async () => 'demo' })
-  assert.equal(await on.route({ clientOrderId: 'o1', tag: 'BK', mode: 'live', dx_paper_rail: 'demo' }), on.live)
-  const off = router({ book: async () => 'demo' })
-  assert.equal(await off.route({ clientOrderId: 'o1', tag: 'BK', mode: 'live' }), off.sim)
+test('router: LIVE goes to real Delta with the live rail on, the simulator without — never demo, nothing read', async () => {
+  const on = router({ env: LIVE_ENV })
+  const got = await on.route({ clientOrderId: 'o1', tag: 'BK', mode: 'live', dx_paper_rail: 'demo' })
+  assert.equal(got.adapter, on.live)
+  assert.equal(got.rail, 'live')
+  const off = router()
+  assert.equal((await off.route({ clientOrderId: 'o1', tag: 'BK', mode: 'live' })).adapter, off.sim)
   assert.deepEqual([...on.reads, ...off.reads], [])
   assert.deepEqual([...on.stamps, ...off.stamps], [])
 })
 
 test('router: with no demo rail (not the Delta venue) nothing is read or stamped', async () => {
-  const r = router({ demo: false, book: async () => 'demo' })
-  assert.equal(await r.route({ clientOrderId: 'o1', tag: 'BK', mode: 'paper' }), r.sim)
+  const r = router({ demo: false })
+  assert.equal((await r.route(PAPER)).adapter, r.sim)
   assert.deepEqual(r.reads, [])
-  assert.deepEqual(r.stamps, [])
 })
 
-test('router: an unreadable book rail or a failed stamp REFUSES the order, fatal, with the reason', async () => {
+test('router: an unreadable book or a failed stamp REFUSES the order, fatal, with the reason', async () => {
   for (const r of [
     router({ book: async () => { throw new Error('mongo down') } }),
-    router({ book: async () => 'demo', stamp: async () => { throw new Error('write refused') } }),
+    router({ stamp: async () => { throw new Error('write refused') } }),
   ]) {
-    const a = await r.route({ clientOrderId: 'o1', tag: 'BK', mode: 'paper' })
-    assert.notEqual(a, r.sim)
-    assert.notEqual(a, r.demo)
+    const got = await r.route(PAPER)
+    assert.notEqual(got.adapter, r.sim)
+    assert.notEqual(got.adapter, r.demo)
     await assert.rejects(
-      () => a.placeOrder(intent()),
+      () => got.adapter.placeOrder(intent()),
       (err: unknown) => {
         assert.ok(err instanceof BrokerOrderError)
         assert.equal(err.klass, 'fatal')
@@ -344,4 +394,26 @@ test('router: an unreadable book rail or a failed stamp REFUSES the order, fatal
       },
     )
   }
+})
+
+test('demoKeyReadiness: stored AND last Test passed; anything less says what is missing', () => {
+  assert.deepEqual(demoKeyReadiness(null), { ok: false, why: 'no Delta Demo key stored' })
+  assert.deepEqual(demoKeyReadiness({ kind: 'delta-demo', meta: {} }), { ok: false, why: 'no Delta Demo key stored' })
+  assert.deepEqual(demoKeyReadiness({ secret: 'x', lastVerifiedAt: null, lastError: '' }), {
+    ok: false,
+    why: 'the Delta Demo key has not passed Test yet',
+  })
+  const failed = demoKeyReadiness({ secret: 'x', lastVerifiedAt: 1, lastError: 'invalid_api_key' })
+  assert.equal(failed.ok, false)
+  assert.match(failed.ok ? '' : failed.why, /last Test failed \(invalid_api_key\)/)
+  assert.deepEqual(demoKeyReadiness({ secret: 'x', lastVerifiedAt: 1, lastError: '' }), { ok: true })
+})
+
+test('holdsLegs: no document is flat; zero legs are flat; unreadable legs are HELD', () => {
+  assert.equal(holdsLegs(null), false)
+  assert.equal(holdsLegs({ legs: [] }), false)
+  assert.equal(holdsLegs({ legs: [{ qty: 0 }, { qty: 0 }] }), false)
+  assert.equal(holdsLegs({ legs: [{ qty: 0 }, { qty: -0.05 }] }), true)
+  assert.equal(holdsLegs({}), true)
+  assert.equal(holdsLegs({ legs: [{ qty: 'x' }] }), true)
 })

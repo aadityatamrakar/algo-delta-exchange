@@ -40,11 +40,14 @@ import {
 export type BookState = 'stopped' | 'running'
 
 /**
- * WHERE A PAPER BOOK'S ORDERS ARE WORKED (Delta desk). `sim` is the gateway's
- * simulator; `demo` is Delta's India testnet, through the `delta-demo`
- * credentials. Live rows carry `sim` and the gateway never reads it for them:
- * a live order goes to Delta production or nowhere. A registry field, not a
- * dial — it routes orders and the engine never reads it.
+ * WHERE A PAPER BOOK'S ORDERS ARE WORKED (Delta desk; operator ruling 3 Nov).
+ *
+ * `demo`, THE DEFAULT: Delta's India testnet, whenever a `delta-demo` key is
+ * stored and its last Test passed — else the simulator, and the gateway says
+ * so (`dx_rail_used`/`dx_rail_note`). `sim`: this book is forced onto the
+ * simulator whatever keys exist. Live rows are never read for it: a live
+ * order goes to Delta production or nowhere. A registry field, not a dial —
+ * it routes orders and the engine never reads it.
  */
 export type PaperRail = 'sim' | 'demo'
 
@@ -52,9 +55,14 @@ export function isPaperRail(v: unknown): v is PaperRail {
   return v === 'sim' || v === 'demo'
 }
 
-/** The stored value, read fail-safe: anything but an exact `'demo'` is the simulator. */
+/** The stored setting: only an exact `'sim'` forces the simulator; absent is the `demo` default. */
 export function paperRailOf(v: unknown): PaperRail {
-  return v === 'demo' ? 'demo' : 'sim'
+  return v === 'sim' ? 'sim' : 'demo'
+}
+
+/** The rail the gateway last sent this book's order to, or null before its first. */
+export function railUsedOf(v: unknown): PaperRail | null {
+  return v === 'sim' || v === 'demo' ? v : null
 }
 
 export interface BookRow {
@@ -77,8 +85,12 @@ export interface BookRow {
   readonly desired: BookState
   /** What the supervisor last reported of itself. May lag `desired`. */
   readonly actual: BookState
-  /** Paper books only: the simulator or Delta's testnet. See `PaperRail`. */
+  /** Paper books only: the operator's setting — `demo` (default) or forced `sim`. See `PaperRail`. */
   readonly dx_paper_rail: PaperRail
+  /** Written by the gateway: where this book's last order actually went, null before any. */
+  readonly dx_rail_used: PaperRail | null
+  /** Written by the gateway: why (e.g. "simulator — no Delta Demo key stored"). '' before any. */
+  readonly dx_rail_note: string
   /** Epoch ms of the supervisor's last mark, 0 when it has never reported. */
   readonly lastMarkAt: number
   /** Free text: the supervisor's last decision, for the operator's own reading. */
@@ -95,7 +107,9 @@ export const DEFAULT_BOOK: Omit<BookRow, 'tag' | 'symbol' | 'expiry' | 'mode' | 
   dials: {},
   desired: 'stopped',
   actual: 'stopped',
-  dx_paper_rail: 'sim',
+  dx_paper_rail: 'demo',
+  dx_rail_used: null,
+  dx_rail_note: '',
   lastMarkAt: 0,
   lastDecision: '',
   createdAt: 0,
@@ -537,6 +551,8 @@ export function bookFromDoc(doc: Record<string, unknown> | null): BookRow | null
     desired: isBookState(doc['desired']) ? doc['desired'] : 'stopped',
     actual: isBookState(doc['actual']) ? doc['actual'] : 'stopped',
     dx_paper_rail: paperRailOf(doc['dx_paper_rail']),
+    dx_rail_used: railUsedOf(doc['dx_rail_used']),
+    dx_rail_note: typeof doc['dx_rail_note'] === 'string' ? doc['dx_rail_note'] : '',
     lastMarkAt: typeof doc['lastMarkAt'] === 'number' && Number.isFinite(doc['lastMarkAt']) ? doc['lastMarkAt'] : 0,
     lastDecision: typeof doc['lastDecision'] === 'string' ? doc['lastDecision'] : '',
     createdAt: typeof doc['createdAt'] === 'number' ? doc['createdAt'] : 0,

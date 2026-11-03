@@ -79,7 +79,7 @@ import {
   stampedPaperRail,
 } from './dx-edge.ts'
 import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore } from './dx-config.ts'
-import { DemoRail, createAdapterRouter } from './dx-demo.ts'
+import { DemoRail, createAdapterRouter, demoKeyReadiness, holdsLegs } from './dx-demo.ts'
 import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
 import {
   BROKER_SNAPSHOT_COLLECTION,
@@ -419,9 +419,7 @@ export interface PlacerPorts {
    * `main()` where the document is no longer in hand. See `isPaperOrder` for
    * why the answer is fail-closed.
    */
-  readonly adapterFor: (
-    doc: Record<string, unknown>,
-  ) => Pick<BrokerAdapter, 'placeOrder'> | Promise<Pick<BrokerAdapter, 'placeOrder'>>
+  readonly adapterFor: (doc: Record<string, unknown>) => RoutedOrAdapter | Promise<RoutedOrAdapter>
   /** The instrument master's answer, already narrowed to what a plan needs. */
   readonly resolveContract: (tradingsymbol: string) => ResolvedContract | null
   readonly freeze: () => FreezeLimits
@@ -451,6 +449,21 @@ export interface PlacerPorts {
   readonly sweepArmed: (doc: Record<string, unknown>) => boolean
   readonly now: () => number
   readonly log: (msg: string, ctx?: Record<string, unknown>) => void
+}
+
+/**
+ * What `adapterFor` answers: an adapter, or the router's `Routed` — the adapter
+ * plus the rail it is and why, which the PLANNED journal row then carries
+ * (`detail.rail`, `detail.railNote`), so the journal says which rail was used.
+ */
+export type RoutedOrAdapter =
+  | Pick<BrokerAdapter, 'placeOrder'>
+  | { readonly adapter: Pick<BrokerAdapter, 'placeOrder'>; readonly rail: string; readonly note: string }
+
+function routedOf(r: RoutedOrAdapter): { adapter: Pick<BrokerAdapter, 'placeOrder'>; rail: string | null; note: string } {
+  return 'adapter' in r && typeof (r as { placeOrder?: unknown }).placeOrder !== 'function'
+    ? { adapter: r.adapter, rail: r.rail, note: r.note }
+    : { adapter: r as Pick<BrokerAdapter, 'placeOrder'>, rail: null, note: '' }
 }
 
 export interface Placer {
@@ -818,7 +831,8 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
     // The broker for THIS document — the simulator for a paper order, the real
     // adapter for everything else. Resolved once per placement so every tranche
     // of one order goes to the same place.
-    const adapter = await ports.adapterFor(doc)
+    const routed = routedOf(await ports.adapterFor(doc))
+    const adapter = routed.adapter
     const { plan, tranches } = planFor(order, clientOrderId, doc)
 
     if (plan.rejected !== null) {
@@ -867,6 +881,9 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
         underlying: plan.underlying,
         underlyingSource: plan.underlyingSource,
         ...(freezeWarning === null ? {} : { freezeUnknown: true }),
+        // WHICH RAIL, and why — present when the router answered (the DX gateway).
+        ...(routed.rail === null ? {} : { rail: routed.rail }),
+        ...(routed.note === '' ? {} : { railNote: routed.note }),
         // Present only for a gated order, so an ungated one journals exactly
         // what it always has.
         ...(tranches === null
@@ -2141,16 +2158,30 @@ export async function main(): Promise<void> {
       simulator: paperAdapter,
       live: dxAdapter,
       demo: demoRail,
-      bookRail: async (tag) => {
+      bookState: async (tag) => {
         const row = await mongo.db.collection('desk-books-registry').findOne({ tag, mode: 'paper' })
-        return row?.['dx_paper_rail'] === 'demo' ? 'demo' : 'sim'
+        const book = await mongo.db.collection('desk-books').findOne({ tag, mode: 'paper' })
+        const used = row?.['dx_rail_used']
+        return {
+          setting: row?.['dx_paper_rail'] === 'sim' ? 'sim' : 'demo',
+          held: holdsLegs(book),
+          lastUsed: used === 'demo' || used === 'sim' ? used : null,
+        }
       },
-      stamp: async (doc, rail) => {
+      demoReady: async () => demoKeyReadiness(await mongo.db.collection('desk-brokers').findOne({ kind: 'delta-demo' })),
+      stamp: async (doc, rail, note) => {
         const res = await gatewayOrders.updateOne(
           { clientOrderId: String(doc['clientOrderId'] ?? '') },
-          { $set: { dx_paper_rail: rail } },
+          { $set: { dx_paper_rail: rail, dx_rail_note: note } },
         )
         if (res.matchedCount !== 1) throw new Error(`order document ${String(doc['clientOrderId'])} not found to stamp`)
+        // The book row says where its order went — and a holding book reads it back to stay there.
+        await mongo.db
+          .collection('desk-books-registry')
+          .updateOne(
+            { tag: String(doc['tag'] ?? ''), mode: 'paper' },
+            { $set: { dx_rail_used: rail, dx_rail_note: note, dx_rail_used_at: Date.now() } },
+          )
       },
     }),
     resolveContract: (tradingsymbol) => {

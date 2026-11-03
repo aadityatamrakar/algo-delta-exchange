@@ -14,7 +14,7 @@
  * the dashboard that OUR service is broken when it is the credentials that are.
  */
 
-import { DX_DEMO_REST_URL, DxRest, assertRailHost } from '@algomaker/dx'
+import { DX_DEMO_REST_URL, DX_PROD_REST_URL, DxRest, assertRailHost, isDemoHost, isProdHost } from '@algomaker/dx'
 import { zerodhaLogin } from '../../../marketdata/src/zerodha-login.ts'
 import { BrokerStore, isBrokerKind, requireMasterKey, type BrokerKind } from '../brokerstore.ts'
 import { auditLog } from '../audit.ts'
@@ -82,6 +82,22 @@ export function brokerRoutes(deps: ApiDeps, opts: BrokerRouteOptions = {}): Rout
       if (secret !== undefined && !isObject(secret)) {
         send(400, { error: 'secret must be an object' })
         return true
+      }
+      /**
+       * ONE CARD, ONE EXCHANGE (3 Nov). The demo key was saved into the `delta`
+       * card with the testnet URL, and that save overwrote the real key. So a
+       * Delta card's save is refused, whole, unless the host it will hold —
+       * this body's `meta`, else what is stored — is its own exchange's:
+       * production for `delta`, testnet for `delta-demo`. Nothing is written.
+       */
+      if (kind === 'delta' || kind === 'delta-demo') {
+        const effective = meta !== undefined ? meta : (await store.get(kind)).meta
+        const refused = deltaHostRefusal(kind, effective, isObject(secret) ? secret : {})
+        if (refused !== null) {
+          ctx.log('broker credentials REFUSED — wrong exchange for the card', { kind })
+          send(400, { error: refused })
+          return true
+        }
       }
       await store.save(
         kind,
@@ -160,6 +176,32 @@ export function brokerRoutes(deps: ApiDeps, opts: BrokerRouteOptions = {}): Rout
 
     return false
   }
+}
+
+/**
+ * Why a Delta card may not hold these hosts, or null. A blank `baseUrl` is
+ * allowed (production's Test reports it missing; demo defaults to testnet).
+ */
+function deltaHostRefusal(
+  kind: 'delta' | 'delta-demo',
+  meta: Record<string, unknown>,
+  secret: Record<string, unknown>,
+): string | null {
+  const urls = [str(meta['baseUrl'], secret['baseUrl']), str(meta['wsUrl'], secret['wsUrl'])].filter((u) => u !== '')
+  for (const url of urls) {
+    try {
+      assertRailHost(kind === 'delta' ? 'live' : 'demo', url)
+    } catch {
+      return kind === 'delta'
+        ? `Not saved: the Delta Exchange India card only takes ${DX_PROD_REST_URL}. '${url}' is not the ` +
+            'production host' +
+            (isDemoHost(url) ? ' — it is the testnet; a demo key belongs on the Delta Demo (testnet) card.' : '.')
+        : `Not saved: the Delta Demo (testnet) card only takes a testnet host (${DX_DEMO_REST_URL}). ` +
+            `'${url}' is not the testnet` +
+            (isProdHost(url) ? ' — it is production; the real key belongs on the Delta Exchange India card.' : '.')
+    }
+  }
+  return null
 }
 
 type TestResult = { ok: true; note?: string } | { ok: false; error: string }
