@@ -33,6 +33,7 @@
 
 import { isOn, type StrategyRow } from './strategies.ts'
 import type { Log } from './routes/kit.ts'
+import { venueFromEnv, type VenueSpec } from '@algomaker/venue'
 
 /**
  * The persistence this needs, as a narrow port — `DeskStore` satisfies it.
@@ -52,6 +53,11 @@ export interface SeedStore {
   repairSeededAutostart(tag: string, from: string, to: string): Promise<boolean>
   /** Narrow repair for `LEGACY_SEEDED_REASON`. Returns whether it cleared one. */
   clearSeededDisabledReason(tag: string, seeded: string): Promise<boolean>
+  /**
+   * Delete a HOSTED row only if no registry book and no trade names its tag.
+   * Returns whether a row went.
+   */
+  deleteUnusedHostedRow(tag: string): Promise<boolean>
 }
 
 /**
@@ -116,9 +122,20 @@ export async function seedHostedStrategies(
   store: SeedStore,
   nowMs: number,
   log: Log,
+  venue: VenueSpec = venueFromEnv(),
 ): Promise<{ added: number; cleared: number }> {
   let added = 0
   let cleared = 0
+  if (venue.id === 'dx') {
+    // The catalogue is NSE BANKNIFTY/SENSEX straddles: nothing for DX to host.
+    // Rows an earlier boot seeded are removed unless a book or a trade uses them.
+    const removed: string[] = []
+    for (const seed of HOSTED_STRATEGIES) {
+      if (await store.deleteUnusedHostedRow(seed.tag)) removed.push(seed.tag)
+    }
+    if (removed.length > 0) log('removed unused NSE catalogue rows', { tags: removed })
+    return { added, cleared }
+  }
   for (const seed of HOSTED_STRATEGIES) {
     const existing = await store.loadStrategy(seed.tag)
     if (existing !== null) {

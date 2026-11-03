@@ -23,11 +23,10 @@
  */
 
 import { buildPositions, type Costs, type Marks } from '@algomaker/pnl'
-import { fixedClock, isMarketOpen } from '@algomaker/core'
 import type { DeskMode } from './contract.ts'
 import type { ExitQuote, ExitSide, MarkBasis, QuoteCache } from './marks.ts'
 import type { ApiDeps } from './routes/kit.ts'
-import { API_VENUE, isNse, minutesIntoVenueDay, previousVenueDay, venueDayRange, type VenueSpec } from './venue.ts'
+import { API_VENUE, isNse, minutesIntoVenueDay, previousVenueDay, venueDayRange, venueSessionOpen, type VenueSpec } from './venue.ts'
 import { PnlStore, pnlKey, splitPnlKey, type FillLoad, type PnlSnapshot } from './pnlstore.ts'
 import {
   buildDailyReport,
@@ -209,7 +208,7 @@ export function keepDaysOf(opts: PnlOptions): number {
 function exitReadFor(deps: ApiDeps, cache: QuoteCache): (token: number, exit: ExitSide) => ExitQuote | null {
   const venue = venueOfDeps(deps)
   // NSE keeps core's session clock exactly; a 24x7 venue is always live.
-  const sessionOpen = isNse(venue) ? isMarketOpen(fixedClock(deps.now())) : venue.isOpen(deps.now())
+  const sessionOpen = venueSessionOpen(deps.now(), venue)
   return sessionOpen
     ? (token, exit) => cache.exitQuote(token, exit)
     : (token, exit) => cache.displayExitQuote(token, exit)
