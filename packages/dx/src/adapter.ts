@@ -14,7 +14,7 @@
  *
  * Quantities reported back (fills, positions, the order book) are BTC again.
  *
- * Errors are `DxOrderError`, a subclass of `XtsOrderError` so the gateway's
+ * Errors are `DxOrderError`, a subclass of `BrokerOrderError` so the gateway's
  * existing `err.klass` handling applies unchanged:
  *   429 → back off for X-RATE-LIMIT-RESET and retry (a 429 proves the order
  *         was not placed); still 429 after `maxAttempts` → 'transient'
@@ -26,14 +26,14 @@
  */
 import { createHash } from 'node:crypto'
 import {
-  XtsOrderError,
+  BrokerOrderError,
   assertCanPlaceOrders,
   type BrokerAdapter,
   type BrokerCapabilities,
   type BrokerOrder,
   type BrokerPosition,
   type PlacedOrder,
-  type XtsErrorClass,
+  type BrokerErrorClass,
 } from '@algomaker/brokers'
 import type { OrderIntent, OrderStatus } from '@algomaker/order-bus'
 import { num } from './normalise.ts'
@@ -60,8 +60,8 @@ export interface DxAdapterOptions {
   readonly log?: (msg: string, ctx?: Record<string, unknown>) => void
 }
 
-export class DxOrderError extends XtsOrderError {
-  constructor(message: string, klass: XtsErrorClass) {
+export class DxOrderError extends BrokerOrderError {
+  constructor(message: string, klass: BrokerErrorClass) {
     super(message, klass)
     this.name = 'DxOrderError'
   }
@@ -339,7 +339,7 @@ export function mapStatus(state: string, size: number, unfilled: number): OrderS
   }
 }
 
-function classify(err: unknown): XtsErrorClass {
+function classify(err: unknown): BrokerErrorClass {
   if (err instanceof DxApiError) {
     if (err.code === 'not_sent') return 'fatal'
     if (err.status === 0 || err.status >= 500) return 'unknown'

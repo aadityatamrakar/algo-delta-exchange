@@ -20,6 +20,7 @@ import { splitIntoTranches, type FreezeLimits } from '@algomaker/instruments'
 // The desk's ONE definition of "this op only reduces exposure", shared rather
 // than restated: a second spelling of it here is a second thing to get wrong,
 // and the two would disagree about `roll` on the day one of them changed.
+import { venueFromEnv } from '@algomaker/venue'
 import { reducesExposure } from './queue.ts'
 import type { OrderIntent } from '@algomaker/order-bus'
 import type { PlacedOrder } from '@algomaker/brokers'
@@ -280,6 +281,9 @@ export function planOrder(input: PlanOrderInputs): PlannedOrder {
     ...(doc.order_type === 'LIMIT' && doc.limitPrice !== undefined
       ? { limitPrice: doc.limitPrice }
       : {}),
+    // The desk op rides the intent so the Delta adapter can send a close
+    // `reduce_only` (spec §8) — an exit that can never open the other way.
+    ...(doc.desk_op === undefined || doc.desk_op === '' ? {} : { meta: { desk_op: doc.desk_op } }),
   }))
 
   return {
@@ -588,6 +592,13 @@ export interface FillRecord {
    * doc, XTS's on the row) can never be compared.
    */
   readonly exchangeToken?: number
+  /**
+   * WHAT THE FILLS SO FAR COST, cumulative like `filledQty`, venue currency
+   * (USD on Delta, fee + GST). From the simulator's fee model on paper, Delta's
+   * reported commission on live. OMITTED when nothing says — a missing fee is
+   * unknown, never 0.
+   */
+  readonly fee?: number
 }
 
 /**
@@ -621,10 +632,20 @@ export function baseClientOrderId(clientOrderId: string): string {
  * 0 for anything that is not a positive number: "unknown", which every reader
  * treats as no evidence rather than as a token.
  */
-export function packedToExchangeToken(packed: unknown): number {
+export function packedToExchangeToken(packed: unknown, tokensPacked: boolean = TOKENS_PACKED): number {
   const n = Number(packed)
-  return Number.isFinite(n) && n > 0 ? Math.floor(n / 256) : 0
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return tokensPacked ? Math.floor(n / 256) : n
 }
+
+/**
+ * IS THE INSTRUMENT MASTER'S TOKEN PACKED? Only on NSE, where it is Zerodha's
+ * `exchange_token * 256 + segment`. On Delta (`DESK_VENUE=dx`) the token IS
+ * the Delta product id — what `DxAdapter` echoes and what the simulator is
+ * built to echo (`packedTokens: false`) — so unpacking it would compare 9001
+ * against 35 and refuse every fill's attribution. Read once, at import.
+ */
+const TOKENS_PACKED = venueFromEnv(process.env).id !== 'dx'
 
 /**
  * Fold a broker update into a fill record.
@@ -684,6 +705,7 @@ export function toFillRecord(
     ...(update.exchangeToken !== undefined && update.exchangeToken > 0
       ? { exchangeToken: update.exchangeToken }
       : {}),
+    ...(update.fee === undefined ? {} : { fee: update.fee }),
   }
 }
 

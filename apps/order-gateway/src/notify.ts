@@ -62,16 +62,14 @@ export interface NotifierDeps {
  * journal hands this notifier its STAMPED event, while `order-chaser.ts` and
  * `broker-sweep.ts` build an `OrderEvent` and notify from it directly.
  *
- * FAIL-CLOSED TO LIVE, the same direction as every other reader of this field
- * (`isPaperOrder`, `orderMode`, `PnlStore.orderEvents`' `$ne 'paper'`). A live
- * nudge shown on the paper tab is a live fill an operator does not see.
+ * FAIL-CLOSED TO PAPER, the same direction as every other reader of this
+ * field on the Delta desk (`orderMode`): only an exact `'live'` is live.
  */
 function modeOf(event: OrderEvent): 'paper' | 'live' {
   // `orderMode` is the rule, asked of each place the rail can be stated rather
-  // than re-spelled here: one implementation of "only an explicit 'paper' is
-  // paper", used by the adapter choice, the journal stamp and this frame alike.
-  if (orderMode({ mode: event.mode }) === 'paper') return 'paper'
-  return orderMode({ mode: event.detail?.['mode'] })
+  // than re-spelled here. The top-level field wins when present; otherwise the
+  // journal's folded `detail.mode`.
+  return orderMode({ mode: event.mode ?? event.detail?.['mode'] })
 }
 
 const NOTIFY_PATH = '/v1/desk/stream/notify'

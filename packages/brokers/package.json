@@ -1,7 +1,7 @@
 {
   "name": "@algomaker/brokers",
   "version": "1.0.0",
-  "description": "One BrokerAdapter interface, three implementations: zerodha-data (market data only), xts-live (orders + fills), simulator (paper).",
+  "description": "One BrokerAdapter interface: the simulator (paper), zerodha-data (market data only) and the venue-neutral BrokerOrderError. The live adapter is @algomaker/dx.",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "node --test test/*.test.ts" },

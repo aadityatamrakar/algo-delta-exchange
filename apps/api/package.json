@@ -14,13 +14,14 @@
   "dependencies": {
     "@algomaker/auth": "1.0.0",
     "@algomaker/brokers": "1.0.0",
+    "@algomaker/bus": "1.0.0",
     "@algomaker/core": "1.0.0",
     "@algomaker/desk-engine": "*",
+    "@algomaker/dx": "1.0.0",
     "@algomaker/greeks": "1.0.0",
     "@algomaker/instruments": "1.0.0",
     "@algomaker/order-bus": "1.0.0",
     "@algomaker/payoff": "1.0.0",
-    "@algomaker/bus": "1.0.0",
     "@algomaker/pnl": "1.0.0",
     "@algomaker/secrets": "1.0.0",
     "mongodb": "3.7.3"

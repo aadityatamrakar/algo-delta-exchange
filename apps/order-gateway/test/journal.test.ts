@@ -196,10 +196,11 @@ test('no mode stated writes no detail.mode — absent stays absent, and reads as
   assert.deepEqual(c.docs[1]?.['detail'], { note: 'no rail named' })
 })
 
-test('orderMode reads the document and FAILS CLOSED to live', async () => {
+test('orderMode reads the document and FAILS CLOSED to paper — only an exact live is live', async () => {
+  assert.equal(orderMode({ mode: 'live' }), 'live')
   assert.equal(orderMode({ mode: 'paper' }), 'paper')
-  assert.equal(orderMode({}), 'live', 'every live order ever written has no mode')
-  for (const bad of ['PAPER', 'Paper', 1, true, null, {}] as unknown[]) {
-    assert.equal(orderMode({ mode: bad }), 'live', `mode=${String(bad)} is not paper`)
+  assert.equal(orderMode({}), 'paper', 'no mode is paper on the Delta desk')
+  for (const bad of ['LIVE', 'Live', ' live', 1, true, null, {}] as unknown[]) {
+    assert.equal(orderMode({ mode: bad }), 'paper', `mode=${String(bad)} is not live`)
   }
 })
