@@ -71,7 +71,7 @@ SSH_OPTS    := $(if $(SSH_KEY),-i $(SSH_KEY),)
 
 .DEFAULT_GOAL := help
 .PHONY: help up down restart deploy deploy-remote status-remote logs-remote status logs logs-api logs-gateway logs-md live \
-        logs-runner strategies sync seed positions feed check test typecheck web mongo-up e2e clean-logs
+        logs-runner strategies feed check test typecheck web mongo-up e2e clean-logs
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -191,22 +191,6 @@ mongo-up: ## Ensure the local MongoDB replica set is running
 	@$(NODE) -e "(async()=>{const {connectMongo}=await import('./apps/api/src/mongo.ts');\
 	  try{const h=await connectMongo('$(MONGO)',{serverSelectionTimeoutMS:3000});await h.close();\
 	  console.log('mongo ok')}catch(e){console.error('MONGO UNREACHABLE:',e.message);process.exit(1)}})()" 2>/dev/null
-
-sync: ## Refresh instruments + NSE and BSE freeze limits
-	@DESK_MONGO_URL=$(MONGO) $(NODE) apps/api/src/cli.ts sync
-	@DESK_MONGO_URL=$(MONGO) $(NODE) -e "(async()=>{\
-	  const {connectMongo}=await import('./apps/api/src/mongo.ts');\
-	  const {syncFreezeLimits,syncBseFreezeLimits}=await import('./apps/marketdata/src/sync-runner.ts');\
-	  const h=await connectMongo(process.env.DESK_MONGO_URL);\
-	  await syncFreezeLimits({collection:h.db.collection('desk-freeze-limits'),log:(m,c)=>console.log(m,c||'')});\
-	  await syncBseFreezeLimits({collection:h.db.collection('desk-freeze-limits'),log:(m,c)=>console.log(m,c||'')});\
-	  await h.close()})()" 2>/dev/null
-
-seed: ## Seed the BHEL opening position (paper)
-	@DESK_MONGO_URL=$(MONGO) $(NODE) apps/api/src/cli.ts seed-bhel --replace
-
-positions: ## Print the BHEL book with greeks
-	@DESK_MONGO_URL=$(MONGO) $(NODE) apps/api/src/cli.ts positions BHEL --spot $${SPOT:-417}
 
 # --------------------------------------------------------------- frontend
 

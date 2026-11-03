@@ -125,11 +125,10 @@ export async function seedBook(
 
 /**
  * The BHEL opening position used to live here as a hardcoded `BHEL_SEED`
- * constant. It is now `seeds/BHEL-2026-08-25-hold-recycle-r.json`, verified
- * byte-for-byte against this constant before the constant was deleted — the
- * rates in it are a live position's cost basis. Seed it with:
+ * constant, then as an NSE seed file (not carried into the Delta desk). Any
+ * seed file is applied with:
  *
- *   node apps/api/src/cli.ts seed --file seeds/BHEL-2026-08-25-hold-recycle-r.json
+ *   node apps/api/src/cli.ts seed --file <seed.json>
  *
  * `BHEL_SEED` was the phase-0 migration's rollback path; it stopped being one
  * once the desk-books registry (`books-registry.ts`) could create the same

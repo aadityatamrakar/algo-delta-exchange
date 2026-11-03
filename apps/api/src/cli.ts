@@ -86,10 +86,7 @@ async function main(): Promise<void> {
 
       /**
        * Generic seed, replacing the hardcoded `seed-bhel` command (retired
-       * alongside `BHEL_SEED` — see `seed.ts`). The BHEL opening position now
-       * lives at `seeds/BHEL-2026-08-25-hold-recycle-r.json`, verified
-       * byte-for-byte against the constant it replaces before that constant
-       * was deleted.
+       * alongside `BHEL_SEED` — see `seed.ts`).
        *
        * Validated at least as strictly as the HTTP `/v1/desk/seed` path
        * (`validateSeedRequest`) — a file is still an untrusted boundary, and
