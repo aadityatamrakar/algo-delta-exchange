@@ -42,6 +42,7 @@ import {
 } from '../book-margin.ts'
 import { handleAccountMargin, handleBookMarginEstimates } from '../dx-margin.ts'
 import { COLLECTIONS } from '../store.ts'
+import { liveArmRefusal } from '../bull-s-live.ts'
 
 /**
  * What this module is built with: the shared bag plus the password gate the
@@ -1402,6 +1403,14 @@ async function handleBulkSwitch(deps: DeskDeps, ctx: RouteCtx): Promise<boolean>
       })
       continue
     }
+    // A live BULL-S book with no margin budget is not armed by a bulk-on either.
+    if (on && mode === 'live') {
+      const noBudget = await liveArmRefusal(deps.store, row.tag)
+      if (noBudget !== null) {
+        skipped.push({ tag: row.tag, reason: noBudget })
+        continue
+      }
+    }
     // The SAME write path as the per-row PATCH, version pin included. A
     // second, looser writer for the bulk case is how the two would drift
     // and how a bulk-on would eventually skip a guard the single toggle has.
@@ -1539,6 +1548,16 @@ async function handleStrategyPatch(
     return true
   }
   const armingLive = parsed.value.modes?.live?.enabled === true
+  // A live BULL-S book must have a margin budget (`bull-s-live.ts`). Asked
+  // BEFORE the password: a refusal the operator cannot get past by typing it
+  // should not ask for it first.
+  if (armingLive) {
+    const noBudget = await liveArmRefusal(deps.store, tag)
+    if (noBudget !== null) {
+      send(400, { error: noBudget })
+      return true
+    }
+  }
   /**
    * EDITING THE DAY GUARD'S LINES ON A LIVE ROW COSTS THE PASSWORD TOO.
    *

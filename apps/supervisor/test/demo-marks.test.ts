@@ -300,6 +300,7 @@ function rig(rail: Record<string, unknown>): Rig {
     ceOpen: true,
     peOpen: true,
     breachSinceMs: 0,
+    staleSinceMs: 0,
     filled: true,
   }
   db.of(SUPERVISOR_STATE_COLLECTION).push({

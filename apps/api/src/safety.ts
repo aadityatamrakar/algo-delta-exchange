@@ -37,6 +37,13 @@ export interface KillSwitchState {
   readonly reason: string
   readonly setBy: string
   readonly setAt: number
+  /**
+   * `'live'` = the halt holds the LIVE rail only (the exchange reconciliation
+   * halt, `reconcile-halt.ts`: paper and the demo rail keep trading). Absent
+   * = every rail — the operator's own kill switch, as it always was. The
+   * operator's release clears either.
+   */
+  readonly scope?: 'live'
 }
 
 export const DEFAULT_KILL_SWITCH: KillSwitchState = {
@@ -44,6 +51,22 @@ export const DEFAULT_KILL_SWITCH: KillSwitchState = {
   reason: '',
   setBy: '',
   setAt: 0,
+}
+
+/** Does this halt hold an order on `mode`? Opens only — see `addsExposure`. */
+export function haltApplies(halt: KillSwitchState, mode: DeskMode): boolean {
+  return halt.enabled && (halt.scope !== 'live' || mode === 'live')
+}
+
+/**
+ * The Mongo update that stores a kill switch state. An unscoped state UNSETS
+ * any stored `scope`: a `$set` alone would leave a reconcile halt's `'live'`
+ * behind through the operator's release, and their next engage would then
+ * silently hold live only.
+ */
+export function killSwitchUpdate(state: KillSwitchState): Record<string, unknown> {
+  const { scope, ...rest } = state
+  return scope === undefined ? { $set: { ...rest }, $unset: { scope: '' } } : { $set: { ...rest, scope } }
 }
 
 // ------------------------------------------------------------ broker link

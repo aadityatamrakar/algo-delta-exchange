@@ -90,6 +90,15 @@ export interface BullSInputs extends EngineInputs {
   readonly leverage: ReadonlyArray<StrikeLeverage>;
 }
 
+/**
+ * How long a book's OWN entry may sit with one wing filled and the other still
+ * working before the filled wing is closed as a half straddle anyway. Long
+ * enough for an ordinary two-leg fill; short enough that a stuck order on one
+ * wing never leaves the other naked for minutes. The close is a BS exit, so
+ * the host cancels the stuck order first (`BS_EXIT_TRIGGERS`).
+ */
+export const BS_HALF_ENTRY_GRACE_MS = 30_000;
+
 /** Strike equality, the tolerance `marking.ts` matches a chain row on. */
 const STRIKE_EPS = 1e-6;
 
@@ -261,6 +270,7 @@ function reconcile(
       // An adopted short was sold by this book at some point; only a whole
       // straddle counts as one that opened.
       filled: ce !== undefined && pe !== undefined,
+      staleSinceMs: 0,
     });
   }
   return { groups: out, failed };
@@ -414,11 +424,48 @@ export function decideBullS(
     bs = { ...bs, lastRef: ref, lastRefMs: inputs.refAsOf };
   }
 
-  // ── 5. the stop clocks ───────────────────────────────────────────────────
+  // ── 5. the stale-quote clocks and the stop clocks ───────────────────────
+  // A FROZEN QUOTE LOOKS CALM. A held leg whose quote is older than
+  // `bs_quote_max_age_s` (its book frame's own `asOf`), or that has no quote
+  // at all, is stale: the straddle is never read as safe off it (the breach
+  // clock is not reset), no new straddle goes on while it lasts (step 10),
+  // and past `bs_stale_exit_s` the straddle is bought back whole (step 9).
   const priceWord = basis === 0 ? 'last price' : 'ask';
+  const quoteMaxMs = dials.bs_quote_max_age_s * 1_000;
+  const staleOf = (g: BullSGroup): { since: number; words: string[] } | null => {
+    let since = 0;
+    const words: string[] = [];
+    for (const opt of ['CE', 'PE'] as const) {
+      if (!(opt === 'CE' ? g.ceOpen : g.peOpen)) continue;
+      const quote = quoteOf(chain, g.strike, opt);
+      const name = `${fmt(g.strike)}${opt}`;
+      let at: number;
+      if (quote === null || !(Number.isFinite(quote.asOf) && quote.asOf > 0)) {
+        words.push(`${name} has no quote`);
+        at = nowMs;
+      } else if (nowMs - quote.asOf > quoteMaxMs) {
+        words.push(`${name} quote ${fmt(Math.round((nowMs - quote.asOf) / 1_000))}s old`);
+        at = quote.asOf + quoteMaxMs;
+      } else {
+        continue;
+      }
+      since = since === 0 ? at : Math.min(since, at);
+    }
+    return words.length === 0 ? null : { since, words };
+  };
   bs = {
     ...bs,
-    groups: bs.groups.map((g): BullSGroup => {
+    groups: bs.groups.map((g0): BullSGroup => {
+      const st = staleOf(g0);
+      const staleSinceMs = st === null ? 0 : g0.staleSinceMs > 0 ? Math.min(g0.staleSinceMs, st.since) : st.since;
+      const g: BullSGroup = { ...g0, staleSinceMs };
+      if (st !== null) {
+        notes.push(
+          `quote stale at ${fmt(g.strike)}: ${st.words.join(', ')} (max ${fmt(dials.bs_quote_max_age_s)}s), ` +
+            `stale ${fmt(Math.round((nowMs - staleSinceMs) / 1_000))}s` +
+            (dials.bs_stale_exit_s > 0 ? ` of ${fmt(dials.bs_stale_exit_s)}s before it is closed` : ''),
+        );
+      }
       if (!g.ceOpen || !g.peOpen) return g; // a half straddle is closed in step 9
       const ce = exitPx(quoteOf(chain, g.strike, 'CE'), basis);
       const pe = exitPx(quoteOf(chain, g.strike, 'PE'), basis);
@@ -432,10 +479,28 @@ export function decideBullS(
         return g;
       }
       if (ce + pe >= stopLine(g, dials)) return { ...g, breachSinceMs: g.breachSinceMs > 0 ? g.breachSinceMs : nowMs };
+      // Under the line on a STALE reading is not known to be safe: the clock stays.
+      if (st !== null) return g;
       return { ...g, breachSinceMs: 0 };
     }),
   };
   const mark = withBs(state, bs);
+
+  /** A straddle's confirmed stop, in words, or null when it does not fire this pass. */
+  const stopFires = (g: BullSGroup): string | null => {
+    if (!g.ceOpen || !g.peOpen || g.breachSinceMs === 0) return null;
+    const heldS = (nowMs - g.breachSinceMs) / 1_000;
+    if (heldS < dials.bs_stop_confirm_s) return null;
+    // A clock confirmed earlier is not a price NOW: with a side unpriced the
+    // stop holds (step 5 said so) and fires on the first reading that has both.
+    const ceX = exitPx(quoteOf(chain, g.strike, 'CE'), basis);
+    const peX = exitPx(quoteOf(chain, g.strike, 'PE'), basis);
+    if (ceX === null || peX === null) return null;
+    return (
+      `stop at ${fmt(g.strike)}: ${priceWord}s ${fmt(ceX + peX)} ≥ ${fmt(dials.bs_stop_mult)} × entry ${fmt(g.ceEntry + g.peEntry)} ` +
+      `= ${fmt(stopLine(g, dials))}, held ${fmt(Math.round(heldS * 10) / 10)}s`
+    );
+  };
 
   // A halt: close everything that is left, latched on BOTH states.
   const halt = (reason: Exclude<BullSHaltReason, ''>, why: string): EngineDecision => {
@@ -488,38 +553,80 @@ export function decideBullS(
     return halt('loss', `loss cap: P&L ${fmt(pnl)} since the arm, at or below -${fmt(dials.bs_loss_cap)}`);
   }
 
-  // ── 9. stops, and half straddles ─────────────────────────────────────────
+  // ── 9. half straddles, stale exits, stops, and unbalanced straddles ─────
+  // One decision carries one trigger: a stale exit outranks a stop (it is the
+  // one the operator must hear about), a stop or a half close outranks a
+  // balance. Every action of the pass goes out together, oldest straddle first.
+  const settled = inputs.pendingLots === 0;
   const closes: EngineAction[] = [];
   const why: string[] = [];
+  let anyStale = false;
+  let anyStop = false;
   for (const g of [...bs.groups].sort((a, b) => a.openedMs - b.openedMs)) {
-    if (inputs.pendingLots === 0 && g.ceOpen !== g.peOpen) {
-      const kept = g.ceOpen ? 'CE' : 'PE';
+    const ceH = heldLeg(legs, g.strike, 'CE');
+    const peH = heldLeg(legs, g.strike, 'PE');
+    // A HALF STRADDLE NEVER WAITS ON AN UNRELATED ORDER. Settled, the
+    // reconciled flags say it. While an order of the book works, the legs
+    // say it: a straddle that OPENED has no order of its own to wait for (its
+    // only orders are closes, which a close re-sent here joins), and the
+    // book's own entry gets `BS_HALF_ENTRY_GRACE_MS` to fill its other wing.
+    const half = settled
+      ? g.ceOpen !== g.peOpen
+      : (ceH !== undefined) !== (peH !== undefined) && (g.filled || nowMs - g.openedMs >= BS_HALF_ENTRY_GRACE_MS);
+    if (half) {
+      const kept = (settled ? g.ceOpen : ceH !== undefined) ? 'CE' : 'PE';
       closes.push(...closeGroup(g, legs));
-      why.push(`half straddle at ${fmt(g.strike)}: only the ${kept} is held — closing it rather than leave it naked`);
+      anyStop = true;
+      why.push(
+        `half straddle at ${fmt(g.strike)}: only the ${kept} is held — closing it rather than leave it naked` +
+          (settled ? '' : ' (not waiting on the working order)'),
+      );
       continue;
     }
-    if (!g.ceOpen || !g.peOpen || g.breachSinceMs === 0) continue;
-    const heldS = (nowMs - g.breachSinceMs) / 1_000;
-    if (heldS < dials.bs_stop_confirm_s) continue;
-    // A clock confirmed earlier is not a price NOW: with a side unpriced the
-    // stop holds (step 5 said so) and fires on the first reading that has both.
-    const ceX = exitPx(quoteOf(chain, g.strike, 'CE'), basis);
-    const peX = exitPx(quoteOf(chain, g.strike, 'PE'), basis);
-    if (ceX === null || peX === null) continue;
-    const sum = ceX + peX;
-    closes.push(...closeGroup(g, legs));
-    why.push(
-      `stop at ${fmt(g.strike)}: ${priceWord}s ${fmt(sum)} ≥ ${fmt(dials.bs_stop_mult)} × entry ${fmt(g.ceEntry + g.peEntry)} ` +
-        `= ${fmt(stopLine(g, dials))}, held ${fmt(Math.round(heldS * 10) / 10)}s`,
-    );
+    if (!g.ceOpen || !g.peOpen) continue;
+    if (dials.bs_stale_exit_s > 0 && g.staleSinceMs > 0 && nowMs - g.staleSinceMs >= dials.bs_stale_exit_s * 1_000) {
+      closes.push(...closeGroup(g, legs));
+      anyStale = true;
+      why.push(
+        `stale exit at ${fmt(g.strike)}: a held leg's quote has been stale ${fmt(Math.round((nowMs - g.staleSinceMs) / 1_000))}s, ` +
+          `past bs_stale_exit_s ${fmt(dials.bs_stale_exit_s)}s — buying the straddle back`,
+      );
+      continue;
+    }
+    const stop = stopFires(g);
+    if (stop !== null) {
+      closes.push(...closeGroup(g, legs));
+      anyStop = true;
+      why.push(stop);
+      continue;
+    }
+    // A TRUE STRADDLE, never a lopsided one: with nothing working, a CE and PE
+    // of different sizes has the excess on the LARGER leg bought back. The
+    // smaller is never added to — that would be new risk on a book in doubt.
+    if (settled && ceH !== undefined && peH !== undefined && ceH.lots !== peH.lots) {
+      const [big, small] = ceH.lots > peH.lots ? [ceH, peH] : [peH, ceH];
+      closes.push({ op: 'resize', instrument: big.instrument, targetLots: small.lots });
+      why.push(
+        `leg mismatch at ${fmt(g.strike)}: CE ${fmt(ceH.lots)} vs PE ${fmt(peH.lots)} — buying back ` +
+          `${fmt(big.lots - small.lots)} of the ${big.optType} so the book holds a true straddle of ${fmt(small.lots)}`,
+      );
+    }
   }
   if (closes.length > 0) {
-    return acted('adjust', 'bs-stop', withNotes(why.join('; '), notes), closes, mark, mark);
+    const trigger: Trigger = anyStale ? 'bs-stale' : anyStop ? 'bs-stop' : 'bs-balance';
+    return acted('adjust', trigger, withNotes(why.join('; '), notes), closes, mark, mark);
   }
 
   // ── 10. at most one new straddle ─────────────────────────────────────────
   if (inputs.pendingLots > 0) {
     return hold(withNotes('an order of this book is still working: no new straddle', notes), mark);
+  }
+  const staleAt = bs.groups.filter((g) => g.staleSinceMs > 0).map((g) => fmt(g.strike));
+  if (staleAt.length > 0) {
+    return hold(
+      withNotes(`a held leg's quote is stale (${staleAt.join(', ')}): no new straddle or pyramid step until it is fresh`, notes),
+      mark,
+    );
   }
   if (!fresh) {
     const what =
@@ -614,6 +721,7 @@ export function decideBullS(
     peOpen: true,
     breachSinceMs: 0,
     filled: false,
+    staleSinceMs: 0,
   };
   const next = nextSize(size, dials);
   const after = withBs(state, { ...bs, groups: [...bs.groups, group], size: next });

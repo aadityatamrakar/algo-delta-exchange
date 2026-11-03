@@ -24,7 +24,7 @@ import {
 } from '@algomaker/order-bus'
 import type { DeskMode, DeskSide, Fill } from './contract.ts'
 import { isOn, type StrategyModes } from './strategies.ts'
-import type { KillSwitchState } from './safety.ts'
+import { haltApplies, type KillSwitchState } from './safety.ts'
 
 /** One broker-bound order this submission became. `qty` is UNITS, not lots. */
 export interface SubmittedOrder {
@@ -183,7 +183,7 @@ export function screenSubmitGates(input: {
   // NEW EXPOSURE ONLY. An exit is never blocked, because a control that
   // traps an open position is worse than whatever it was protecting against
   // — the same asymmetry as safety.ts and order-bus/risk.ts:82.
-  if (input.halt.enabled && input.reducesExposure !== true) {
+  if (haltApplies(input.halt, input.mode) && input.reducesExposure !== true) {
     const why = input.halt.reason === '' ? '' : ` (${input.halt.reason})`
     return (
       `kill switch: engaged${why}; only exposure-reducing orders are allowed ` +

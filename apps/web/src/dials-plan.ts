@@ -782,7 +782,16 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
     // venue currency ($ on the DX build).
     bs_margin_budget: meta(
       'rupee',
-      'Margin budget in USD for the book: a new straddle whose estimated margin would take the book over it is refused. Stops and closes are never blocked. 0 = off.',
+      'Margin budget in USD for the book: a new straddle whose estimated margin would take the book over it is refused. Stops and closes are never blocked. 0 = off. A LIVE book cannot be armed with 0.',
+      { zeroOff: true },
+    ),
+    bs_quote_max_age_s: meta(
+      'seconds',
+      "A held leg's quote older than this (or no quote at all) is stale: a frozen quote looks calm, so no new straddle goes on, the stop clock is never reset off it, and a warning is raised.",
+    ),
+    bs_stale_exit_s: meta(
+      'seconds',
+      'A straddle whose held leg has been stale this long is bought back whole (bs-stale) and a critical alert is raised. 0 = off: opens stay refused while stale.',
       { zeroOff: true },
     ),
   }),

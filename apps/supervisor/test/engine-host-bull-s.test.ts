@@ -39,6 +39,7 @@ import {
 } from '@algomaker/desk-engine'
 import { BS_EMPTY, type BullSGroup } from '../../../packages/desk-engine/src/bull-s/state.ts'
 import { DX } from '@algomaker/venue'
+import type { DeskAlert } from '@algomaker/core'
 import { BS_EXIT_TRIGGERS, EngineHost, MarkClock, type CancelOutcome, type HostLog } from '../src/engine-host.ts'
 import type { MarkSample } from '../src/engine-host.ts'
 import { StateStore, type StateCollection, type SupervisorBookState } from '../src/state-store.ts'
@@ -188,6 +189,8 @@ interface Harness {
   readonly samples: MarkSample[]
   /** Every pass's reason, as the page's last-decision line receives it. */
   readonly reasons: string[]
+  /** Every alert the host raised, in order. */
+  readonly alerts: DeskAlert[]
   book: LegPosition[]
   dials: Dials
   chain: (asOf: number) => ChainSnap
@@ -212,6 +215,7 @@ function make(over: { book?: LegPosition[]; dials?: Dials; index?: number; lever
     cancels: [] as string[],
     samples: [] as MarkSample[],
     reasons: [] as string[],
+    alerts: [] as DeskAlert[],
     book: over.book ?? [],
     dials: over.dials ?? dailyDials(),
     chain: (asOf: number) => chainOf(asOf),
@@ -244,6 +248,9 @@ function make(over: { book?: LegPosition[]; dials?: Dials; index?: number; lever
     log,
     ring,
     spotAsOf: () => ring.latest()?.ms ?? 0,
+    alert: (a: DeskAlert): void => {
+      h.alerts.push(a)
+    },
     onDecision: (reason: string): void => {
       h.reasons.push(reason)
     },
@@ -264,7 +271,9 @@ const opens = (r: DecisionRequest | undefined): Array<{ instrument: string; side
 // ═════════════════════════════════════════════════════════════════ tests
 
 test('the BULL-S exit set is pinned: stop, target, loss, flat, close, expiry — never an entry', () => {
-  assert.deepEqual([...BS_EXIT_TRIGGERS].sort(), ['bs-close', 'bs-expiry', 'bs-flat', 'bs-loss', 'bs-stop', 'bs-target'])
+  assert.deepEqual([...BS_EXIT_TRIGGERS].sort(), [
+    'bs-balance', 'bs-close', 'bs-expiry', 'bs-flat', 'bs-loss', 'bs-stale', 'bs-stop', 'bs-target',
+  ])
 })
 
 test('bs_enabled at 20:00 IST: the first fresh index print sells the nearest level, 0.05 BTC a leg, PE then CE', async () => {
@@ -338,6 +347,7 @@ test('a restart with a half straddle (PE held, CE not) neither re-enters the lev
     ceOpen: false,
     peOpen: true,
     breachSinceMs: 0,
+    staleSinceMs: 0,
     filled: false,
   }
   const h = make({ book: [legOf(76_600, 'PE', pe)] })
@@ -364,7 +374,8 @@ test('a restart with a half straddle (PE held, CE not) neither re-enters the lev
   assert.deepEqual(sent.map((a) => [a.op, a.instrument]), [['close', 'P-BTC-76600-041126']])
 })
 
-test('a restart with the CE still working keeps the half straddle and adopts nothing', async () => {
+/** A restart with the entry's PE held and its CE still working, the entry sent `ageMs` ago. */
+async function stuckCe(ageMs: number): Promise<Harness> {
   const pe = premium(76_600, 'PE') - 1
   const h = make({ book: [legOf(76_600, 'PE', pe)] })
   await h.seed({
@@ -372,7 +383,7 @@ test('a restart with the CE still working keeps the half straddle and adopts not
       ...BS_EMPTY,
       groups: [{
         strike: 76_600, lots: 50, ceEntry: premium(76_600, 'CE') - 1, peEntry: pe,
-        openedMs: T0 - 60_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: false,
+        openedMs: T0 - ageMs, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: false, staleSinceMs: 0,
       }],
       size: 100,
       lastRef: INDEX,
@@ -404,6 +415,11 @@ test('a restart with the CE still working keeps the half straddle and adopts not
     updatedAt: prev.updatedAt + 1,
   } as SupervisorBookState)
   h.client.queue((r) => respond(r.decisionId, 'WORKING'))
+  return h
+}
+
+test('a restart with the CE still working (inside the grace) keeps the half straddle and adopts nothing', async () => {
+  const h = await stuckCe(10_000)
   await h.host.evaluate()
   // The CE is still on the market: nothing new is sent, nothing is adopted,
   // and the half straddle keeps both legs on its record until the flight ends.
@@ -411,6 +427,13 @@ test('a restart with the CE still working keeps the half straddle and adopts not
   const after = (await h.state()).ruleState.bs
   assert.deepEqual(after.groups.map((g) => [g.strike, g.ceOpen, g.peOpen]), [[76_600, true, true]])
   assert.ok(h.lines.some((l) => l.msg === 'holding under a working package' && String(l.ctx['reason']).includes('still working')))
+})
+
+test('the CE STUCK past the grace: the stuck entry is cancelled first, so the naked PE can be closed', async () => {
+  const h = await stuckCe(60_000)
+  await h.host.evaluate()
+  assert.deepEqual(h.cancels, [`${TAG}:paper:7`], 'the stuck CE entry is taken off the market')
+  assert.ok(h.lines.some((l) => l.level === 'warn' && l.msg.includes('bs-stop')), 'a bs-stop preempts the working entry')
 })
 
 test('cumRealized banks NET of the fee on every fill, the open as well as the close', async () => {
@@ -557,4 +580,72 @@ test('bs_margin_budget: the host hands the master\'s leverage to the engine, and
   await blind.host.evaluate()
   assert.equal(blind.client.requests.length, 0)
   assert.ok(blind.reasons.some((r) => /margin budget: no leverage/.test(r)), blind.reasons.join(' | '))
+})
+
+// ── a held leg's quote gone stale (lane A, 3 Nov) ──────────────────────────
+
+/** A straddle at 76,600 that opened, both legs held, the chain frozen at T0. */
+async function frozenStraddle(): Promise<Harness> {
+  const ce = premium(76_600, 'CE') - 1
+  const pe = premium(76_600, 'PE') - 1
+  const h = make({ book: [legOf(76_600, 'CE', ce), legOf(76_600, 'PE', pe)] })
+  await h.seed({
+    bs: {
+      ...BS_EMPTY,
+      groups: [{
+        strike: 76_600, lots: 50, ceEntry: ce, peEntry: pe,
+        openedMs: T0 - 60_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: true, staleSinceMs: 0,
+      }],
+      size: 100,
+      lastRef: INDEX,
+      lastRefMs: T0 - 1_000,
+      armedAtMs: T0 - 120_000,
+    },
+  })
+  // Every book frame stops at T0: the quotes keep their T0 timestamp.
+  h.chain = () => chainOf(T0)
+  return h
+}
+
+test('a stale held-leg quote raises a warn alert keyed by the tag, and sends nothing', async () => {
+  const h = await frozenStraddle()
+  h.advance(30_000)
+  await h.host.evaluate()
+  assert.equal(h.client.requests.length, 0, 'no new straddle on a book that cannot see its legs')
+  const warn = h.alerts.filter((a) => a.severity === 'warn')
+  assert.equal(warn.length, 1)
+  assert.equal(warn[0]?.key, `${TAG}:stale-quote`)
+  assert.equal(warn[0]?.source, 'supervisor')
+  assert.equal(warn[0]?.mode, 'paper')
+  assert.equal(warn[0]?.tag, TAG)
+  assert.match(warn[0]?.message ?? '', /76600CE/)
+  assert.equal(h.alerts.some((a) => a.severity === 'critical'), false)
+})
+
+test('stale past bs_stale_exit_s: the straddle is closed on bs-stale and a CRITICAL alert is raised', async () => {
+  const h = await frozenStraddle()
+  h.advance(30_000)
+  await h.host.evaluate()
+  h.advance(115_000)
+  await h.host.evaluate()
+  const req = h.client.requests.at(-1)
+  assert.equal(req?.trigger, 'bs-stale')
+  assert.deepEqual(req?.actions.map((a) => [a.op, a.instrument]), [
+    ['close', 'P-BTC-76600-041126'],
+    ['close', 'C-BTC-76600-041126'],
+  ])
+  const crit = h.alerts.filter((a) => a.severity === 'critical')
+  assert.equal(crit.length, 1)
+  assert.equal(crit[0]?.key, `${TAG}:stale-exit`)
+  assert.match(crit[0]?.message ?? '', /stale/)
+})
+
+test('an alert sink that throws never stops the stale exit from routing', async () => {
+  const h = await frozenStraddle()
+  ;(h.alerts as unknown as { push: () => never }).push = () => {
+    throw new Error('alert store down')
+  }
+  h.advance(145_000)
+  await h.host.evaluate()
+  assert.equal(h.client.requests.at(-1)?.trigger, 'bs-stale')
 })

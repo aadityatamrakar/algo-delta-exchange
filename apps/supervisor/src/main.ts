@@ -100,7 +100,7 @@
  */
 
 import { WsTransportClient } from '@algomaker/bus'
-import { connectWithRetry, installCrashGuards } from '@algomaker/core'
+import { DESK_ALERTS_COLLECTION, connectWithRetry, createAlertSink, installCrashGuards, type RaiseAlert } from '@algomaker/core'
 import {
   SpotRing,
   steadySpot,
@@ -508,6 +508,8 @@ export class Supervisor {
   readonly #d: SupervisorDeps
   readonly #store: StateStore
   readonly #marksJournal: MarksJournal
+  /** The `desk-alerts` writer, one per process so its 10-minute dedupe spans every book. */
+  readonly #alert: RaiseAlert
   readonly #margin: MarginPoll
   readonly #chain: ChainView
   /**
@@ -566,6 +568,10 @@ export class Supervisor {
       (msg, ctx) => deps.log.warn(msg, ctx),
     )
     this.#marksJournal = new MarksJournal(deps.db.collection(BOOK_MARKS_COLLECTION) as never, deps.log)
+    this.#alert = createAlertSink(deps.db.collection(DESK_ALERTS_COLLECTION) as never, {
+      now: deps.now,
+      log: (message) => deps.log.warn(message),
+    })
     this.#margin = new MarginPoll({ db: deps.db, now: deps.now, log: deps.log })
     this.#chain = new ChainView({
       // Asked through `master()` on every call, so a rebuilt dump reaches the
@@ -1168,6 +1174,7 @@ export class Supervisor {
         onMark: (sample) => this.#onMark(runtime, sample),
         // A BULL-S book's line is every pass's reason (the host only calls this
         // for one), so a refused entry reaches the page within one report.
+        alert: (a) => this.#alert(a),
         onDecision: (reason) => {
           runtime.lastDecision = reason
         },

@@ -368,11 +368,14 @@ test('hydrated state with ceOpen=false peOpen=true does not re-enter the level',
   assert.deepEqual(opensOf(d), [], 'no second straddle at 80,000')
   assert.deepEqual(closesOf(d), [sym(80_000, 'PE')], 'the half straddle is closed, not left naked')
   assert.match(d.reason, /half/)
-  // While a package is still working, the half group is left alone.
+  // While some other order of the book is still working, the naked PE of a
+  // straddle that OPENED does not wait for it (lane A item 3, 3 Nov) — and no
+  // second straddle goes on either.
   const working = new Run(dialsOf(), { ...EMPTY_RULE_STATE, bs: hydrateBullState(stored) })
   working.book.set(sym(80_000, 'PE'), { strike: 80_000, opt: 'PE', lots: 50, entry: 300, lotSize: 0.001 })
   const w = working.tick(79_950, T0 + 6 * S, { pendingLots: 50 })
-  assert.deepEqual(w.actions, [])
+  assert.deepEqual(opensOf(w), [])
+  assert.deepEqual(closesOf(w), [sym(80_000, 'PE')])
 })
 
 test('max_open caps concurrent straddles', () => {

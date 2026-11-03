@@ -296,7 +296,13 @@ export const TRIGGERS = [
   //   bs-close   the operator's Close book: close all, halt
   //   bs-rearm   a halt cleared (by the operator, or by `bs_after_halt` 1)
   //   bs-expiry  at or past the expiry instant: no orders; settlement books the legs
+  //   bs-stale   a straddle whose held leg's quote has been stale past
+  //              `bs_stale_exit_s`: bought back whole
+  //   bs-balance a straddle whose CE and PE sizes differ: the excess on the
+  //              larger leg is bought back (a `resize` down), never the smaller
+  //              one added to
   'bs-entry', 'bs-stop', 'bs-target', 'bs-loss', 'bs-flat', 'bs-close', 'bs-rearm', 'bs-expiry',
+  'bs-stale', 'bs-balance',
 ] as const;
 
 export type Trigger = (typeof TRIGGERS)[number];
