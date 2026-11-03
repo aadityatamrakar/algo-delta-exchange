@@ -225,7 +225,7 @@ export function createWatchdog(deps: {
             })
           } catch (err) {
             flattened.delete(r.rail)
-            deps.alert({ severity: 'critical', mode, key: `watchdog:${r.rail}:flatten-failed`, message: `WATCHDOG ${RAIL}: close_all FAILED — ${msgOf(err)}. FLATTEN BY HAND (scripts/dx-flatten.mjs).` })
+            deps.alert({ severity: 'critical', mode, key: `watchdog:${r.rail}:flatten-failed`, message: `WATCHDOG ${RAIL}: close_all FAILED — ${msgOf(err)}. FLATTEN BY HAND (scripts/dx-flatten.mts).` })
           }
         } else {
           deps.alert({
