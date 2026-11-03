@@ -92,7 +92,9 @@ import {
   GATEWAY_HEARTBEAT_MS,
   hostOf,
 } from './gateway-heartbeat.ts'
-import { BROKER_MARGIN_COLLECTION, createDeltaMarginSnapshot, DELTA_MARGIN_MS } from './dx-margin.ts'
+import { BROKER_MARGIN_COLLECTION, createDeltaMarginSnapshot, DELTA_MARGIN_MS, marginFromBalances } from './dx-margin.ts'
+import { DEFAULT_MARGIN_MAX_AGE_MS, MarginGate, freshBalance } from './dx-margin-gate.ts'
+import { createAlertSink, DESK_ALERTS_COLLECTION } from './alert-sink.ts'
 import { backfillDeltaFees, DX_FEE_BACKFILL_MS, mongoFeeBackfillPorts } from './dx-fee-backfill.ts'
 import {
   countWorking,
@@ -440,6 +442,24 @@ export interface PlacerPorts {
    * answer, so none is sent. Closes are never refused. Absent (NSE) is no check.
    */
   readonly oiCapRefusal?: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) => Promise<string | null>
+  /**
+   * THE DELTA MARGIN GATE (`dx-margin-gate.ts`): why this order's opening
+   * PACKAGE must not be sent — its estimated initial margin is over the rail
+   * account's available balance (`margin: …`) — or null. Same whole-package
+   * answer as the OI cap; closes are never refused. Absent (NSE) is no check.
+   */
+  readonly marginRefusal?: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) => Promise<string | null>
+  /**
+   * A DELTA CLOSE's limit, re-priced off the TOUCH at placement
+   * (`dx-close.ts`): the far side plus a buffer, from the live book when it is
+   * fresh, else Delta REST — never MARKET. Null keeps the document's own price.
+   * Asked only of `desk_op: 'close'`, and only on DX. Absent (NSE) is no repricing.
+   */
+  readonly closePrice?: (
+    order: GatewayOrderDoc,
+    clientOrderId: string,
+    rail: string | null,
+  ) => Promise<{ readonly limitPrice: number; readonly note: string } | null>
   /** Gate 2 — the Strategies page switch. Not asked of a PAPER order. */
   readonly allowsLive: (tag: string) => Promise<boolean>
   /** Gate 3 — the kill switch. */
@@ -940,6 +960,20 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
       await refuseSlice(laterSlice(tranches), {
         clientOrderId, tag: order.tag, tradingsymbol: order.tradingsymbol,
         reason: oiCapped, phase: 'FAILED', errorClass: 'fatal', label: 'OI-CAP', mode,
+      })
+      return
+    }
+
+    /**
+     * The account's available balance, asked of the WHOLE opening package the
+     * same way (`dx-margin-gate.ts`): Delta refusing leg 2 for margin after
+     * leg 1 filled is the same half straddle.
+     */
+    const marginRefused = (await ports.marginRefusal?.(order, clientOrderId, routed.rail)) ?? null
+    if (marginRefused !== null) {
+      await refuseSlice(laterSlice(tranches), {
+        clientOrderId, tag: order.tag, tradingsymbol: order.tradingsymbol,
+        reason: marginRefused, phase: 'FAILED', errorClass: 'fatal', label: 'MARGIN', mode,
       })
       return
     }
@@ -1571,6 +1605,16 @@ export async function main(): Promise<void> {
    */
   const refuseOrder = refuse({ journal, queue, log })
 
+  /**
+   * THE SHARED ALERT CONTRACT (`alert-sink.ts`): `desk-alerts`, one row per
+   * key per 10 min, fire-and-forget — the forwarder sends them on.
+   */
+  const alerts = createAlertSink({
+    collection: mongo.db.collection(DESK_ALERTS_COLLECTION) as never,
+    now: () => Date.now(),
+    log,
+  })
+
   let master = new OptionMaster([])
   let freeze = await loadFreezeLimits(mongo.db.collection('desk-freeze-limits'))
   /**
@@ -1590,6 +1634,12 @@ export async function main(): Promise<void> {
   let dxCapBySymbol = new Map<string, MasterCap>()
   /** OI contracts per token, off `md.tick` (`oi`) — the live OI-cap check's market half. */
   const oiContractsByToken = new Map<number, number>()
+  /**
+   * Delta's `default_leverage` per symbol (the dx sync's `dx_leverage`) — the
+   * margin gate's divisor. A row that states none is absent: unknown, never a
+   * default. Empty on NSE.
+   */
+  let dxLeverageBySymbol = new Map<string, number>()
 
   const loadReference = async (): Promise<void> => {
     const rows = await loadStoredInstruments(mongo.db.collection('instrument'))
@@ -1609,6 +1659,11 @@ export async function main(): Promise<void> {
     )
     underlyingBySymbol = new Map(
       rows.filter((r) => r.tradingsymbol !== '' && r.name !== '').map((r) => [r.tradingsymbol, r.name]),
+    )
+    dxLeverageBySymbol = new Map(
+      (await mongo.db.collection('instrument').find({ dx_leverage: { $gt: 0 } }).toArray())
+        .map((d) => [String(d['tradingsymbol'] ?? ''), Number(d['dx_leverage'])] as const)
+        .filter(([s, lev]) => s !== '' && Number.isFinite(lev) && lev > 0),
     )
     freeze = await loadFreezeLimits(mongo.db.collection('desk-freeze-limits'))
   }
@@ -2287,6 +2342,52 @@ export async function main(): Promise<void> {
         log,
       })
     : null
+  /** The live mid off this process's own book, for the margin estimate. Null when stale. */
+  const midOf = (symbol: string): number | null => {
+    const token = master.resolveSymbol(symbol)?.instrumentToken
+    const t = token === undefined ? null : quotes.touch(token)
+    return t === null ? null : (t.bid + t.ask) / 2
+  }
+  const marginMaxAgeMs = positiveEnvMs('DESK_DX_MARGIN_MAX_AGE_MS', DEFAULT_MARGIN_MAX_AGE_MS)
+  /** Delta's pre-trade margin check, per opening package, on the rail it goes to. */
+  const marginGate = onDx
+    ? new MarginGate({
+        loadPackage: async (decisionId) => {
+          const d = await mongo.db.collection('desk-decisions').findOne({ decisionId })
+          const planned = d?.['plannedFills']
+          if (!Array.isArray(planned)) return null
+          return planned.map((f: Record<string, unknown>) => {
+            const price = Math.max(Number(f['price'] ?? 0) || 0, Number(f['limitPrice'] ?? 0) || 0)
+            return {
+              tradingsymbol: String(f['tradingsymbol'] ?? ''),
+              qty: Number(f['qty'] ?? 0),
+              ...(typeof f['op'] === 'string' ? { op: f['op'] } : {}),
+              ...(f['side'] === 'Buy' ? { side: 'BUY' as const } : f['side'] === 'Sell' ? { side: 'SELL' as const } : {}),
+              ...(price > 0 ? { price } : {}),
+            }
+          })
+        },
+        markOf: midOf,
+        leverageOf: (symbol) => dxLeverageBySymbol.get(symbol) ?? null,
+        index: () => btcIndex,
+        available: async (rail) => {
+          const id = rail === 'live' ? 'delta' : 'delta-demo'
+          const row = await mongo.db.collection(BROKER_MARGIN_COLLECTION).findOne({ _id: id as never })
+          const fresh = freshBalance(row as never, Date.now(), marginMaxAgeMs)
+          if (fresh !== null) return fresh
+          // Stale or failed snapshot: one REST wallet read through the rail's own key.
+          const rest = rail === 'live' ? dxRest : (demoRail?.rest ?? null)
+          if (rest === null) return null
+          const m = marginFromBalances(await rest.walletBalances())
+          return m.ok ? m.available : null
+        },
+        // Live refuses an opening package it cannot fund-check; demo lets Delta decide.
+        failClosed: (rail) => rail === 'live',
+        alerts,
+        now: () => Date.now(),
+        log,
+      })
+    : null
   const placer = createOrderPlacer({
     queue,
     journal,
@@ -2355,6 +2456,12 @@ export async function main(): Promise<void> {
       : {
           oiCapRefusal: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) =>
             oiCapGate.refusal(order, clientOrderId, rail),
+        }),
+    ...(marginGate === null
+      ? {}
+      : {
+          marginRefusal: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) =>
+            marginGate.refusal(order, clientOrderId, rail),
         }),
     allowsLive,
     readHalt,
