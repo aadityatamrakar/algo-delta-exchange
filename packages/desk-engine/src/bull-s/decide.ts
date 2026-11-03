@@ -1,0 +1,533 @@
+/**
+ * `decideBullS` — THE BULL-S DECIDE PATH (Delta spec §6), the desk's fourth.
+ *
+ * The book sells a straddle (PE + CE, same strike) each time its reference
+ * price crosses a grid level, one size bigger than the last, and buys each
+ * straddle back on its own combined stop. Venue-neutral: on Delta the
+ * reference is the `.DEXBTUSD` index and sizes are contracts of 0.001 BTC; in
+ * the NSE parity suite it is the future and sizes are lots.
+ *
+ * ── THE ORDER OF ONE DECISION ───────────────────────────────────────────────
+ * Each step can end the decision; the order is the priority.
+ *
+ *   0. Arm on first sight: P&L baseline, size = `bs_lots_start`, and the two
+ *      command counters ADOPTED as already seen (a copied row never fires a
+ *      stale Close).
+ *   1. At or past the expiry instant: NO ORDERS AT ALL. Settlement books the
+ *      legs at the venue's price (spec §5.4) — a close sent now would race it.
+ *   2. Reconcile the straddles with the book (below).
+ *   3. The two commands, Re-arm then Close, so both in one pass ends closed.
+ *   4. The reference: fresh or not, and what it crossed.
+ *   5. The stop clocks, on the EXIT side, from each straddle's own entry.
+ *   6. A halt in force: close everything (re-sent until flat), then stay flat
+ *      or re-arm per `bs_after_halt`.
+ *   7. The expiry flat, 8. the target and the loss cap — each a new halt.
+ *   9. Stops, and any HALF straddle (one leg held) closed.
+ *  10. At most one new straddle: the crossed level nearest the price.
+ *
+ * Steps 6-9 never wait for anything. Step 10 waits for everything: a working
+ * order, a stale price, the window, the weekday, the blackout, `bs_max_open`,
+ * an occupied level, an unlisted strike.
+ *
+ * ── STATE vs MARK STATE ─────────────────────────────────────────────────────
+ * `markState` is everything this pass learned that holds whether or not its
+ * actions are routed: the reconciled straddles, the reference baseline, the
+ * stop clocks, the command acks and every halt latch. `stateAfter` adds the
+ * one thing that is true only if the orders go: a new straddle and the size
+ * step. A host holding under a working package persists `markState`, so a
+ * crossing seen then is spent (an entry never goes on late) while a halt
+ * survives the pre-emption.
+ *
+ * ── RECONCILING WITH THE BOOK ───────────────────────────────────────────────
+ * The straddles are this book's own record; the legs are the truth. While no
+ * order of the book is working (`pendingLots` 0), each straddle's
+ * `ceOpen`/`peOpen` is set to what the book holds, a straddle holding nothing
+ * is dropped (its level can be sold again on its next crossing), and an
+ * engine short that no straddle accounts for is ADOPTED as one, from its own
+ * fill — a lost or malformed row must never leave a short without a stop.
+ * A held leg's entry is always its fill. While an order works, nothing is
+ * dropped or adopted: an unfilled sale is not a missing leg.
+ *
+ * PURE: no clock, no IO.
+ */
+import type { Dials } from '../dials.ts';
+import { type MarkContext, totalPnl } from '../guards.ts';
+import type {
+  ChainSnap,
+  EngineAction,
+  EngineDecision,
+  EngineInputs,
+  LegView,
+  OptType,
+  Quote,
+  RuleState,
+  Trigger,
+} from '../types.ts';
+import { bsCrossedLevel, bsNearestLevel } from './grid.ts';
+import type { BullSGroup, BullSHaltReason, BullSState } from './state.ts';
+
+/**
+ * What BULL-S needs beyond an ordinary `EngineInputs`. All three REQUIRED: an
+ * absent reading and a zero one must never be the same read.
+ *
+ *   - `ref` is the reference price the grid is crossed on (DX: the
+ *     `.DEXBTUSD` index; NSE parity: the future). null = no price yet.
+ *   - `refAsOf` is that price's own epoch ms, off the feed. 0 = never, which
+ *     reads as stale.
+ *   - `minutesToExpiry` runs to the venue's expiry instant (DX: 12:00 UTC).
+ *     At or below 0 the book sends nothing.
+ */
+export interface BullSInputs extends EngineInputs {
+  readonly ref: number | null;
+  readonly refAsOf: number;
+  readonly minutesToExpiry: number;
+}
+
+/** Strike equality, the tolerance `marking.ts` matches a chain row on. */
+const STRIKE_EPS = 1e-6;
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const HALT_TRIGGER: Readonly<Record<Exclude<BullSHaltReason, ''>, Trigger>> = {
+  target: 'bs-target',
+  loss: 'bs-loss',
+  close: 'bs-close',
+  flat: 'bs-flat',
+  expiry: 'bs-expiry',
+};
+
+const HALT_WORDS: Readonly<Record<Exclude<BullSHaltReason, ''>, string>> = {
+  target: 'the target was made',
+  loss: 'the loss cap was hit',
+  close: 'the operator closed the book',
+  flat: 'flat before expiry',
+  expiry: 'expired',
+};
+
+/** A price or an amount, as a person reads it: whole numbers bare, else two places. */
+const fmt = (x: number): string => (Number.isInteger(x) ? String(x) : x.toFixed(2));
+
+const hhmm = (m: number): string =>
+  `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
+const sameStrike = (a: number, b: number): boolean => Math.abs(a - b) < STRIKE_EPS;
+
+const withBs = (state: RuleState, bs: BullSState): RuleState => ({ ...state, bs });
+
+function hold(reason: string, st: RuleState, trigger: Trigger = 'none'): EngineDecision {
+  return {
+    action: 'hold',
+    trigger,
+    reason,
+    actions: [],
+    stateAfter: st,
+    markState: st,
+    urgency: 'passive',
+    makerQuote: false,
+    creditCommit: null,
+  };
+}
+
+function acted(
+  action: 'adjust' | 'flatten',
+  trigger: Trigger,
+  reason: string,
+  actions: readonly EngineAction[],
+  stateAfter: RuleState,
+  markState: RuleState,
+): EngineDecision {
+  // Urgent on every path: spec §6.1 rule 9 prices every order as a marketable
+  // limit through the mark. `makerQuote` is the shed tier's gate; never asked.
+  return { action, trigger, reason, actions, stateAfter, markState, urgency: 'urgent', makerQuote: false, creditCommit: null };
+}
+
+const withNotes = (reason: string, notes: readonly string[]): string =>
+  notes.length === 0 ? reason : `${reason}; ${notes.join('; ')}`;
+
+/** A short option leg of this book at `strike`/`opt`, if the book holds one. */
+function heldLeg(legs: readonly LegView[], strike: number, opt: OptType): LegView | undefined {
+  return legs.find(
+    (l) => l.kind !== 'future' && l.side === 'Sell' && l.optType === opt && sameStrike(l.strike, strike) && l.lots > 0,
+  );
+}
+
+function quoteOf(chain: ChainSnap, strike: number, opt: OptType): Quote | null {
+  const row = chain.strikes.find((s) => sameStrike(s.strike, strike));
+  if (row === undefined) return null;
+  return (opt === 'CE' ? row.ce : row.pe) ?? null;
+}
+
+/** What a buy-back is priced at: the ask (basis 1) or the last price (basis 0). Zero is no price. */
+function exitPx(q: Quote | null, basis: number): number | null {
+  const v = q === null ? null : basis === 0 ? q.ltp : q.ask;
+  return v !== null && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** What a sale is priced at: the bid (basis 1) or the last price (basis 0). */
+function entryPx(q: Quote | null, basis: number): number | null {
+  const v = q === null ? null : basis === 0 ? q.ltp : q.bid;
+  return v !== null && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** The stop line, recomputed every decision from the stored entries and the LIVE dials (rule 3). */
+function stopLine(g: BullSGroup, dials: Dials): number {
+  const raw = (g.ceEntry + g.peEntry) * dials.bs_stop_mult;
+  // Basis 0 is the legacy book's: `parseInt((ce + pe) * mult)`.
+  return dials.bs_stop_basis === 0 ? Math.trunc(raw) : raw;
+}
+
+function firstSize(dials: Dials): number {
+  return dials.bs_lots_cap > 0 ? Math.min(dials.bs_lots_start, dials.bs_lots_cap) : dials.bs_lots_start;
+}
+
+/** Rule 4: each accepted entry adds a step, never past the cap (0 = uncapped). */
+function nextSize(size: number, dials: Dials): number {
+  const up = size + dials.bs_lots_step;
+  return dials.bs_lots_cap > 0 ? Math.min(up, dials.bs_lots_cap) : up;
+}
+
+/** Start or Re-arm: a new P&L baseline, size back to start, the halt cleared. */
+function arm(bs: BullSState, inputs: BullSInputs, dials: Dials, lastRef: number, lastRefMs: number): BullSState {
+  return {
+    ...bs,
+    size: firstSize(dials),
+    lastRef,
+    lastRefMs,
+    halted: false,
+    haltReason: '',
+    armedAtMs: inputs.nowMs,
+    pnlBaseline: totalPnl(inputs),
+  };
+}
+
+function reconcile(groups: readonly BullSGroup[], inputs: BullSInputs): BullSGroup[] {
+  const { legs } = inputs;
+  const settled = inputs.pendingLots === 0;
+  const out: BullSGroup[] = [];
+  for (const g of groups) {
+    const ce = heldLeg(legs, g.strike, 'CE');
+    const pe = heldLeg(legs, g.strike, 'PE');
+    const next: BullSGroup = {
+      ...g,
+      ceEntry: ce?.entry ?? g.ceEntry,
+      peEntry: pe?.entry ?? g.peEntry,
+      ceOpen: settled ? ce !== undefined : g.ceOpen,
+      peOpen: settled ? pe !== undefined : g.peOpen,
+    };
+    if (next.ceOpen || next.peOpen) out.push(next);
+  }
+  if (!settled) return out;
+  // Adopt every engine short no straddle accounts for, one straddle per strike.
+  const orphans = legs.filter(
+    (l) =>
+      l.kind !== 'future' &&
+      l.side === 'Sell' &&
+      l.openedByEngine &&
+      l.lots > 0 &&
+      !out.some((g) => sameStrike(g.strike, l.strike)),
+  );
+  const strikes = [...new Set(orphans.map((l) => l.strike))].sort((a, b) => a - b);
+  for (const strike of strikes) {
+    const ce = heldLeg(legs, strike, 'CE');
+    const pe = heldLeg(legs, strike, 'PE');
+    out.push({
+      strike,
+      lots: Math.max(ce?.lots ?? 0, pe?.lots ?? 0),
+      ceEntry: ce?.entry ?? 0,
+      peEntry: pe?.entry ?? 0,
+      openedMs: inputs.nowMs,
+      ceOpen: ce !== undefined,
+      peOpen: pe !== undefined,
+      breachSinceMs: 0,
+    });
+  }
+  return out;
+}
+
+/** Buy back one straddle's held legs, PE then CE (rule 9). */
+function closeGroup(g: BullSGroup, legs: readonly LegView[]): EngineAction[] {
+  return (['PE', 'CE'] as const).flatMap((opt): EngineAction[] => {
+    const leg = heldLeg(legs, g.strike, opt);
+    return leg === undefined ? [] : [{ op: 'close', instrument: leg.instrument }];
+  });
+}
+
+/** Close the whole book: each straddle PE then CE, oldest first, then any other leg. */
+function closeEverything(groups: readonly BullSGroup[], legs: readonly LegView[]): EngineAction[] {
+  const ordered = [...groups].sort((a, b) => a.openedMs - b.openedMs);
+  const actions = ordered.flatMap((g) => closeGroup(g, legs));
+  const named = new Set(actions.map((a) => (a.op === 'close' ? a.instrument : '')));
+  for (const l of legs) if (!named.has(l.instrument)) actions.push({ op: 'close', instrument: l.instrument });
+  return actions;
+}
+
+function inWindow(minute: number, dials: Dials): boolean {
+  const from = dials.bs_entry_from_min;
+  const to = dials.bs_entry_to_min;
+  return from <= to ? minute >= from && minute < to : minute >= from || minute < to;
+}
+
+/** IST weekday of an ISO date, 0 = Sunday. */
+const weekday = (dateIst: string): number => new Date(`${dateIst}T00:00:00Z`).getUTCDay();
+
+export function decideBullS(
+  inputs: BullSInputs,
+  dials: Dials,
+  state: RuleState,
+  markCtx: MarkContext,
+): EngineDecision {
+  void markCtx;
+  const { nowMs, legs, chain } = inputs;
+
+  if (!dials.bs_enabled) return hold('BULL-S is off (bs_enabled is false)', state);
+  if (!(dials.bs_strike_step > 0)) {
+    return hold('no grid: bs_strike_step is 0 — set one strike, in price units, for this expiry', state);
+  }
+  const grid = dials.bs_strike_jump * dials.bs_strike_step;
+  const maxAgeMs = dials.bs_ref_max_age_s * 1_000;
+  const basis = dials.bs_stop_basis;
+  const notes: string[] = [];
+
+  // ── 0. arm on first sight ────────────────────────────────────────────────
+  let bs = state.bs;
+  if (bs.armedAtMs === 0) {
+    bs = { ...arm(bs, inputs, dials, 0, 0), closeReqSeen: dials.bs_close_req, rearmReqSeen: dials.bs_rearm_req };
+  }
+
+  // ── 1. the expiry instant ────────────────────────────────────────────────
+  if (!(inputs.minutesToExpiry > 0)) {
+    return hold(
+      `at or past the expiry instant: no orders — settlement books the ${legs.length} open leg(s) at the venue's settlement price`,
+      withBs(state, { ...bs, halted: true, haltReason: 'expiry' }),
+      'bs-expiry',
+    );
+  }
+
+  // ── 2. reconcile with the book ───────────────────────────────────────────
+  bs = { ...bs, groups: reconcile(bs.groups, inputs) };
+
+  // ── 3. the commands — Re-arm first, so a Close in the same pass wins ─────
+  if (dials.bs_rearm_req > bs.rearmReqSeen) {
+    if (!bs.halted) {
+      bs = { ...bs, rearmReqSeen: dials.bs_rearm_req };
+      notes.push('Re-arm ignored: the book is not halted');
+    } else if (legs.length > 0) {
+      // NOT acknowledged: it applies once the halt's closes are done.
+      notes.push(`Re-arm waits: ${legs.length} leg(s) still to close`);
+    } else {
+      // lastRef 0: the first fresh price is a start, so `bs_enter_on_start` applies.
+      bs = { ...arm(bs, inputs, dials, 0, 0), groups: [], rearmReqSeen: dials.bs_rearm_req };
+      notes.push(`re-armed by the operator: P&L baseline ${fmt(bs.pnlBaseline)}, size back to ${bs.size}`);
+    }
+  }
+  if (dials.bs_close_req > bs.closeReqSeen) {
+    bs = { ...bs, closeReqSeen: dials.bs_close_req, halted: true, haltReason: 'close' };
+  }
+
+  // ── 4. the reference ─────────────────────────────────────────────────────
+  const ref = inputs.ref;
+  const fresh =
+    ref !== null && Number.isFinite(ref) && ref > 0 && inputs.refAsOf > 0 && nowMs - inputs.refAsOf <= maxAgeMs;
+  let crossed: number | null = null;
+  let crossing = '';
+  if (fresh) {
+    if (bs.lastRef === 0) {
+      if (dials.bs_enter_on_start) {
+        crossed = bsNearestLevel(ref, grid);
+        crossing = `first price ${fmt(ref)} after the arm: the nearest level, ${fmt(crossed)}`;
+      } else {
+        notes.push(`first price ${fmt(ref)} after the arm: a baseline (bs_enter_on_start is off)`);
+      }
+    } else if (inputs.refAsOf - bs.lastRefMs > maxAgeMs) {
+      // A gap (feed loss, reconnect, restart): whatever happened in it is not
+      // a crossing this book saw. Baseline, and count from here.
+      const gapS = Math.round((inputs.refAsOf - bs.lastRefMs) / 1_000);
+      notes.push(`fresh price ${fmt(ref)} after a ${gapS}s gap: re-baselined, no crossing counted`);
+    } else {
+      crossed = bsCrossedLevel(bs.lastRef, ref, grid);
+      if (crossed !== null) crossing = `${fmt(crossed)} crossed (${fmt(bs.lastRef)} → ${fmt(ref)})`;
+    }
+    bs = { ...bs, lastRef: ref, lastRefMs: inputs.refAsOf };
+  }
+
+  // ── 5. the stop clocks ───────────────────────────────────────────────────
+  const priceWord = basis === 0 ? 'last price' : 'ask';
+  bs = {
+    ...bs,
+    groups: bs.groups.map((g): BullSGroup => {
+      if (!g.ceOpen || !g.peOpen) return g; // a half straddle is closed in step 9
+      const ce = exitPx(quoteOf(chain, g.strike, 'CE'), basis);
+      const pe = exitPx(quoteOf(chain, g.strike, 'PE'), basis);
+      if (ce === null || pe === null) {
+        // Neither safe nor stoppable: the clock is left exactly where it was.
+        const missing = [ce === null ? 'CE' : '', pe === null ? 'PE' : ''].filter((x) => x !== '');
+        notes.push(
+          `stop at ${fmt(g.strike)} held — no ${priceWord} on ${missing.map((o) => `${fmt(g.strike)}${o}`).join(' or ')}, ` +
+            'so the straddle can be neither priced safe nor bought back',
+        );
+        return g;
+      }
+      if (ce + pe >= stopLine(g, dials)) return { ...g, breachSinceMs: g.breachSinceMs > 0 ? g.breachSinceMs : nowMs };
+      return { ...g, breachSinceMs: 0 };
+    }),
+  };
+  const mark = withBs(state, bs);
+
+  // A halt: close everything that is left, latched on BOTH states.
+  const halt = (reason: Exclude<BullSHaltReason, ''>, why: string): EngineDecision => {
+    const st = withBs(state, { ...bs, halted: true, haltReason: reason });
+    if (legs.length === 0) return hold(withNotes(`${why} — flat; halted`, notes), st, HALT_TRIGGER[reason]);
+    return acted(
+      'flatten',
+      HALT_TRIGGER[reason],
+      withNotes(`${why} — closing all ${legs.length} leg(s) and halting`, notes),
+      closeEverything(bs.groups, legs),
+      st,
+      st,
+    );
+  };
+
+  // ── 6. a halt in force ───────────────────────────────────────────────────
+  if (bs.halted) {
+    const reason = bs.haltReason === '' ? 'close' : bs.haltReason;
+    if (legs.length > 0) return halt(reason, `halted: ${HALT_WORDS[reason]}`);
+    if (dials.bs_after_halt === 1 && (reason === 'target' || reason === 'loss')) {
+      // The current price is the baseline: trade from the NEXT crossing.
+      const re: BullSState = { ...arm(bs, inputs, dials, bs.lastRef, bs.lastRefMs), groups: [] };
+      return hold(
+        withNotes(
+          `${HALT_WORDS[reason]} and the book is flat: re-armed by bs_after_halt — P&L baseline ${fmt(re.pnlBaseline)}, ` +
+            `size back to ${re.size}, trading from the next crossing`,
+          notes,
+        ),
+        withBs(state, re),
+        'bs-rearm',
+      );
+    }
+    return hold(withNotes(`halted: ${HALT_WORDS[reason]}; flat — Re-arm to trade again`, notes), mark);
+  }
+
+  // ── 7. flat before expiry ────────────────────────────────────────────────
+  if (dials.bs_flat_before_expiry_min > 0 && inputs.minutesToExpiry <= dials.bs_flat_before_expiry_min) {
+    return halt(
+      'flat',
+      `${fmt(inputs.minutesToExpiry)} min to expiry is inside bs_flat_before_expiry_min ${fmt(dials.bs_flat_before_expiry_min)}`,
+    );
+  }
+
+  // ── 8. target and loss cap, on the P&L since the arm ────────────────────
+  const pnl = totalPnl(inputs) - bs.pnlBaseline;
+  if (dials.bs_target > 0 && pnl >= dials.bs_target) {
+    return halt('target', `target: P&L ${fmt(pnl)} since the arm, at or past ${fmt(dials.bs_target)}`);
+  }
+  if (dials.bs_loss_cap > 0 && pnl <= -dials.bs_loss_cap) {
+    return halt('loss', `loss cap: P&L ${fmt(pnl)} since the arm, at or below -${fmt(dials.bs_loss_cap)}`);
+  }
+
+  // ── 9. stops, and half straddles ─────────────────────────────────────────
+  const closes: EngineAction[] = [];
+  const why: string[] = [];
+  for (const g of [...bs.groups].sort((a, b) => a.openedMs - b.openedMs)) {
+    if (inputs.pendingLots === 0 && g.ceOpen !== g.peOpen) {
+      const kept = g.ceOpen ? 'CE' : 'PE';
+      closes.push(...closeGroup(g, legs));
+      why.push(`half straddle at ${fmt(g.strike)}: only the ${kept} is held — closing it rather than leave it naked`);
+      continue;
+    }
+    if (!g.ceOpen || !g.peOpen || g.breachSinceMs === 0) continue;
+    const heldS = (nowMs - g.breachSinceMs) / 1_000;
+    if (heldS < dials.bs_stop_confirm_s) continue;
+    // A clock confirmed earlier is not a price NOW: with a side unpriced the
+    // stop holds (step 5 said so) and fires on the first reading that has both.
+    const ceX = exitPx(quoteOf(chain, g.strike, 'CE'), basis);
+    const peX = exitPx(quoteOf(chain, g.strike, 'PE'), basis);
+    if (ceX === null || peX === null) continue;
+    const sum = ceX + peX;
+    closes.push(...closeGroup(g, legs));
+    why.push(
+      `stop at ${fmt(g.strike)}: ${priceWord}s ${fmt(sum)} ≥ ${fmt(dials.bs_stop_mult)} × entry ${fmt(g.ceEntry + g.peEntry)} ` +
+        `= ${fmt(stopLine(g, dials))}, held ${fmt(Math.round(heldS * 10) / 10)}s`,
+    );
+  }
+  if (closes.length > 0) {
+    return acted('adjust', 'bs-stop', withNotes(why.join('; '), notes), closes, mark, mark);
+  }
+
+  // ── 10. at most one new straddle ─────────────────────────────────────────
+  if (inputs.pendingLots > 0) {
+    return hold(withNotes('an order of this book is still working: no new straddle', notes), mark);
+  }
+  if (!fresh) {
+    const what =
+      ref === null || !(ref > 0) || inputs.refAsOf === 0
+        ? 'no reference price'
+        : `the reference price is ${fmt(Math.round((nowMs - inputs.refAsOf) / 1_000))}s old (max ${fmt(dials.bs_ref_max_age_s)}s): stale`;
+    return hold(withNotes(`${what} — no entry and no crossing counted; stops still run`, notes), mark);
+  }
+  if (crossed === null) {
+    return hold(withNotes(`no grid level crossed (price ${fmt(ref)}, grid ${fmt(grid)})`, notes), mark);
+  }
+  const level = crossed;
+  const refuse = (but: string): EngineDecision => hold(withNotes(`${crossing}, but ${but}`, notes), mark);
+  if (!inWindow(inputs.minuteOfDay, dials)) {
+    return refuse(
+      `${hhmm(inputs.minuteOfDay)} IST is outside the entry window ` +
+        `${hhmm(dials.bs_entry_from_min)}–${hhmm(dials.bs_entry_to_min)}`,
+    );
+  }
+  const day = weekday(inputs.dateIst);
+  if ((dials.bs_entry_weekdays & (1 << day)) === 0) {
+    return refuse(`${WEEKDAYS[day] ?? inputs.dateIst} is off in bs_entry_weekdays`);
+  }
+  if (dials.bs_no_entry_before_expiry_min > 0 && inputs.minutesToExpiry <= dials.bs_no_entry_before_expiry_min) {
+    return refuse(
+      `${fmt(inputs.minutesToExpiry)} min to expiry is inside the ${fmt(dials.bs_no_entry_before_expiry_min)}-min entry blackout`,
+    );
+  }
+  if (dials.bs_max_open > 0 && bs.groups.length >= dials.bs_max_open) {
+    return refuse(`${bs.groups.length} open straddles is bs_max_open`);
+  }
+  if (bs.groups.some((g) => sameStrike(g.strike, level))) {
+    return refuse(`${fmt(level)} already holds a straddle`);
+  }
+  const ceQ = quoteOf(chain, level, 'CE');
+  const peQ = quoteOf(chain, level, 'PE');
+  if (ceQ === null || peQ === null) {
+    return refuse(`${fmt(level)} is not listed with both a CE and a PE quote for this expiry — skipped, never substituted`);
+  }
+  const ceIn = entryPx(ceQ, basis);
+  const peIn = entryPx(peQ, basis);
+  if (ceIn === null || peIn === null) {
+    const side = basis === 0 ? 'last price' : 'bid';
+    return refuse(`${fmt(level)} has no ${side} to sell the ${ceIn === null ? 'CE' : 'PE'} at — skipped`);
+  }
+
+  const size = bs.size > 0 ? bs.size : firstSize(dials);
+  const group: BullSGroup = {
+    strike: level,
+    lots: size,
+    ceEntry: ceIn,
+    peEntry: peIn,
+    openedMs: nowMs,
+    ceOpen: true,
+    peOpen: true,
+    breachSinceMs: 0,
+  };
+  const next = nextSize(size, dials);
+  const after = withBs(state, { ...bs, groups: [...bs.groups, group], size: next });
+  return acted(
+    'adjust',
+    'bs-entry',
+    withNotes(
+      `${crossing}: selling the ${fmt(level)} straddle, ${size} contracts, for ${fmt(ceIn + peIn)} ` +
+        `(stop ${fmt(stopLine(group, dials))}; next size ${next})`,
+      notes,
+    ),
+    [
+      { op: 'open', strike: level, optType: 'PE', side: 'Sell', lots: size },
+      { op: 'open', strike: level, optType: 'CE', side: 'Sell', lots: size },
+    ],
+    after,
+    mark,
+  );
+}

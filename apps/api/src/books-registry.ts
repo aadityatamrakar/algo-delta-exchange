@@ -385,10 +385,12 @@ export function validateDialsAgainstCatalogue(input: {
  * is priced on: flipped under held legs, every delta the book was steered on
  * moves at once — a weekly's parity forward and the near-month future sit
  * 300-odd points apart on SENSEX — and the next pass trades to neutralise a
- * move the market never made. The route refuses a change to any of the three
- * while the book holds legs.
+ * move the market never made. The fourth, `bs_enabled` (Delta spec §6.3),
+ * hands the book to the BULL-S path, whose straddles no other engine can
+ * manage. The route refuses a change to any of the four while the book holds
+ * legs.
  */
-export const ENGINE_SWITCH_DIALS = ['delta_lean_enabled', 'pb_playbook', 'dl_parity_forward'] as const
+export const ENGINE_SWITCH_DIALS = ['delta_lean_enabled', 'pb_playbook', 'dl_parity_forward', 'bs_enabled'] as const
 
 /**
  * The engine switches a dials patch would actually CHANGE — each with the

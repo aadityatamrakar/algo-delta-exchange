@@ -37,6 +37,7 @@
  */
 
 import type { VenueSpec } from '@algomaker/venue';
+import { BS_EMPTY, type BullSState } from './bull-s/state.ts';
 
 export type Side = 'Buy' | 'Sell';
 export type OptType = 'CE' | 'PE';
@@ -280,6 +281,22 @@ export const TRIGGERS = [
   // can never carry a close. `dl-exit` is LAST so every trigger before it keeps
   // its place.
   'dl-stop', 'dl-open', 'dl-add', 'dl-neutral', 'dl-target', 'dl-stuck', 'dl-exit',
+  // ── THE BULL-S BOOK's eight (Delta spec §6.3) ─────────────────────────────
+  // Appended, so every trigger above keeps its place. Like the delta-lean
+  // family, joining this list moves no host set: `GUARD_TRIGGERS` and
+  // `DL_EXIT_TRIGGERS` are explicit, and a BULL-S exit joins the host's
+  // pre-emption set by an edit there.
+  //
+  //   bs-entry   a straddle sold at a crossed grid level
+  //   bs-stop    one straddle bought back on its summed-ask stop (or a half
+  //              straddle closed)
+  //   bs-target  the book's P&L since the arm reached the target: close all, halt
+  //   bs-loss    ... fell to the loss cap: close all, halt
+  //   bs-flat    `bs_flat_before_expiry_min` reached: close all, halt
+  //   bs-close   the operator's Close book: close all, halt
+  //   bs-rearm   a halt cleared (by the operator, or by `bs_after_halt` 1)
+  //   bs-expiry  at or past the expiry instant: no orders; settlement books the legs
+  'bs-entry', 'bs-stop', 'bs-target', 'bs-loss', 'bs-flat', 'bs-close', 'bs-rearm', 'bs-expiry',
 ] as const;
 
 export type Trigger = (typeof TRIGGERS)[number];
@@ -699,6 +716,14 @@ export interface RuleState {
    * row. The state store reads it back through `hydratePlaybookState`.
    */
   readonly pb: PlaybookState;
+  // ── THE BULL-S BOOK (Delta spec §6.3) ─────────────────────────────────────
+  /**
+   * ONE ROW, the BULL-S path's alone; every other book carries `BS_EMPTY`
+   * here and nothing moves it. REQUIRED for the reason `pb` is, and LAST so
+   * every field above keeps its place in a stored row. The state store reads
+   * it back through `hydrateBullState`.
+   */
+  readonly bs: BullSState;
 }
 export const EMPTY_RULE_STATE: RuleState = {
   rcCredit: 0, rcEodDay: '', gkAnchor: 0, gkStreak: 0, scrapBanned: [],
@@ -709,4 +734,5 @@ export const EMPTY_RULE_STATE: RuleState = {
   dlRegime: '', dlRegimeSinceMs: 0,
   dlBlockedSinceMs: 0, dlRupeeSinceMs: 0, dlDayRealized: 0,
   pb: EMPTY_PLAYBOOK_STATE,
+  bs: BS_EMPTY,
 };

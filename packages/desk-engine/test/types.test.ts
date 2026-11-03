@@ -108,6 +108,20 @@ test('EMPTY_RULE_STATE spells out every zero-value', () => {
       lastExitMs: 0,
       dayLineSinceMs: 0,
     },
+    // The BULL-S path's row (Delta spec §6.3): one nested object, spelled out
+    // for the same reason — a book that has never armed.
+    bs: {
+      groups: [],
+      size: 0,
+      lastRef: 0,
+      lastRefMs: 0,
+      halted: false,
+      haltReason: '',
+      armedAtMs: 0,
+      pnlBaseline: 0,
+      closeReqSeen: 0,
+      rearmReqSeen: 0,
+    },
   })
   assert.equal(SUPERVISOR_NUDGE_PORT_DEFAULT, 8893)
 })
@@ -116,9 +130,10 @@ test('a fresh book`s playbook half IS EMPTY_PLAYBOOK_STATE, and it is the row`s 
   // One spelling of "a playbook that has not traded today" — the day roll
   // writes this same value, so a fresh row and a rolled one cannot disagree.
   assert.equal(EMPTY_RULE_STATE.pb, EMPTY_PLAYBOOK_STATE)
-  // LAST, so every field before it keeps its position in a stored row and in
-  // the `JSON.stringify` equality `sameRuleState` is.
-  assert.equal(Object.keys(EMPTY_RULE_STATE).at(-1), 'pb')
+  // LAST but one — only BULL-S's `bs`, added after it, follows — so every
+  // field before it keeps its position in a stored row and in the
+  // `JSON.stringify` equality `sameRuleState` is.
+  assert.deepEqual(Object.keys(EMPTY_RULE_STATE).slice(-2), ['pb', 'bs'])
   // The order the hydrator writes keys in, pinned: `sameRuleState` compares
   // strings, so a reordering here is a state change on every row after a
   // deploy.
@@ -146,8 +161,9 @@ test('the trigger list is the hold-and-adjust set, and the old controller`s five
   }
   // The recenter engine's eleven are untouched — widening or narrowing the
   // delta-lean half must move nothing on the other decide path.
+  // (BULL-S's eight are pinned in test/bull-s/state.test.ts.)
   assert.deepEqual(
-    TRIGGERS.filter((t) => !t.startsWith('dl-')),
+    TRIGGERS.filter((t) => !t.startsWith('dl-') && !t.startsWith('bs-')),
     ['shift', 'shed', 'scrap', 'lock', 'margin', 'expiry', 'eod', 'recycle', 'unwind', 'balance', 'none'],
   )
 })
