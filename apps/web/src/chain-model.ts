@@ -207,3 +207,27 @@ export function heatStep(v: number | null | undefined, lo: number, hi: number): 
   if (!(hi > lo)) return 0
   return Math.max(0, Math.min(10, Math.round(((v - lo) / (hi - lo)) * 10)))
 }
+
+/**
+ * The index's move since the page opened, as the header chip reads it:
+ * `▲ +120.40 (+0.16%)`, `▼ -35.10 (-0.05%)`, or `flat` when the move is under
+ * 0.01% — "-0.90 (-0.00%)" claimed a direction the percentage could not show.
+ * Null until both prices are known.
+ */
+export function indexChange(
+  spot: number | null,
+  openSpot: number | null,
+  locale = 'en-US',
+): { dir: 'up' | 'down' | 'flat'; text: string } | null {
+  if (!finite(spot) || !finite(openSpot) || openSpot === 0) return null
+  const change = spot - openSpot
+  const pctMove = (change / openSpot) * 100
+  if (Math.abs(pctMove) < 0.01) return { dir: 'flat', text: 'flat' }
+  const up = change > 0
+  const abs = Math.abs(change).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const sign = up ? '+' : '-'
+  return {
+    dir: up ? 'up' : 'down',
+    text: `${up ? '▲' : '▼'} ${sign}${abs} (${sign}${Math.abs(pctMove).toFixed(2)}%)`,
+  }
+}
