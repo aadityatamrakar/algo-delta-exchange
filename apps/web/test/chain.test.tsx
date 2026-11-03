@@ -247,7 +247,7 @@ describe('page states', () => {
   })
 })
 
-describe('the ATM row and the OI bars (operator, 3 Nov light-theme screenshot)', () => {
+describe('the row hover, the ATM row and the OI bars (operator, 3 Nov light-theme screenshot)', () => {
   /** chain.css with its comments removed, so a rule is judged by what it declares. */
   const css = readFileSync(resolve(process.cwd(), 'src', 'chain.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
@@ -269,10 +269,15 @@ describe('the ATM row and the OI bars (operator, 3 Nov light-theme screenshot)',
     }
   })
 
-  test('the ATM and hover rules use theme tokens only, never --color-tint-hover', () => {
-    const atm = rulesFor('.chain-atm')
-    expect(atm.length).toBeGreaterThan(0)
-    for (const body of [...atm, ...rulesFor(':hover')]) {
+  test('the hover and ATM rules use theme tokens only, never --color-tint-hover', () => {
+    const hover = rulesFor('.chain-row:hover')
+    expect(hover.length).toBeGreaterThan(0)
+    // The hover tints over the cell (inset shadow), never replaces its background or text colour.
+    for (const body of hover) {
+      expect(body).toContain('box-shadow')
+      expect(body).not.toMatch(/(^|[^-])background|(^|[^-])color\s*:/)
+    }
+    for (const body of [...rulesFor('.chain-atm'), ...rulesFor(':hover')]) {
       expect(body).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|\bblack\b/i)
       expect(body).toContain('var(--')
     }

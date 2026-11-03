@@ -362,29 +362,24 @@
 }
 
 /*
- * ROW TINTS ARE AN INSET SHADOW, NOT A BACKGROUND. An inset box-shadow paints
- * over the cell's background and under its text, so the hover and the ATM
- * tint lie on top of the ITM wash and the IV heat instead of replacing them.
+ * THE HOVER IS AN INSET SHADOW, NOT A BACKGROUND. An inset box-shadow paints
+ * over the cell's background and under its text, so the hover lies on top of
+ * the ITM wash, the IV heat and the ATM strike instead of replacing them, and
+ * the text keeps its own colour and full contrast.
  *
  * NEVER --color-tint-hover HERE: in the neutral theme it is literally
  * `light-dark(black, white)` — a full-strength colour meant for mixing — and
  * as a background it painted the hovered row black in light (the operator's
- * 3 Nov screenshot of the ATM row). --color-overlay-hover is the 5% wash.
+ * 3 Nov screenshot). The tint is the blue ramp at 9%: a soft grey-blue on the
+ * light theme's off-white, a slight lift on the dark theme's near-black.
  */
+.chain-page {
+  --chain-hover: color-mix(in srgb, var(--color-icon-blue) 9%, transparent);
+}
+
 .chain-row:hover > td,
 .chain-row:hover > th {
-  box-shadow: inset 0 0 0 100vmax var(--color-overlay-hover);
-}
-
-/* The ATM row: a soft amber in light, a subtle lift in dark (the token is translucent there). */
-.chain-atm > td {
-  box-shadow: inset 0 0 0 100vmax color-mix(in srgb, var(--color-background-yellow) 55%, transparent);
-}
-
-.chain-atm:hover > td {
-  box-shadow:
-    inset 0 0 0 100vmax var(--color-overlay-hover),
-    inset 0 0 0 100vmax color-mix(in srgb, var(--color-background-yellow) 55%, transparent);
+  box-shadow: inset 0 0 0 100vmax var(--chain-hover);
 }
 
 /* The strike column: the spine the two sides hang off. */
@@ -401,12 +396,11 @@
   text-align: center;
 }
 
-/* The ATM strike is framed: an outline, so it survives the row's inset tint. */
+/* The ATM strike's gold edge is an outline, so the hover's inset shadow cannot remove it. */
 .chain-atm .chain-strike {
   background: color-mix(in srgb, var(--chain-gold) 38%, var(--color-background-card));
-  color: var(--color-text-primary);
-  outline: 2px solid var(--chain-gold);
-  outline-offset: -2px;
+  outline: 1px solid var(--chain-gold);
+  outline-offset: -1px;
 }
 
 /* In the money: calls below the index, puts above. A wash of the side's colour. */
