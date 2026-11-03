@@ -103,25 +103,27 @@ export interface JournalCollection {
 export const ORDER_EVENTS_COLLECTION = 'desk-order-events'
 
 /**
- * WHICH RAIL A QUEUED ORDER DOCUMENT IS ON. Asked of the document, FAIL-CLOSED.
+ * WHICH RAIL A QUEUED ORDER DOCUMENT IS ON. Asked of the document, FAIL-CLOSED
+ * TO PAPER (Delta desk, spec §8).
  *
- * Only an explicit `mode: 'paper'` — the one thing `PaperRail` stamps when the
- * engine endpoint routes through this queue — answers paper. Everything else,
- * including a document with no mode at all (which is every live order this desk
- * has ever written), is live.
+ * Only an EXACT `mode: 'live'` answers live. Everything else — `'paper'`, no
+ * mode at all, `'Live'`, `true` — is paper. On the NSE desk the default ran the
+ * other way (absent was live, because every live order ever written carried no
+ * mode). This desk starts with no such history, and the safety argument is now
+ * the plain one: paper can never reach Delta by accident. A live order
+ * mistaken for paper is a missing position, visible immediately; a paper order
+ * mistaken for live places real money from a rehearsal.
  *
- * The direction of that default is the safety argument, and it is the same one
- * `isPaperOrder` makes — that function now delegates here so the rule has ONE
- * implementation rather than two that agree today. A live order mistaken for
- * paper is a missing position, visible immediately; a paper order mistaken for
- * live places real money from a rehearsal.
+ * This is the DECLARED rail. Whether a live-declared document actually reaches
+ * Delta also needs `DESK_DX_LIVE=1` and a `delta` broker — see
+ * `main.ts:routesToDelta`; without both, the whole gateway simulates.
  *
  * It lives in the JOURNAL module because the journal is what every part of this
  * gateway already imports, and because "what does this row say it is" is the
  * question this module answers for readers downstream.
  */
 export function orderMode(doc: Record<string, unknown>): 'paper' | 'live' {
-  return doc['mode'] === 'paper' ? 'paper' : 'live'
+  return doc['mode'] === 'live' ? 'live' : 'paper'
 }
 
 export class OrderJournal {

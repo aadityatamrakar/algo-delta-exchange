@@ -25,14 +25,15 @@ import type { Database } from './store.ts'
 
 export const BROKER_COLLECTION = 'desk-brokers'
 
-/** The brokers this desk can hold credentials for. XTS routes orders; Zerodha
- *  is market data only (spec D1) but still needs a verifiable login. */
-export type BrokerKind = 'xts' | 'zerodha'
+/** The brokers this desk can hold credentials for. Delta routes orders (the
+ *  Delta desk, spec §5.4); Zerodha is market data only (spec D1) but still
+ *  needs a verifiable login. XTS is gone from this desk. */
+export type BrokerKind = 'delta' | 'zerodha'
 
-export const BROKER_KINDS: readonly BrokerKind[] = ['xts', 'zerodha']
+export const BROKER_KINDS: readonly BrokerKind[] = ['delta', 'zerodha']
 
 export function isBrokerKind(v: unknown): v is BrokerKind {
-  return v === 'xts' || v === 'zerodha'
+  return v === 'delta' || v === 'zerodha'
 }
 
 /**
@@ -242,7 +243,7 @@ export class BrokerStore {
 }
 
 function defaultLabel(kind: BrokerKind): string {
-  return kind === 'xts' ? 'XTS Interactive' : 'Zerodha (market data)'
+  return kind === 'delta' ? 'Delta Exchange India' : 'Zerodha (market data)'
 }
 
 /**

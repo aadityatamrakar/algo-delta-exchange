@@ -50,7 +50,7 @@ test('onOrderUpdate behaves the same as the onFill alias: unsubscribe, never fir
   assert.equal(n, 0)
 })
 
-test('positions and orderBook also reject — no order/position book without XTS', async () => {
+test('positions and orderBook also reject — no order/position book on a data-only adapter', async () => {
   const z = new ZerodhaDataAdapter()
   await assert.rejects(() => z.positions(), CapabilityError)
   await assert.rejects(() => z.orderBook(), CapabilityError)

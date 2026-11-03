@@ -1,22 +1,24 @@
 /**
- * Order gateway host — the only process that places live orders.
+ * Order gateway host — the only process that places live orders (Delta desk).
  *
  * Wires four things the pure modules cannot do for themselves:
- *   1. XTS login + session, with single-flight re-login on expiry.
- *   2. The bus subscription: a nudge saying work is waiting.
+ *   1. The broker: the simulator always; Delta (`@algomaker/dx`) only when
+ *      `DESK_BROKER=delta` AND `DESK_DX_LIVE=1`, and then only for documents
+ *      whose `mode` is exactly `'live'` (`dx-edge.ts`). Paper never reaches it.
+ *   2. The bus subscription: a nudge saying work is waiting, plus `md.tick`
+ *      (quotes, simulated fills) and `md.spot` (the BTC index for fees/caps).
  *   3. The sweep loop: the safety net that makes a dropped nudge cost latency
  *      rather than an order.
- *   4. The XTS interactive socket: real fills, correlated back to our intents.
+ *   4. On Delta: the private socket for order updates, the dead-man heartbeat,
+ *      and the settlement job that books expired legs at Delta's price.
  *
- * Boots unconditionally, never gated on market hours — a pm2 restart at
- * 09:15:30 must come up ready.
+ * Boots unconditionally, never gated on market hours — Delta trades 24x7.
  *
  * SAFETY. This process can move real money, so two things are structural:
- *   - It reads ONLY `desk-gateway-orders`. `xtsOrder.js` is retired; if both ran
- *     against one collection every order would be placed twice.
+ *   - It reads ONLY `desk-gateway-orders`.
  *   - With no live tags configured it still runs, claims, and journals — but
- *     refuses to place. A gateway that silently placed everything by default
- *     would be one env var away from a very bad morning.
+ *     refuses to place live. A gateway that silently placed everything by
+ *     default would be one env var away from a very bad morning.
  */
 
 import { fileURLToPath } from 'node:url'
@@ -24,26 +26,15 @@ import { resolve as resolvePath } from 'node:path'
 import { OptionMaster, type FreezeLimits } from '@algomaker/instruments'
 import { WsTransportClient } from '@algomaker/bus'
 import {
+  BrokerOrderError,
   SimulatorAdapter,
-  XtsAdapter,
-  XtsOrderError,
-  classifyXtsError,
-  createXtsRestSession,
+  classifyBrokerError,
   type BrokerAdapter,
   type PlacedOrder,
-  type XtsRestClient,
-  type XtsSession,
 } from '@algomaker/brokers'
-import { OrderSocketSupervisor, type OrderSocketHandle } from './order-socket.ts'
-import {
-  BROKER_LINK_ID,
-  BROKER_LINK_POLL_MS,
-  BrokerLink,
-  readLinkDesire,
-  releasedSnapshot,
-} from './broker-link.ts'
+import { DxAdapter, DxPrivateSocket, DxRest } from '@algomaker/dx'
+import { venueFromEnv } from '@algomaker/venue'
 import { connectMongo } from '../../api/src/mongo.ts'
-import { BrokerStore, requireMasterKey } from '../../api/src/brokerstore.ts'
 import { liveAllowlistFromStrategies } from '../../api/src/strategies.ts'
 import { loadFreezeLimits, loadStoredInstruments } from '../../marketdata/src/sync-runner.ts'
 import {
@@ -58,18 +49,10 @@ import {
   type NudgePayload,
 } from './queue.ts'
 import { OrderJournal, ORDER_EVENTS_COLLECTION, orderMode, safeRaw, type OrderEvent } from './journal.ts'
-import {
-  BROKER_SESSION_COLLECTION,
-  ensureSessionTtlIndex,
-  openSessionDoc,
-  sessionMasterKey,
-  sessionTokenUpdate,
-} from './session-store.ts'
 import { createDeskNotifier } from './notify.ts'
 import {
   planOrder,
   freezeUnknownReason,
-  packedToExchangeToken,
   planTranches,
   type GatewayOrderDoc,
   type PlannedOrder,
@@ -84,15 +67,29 @@ import {
 } from './broker-sweep.ts'
 import { createPaperSweep, DEFAULT_PAPER_ORPHAN_MS } from './paper-sweep.ts'
 import { connectWithRetry, installCrashGuards } from './resilience.ts'
-import { rowsOf, takeBrokerSnapshot } from './broker-snapshot.ts'
-import { cancelBrokerOrder } from './cancel-queue.ts'
 import { chaseDialsFromEnv, chaseDisabled, createOrderChaser } from './order-chaser.ts'
 import { createQuoteMap, quoteMaxAgeFromEnv } from './quote-map.ts'
+import {
+  brokerModeFromEnv,
+  chooseAdapter,
+  deltaCommission,
+  dxCapRefusal,
+  dxCapsFromEnv,
+  dxSimFee,
+  liveRailEnabled,
+} from './dx-edge.ts'
+import { DX_USER_AGENT, loadDxConfig, readDeltaBrokerStore } from './dx-config.ts'
+import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
+import {
+  countWorking,
+  createDxSettlementJob,
+  DX_SETTLEMENT_POLL_MS,
+  DX_SETTLEMENTS_COLLECTION,
+  listOpenBooks,
+  mongoSettlementBooker,
+  type DxSettlementRow,
+} from './dx-settlement.ts'
 
-/** Where the broker's own view is published for desk-api to serve. */
-export const BROKER_SNAPSHOT_COLLECTION = 'desk-broker-snapshot'
-/** How often it is refreshed. Read-only, so this is cheap. */
-const BROKER_SNAPSHOT_MS = 30_000
 /** Cancel requests desk-api writes and this process performs. */
 export const CANCEL_COLLECTION = 'desk-broker-cancels'
 /**
@@ -303,7 +300,7 @@ export function readTrancheJournal(
  *
  * WHICH IS WHY `sweepAvailable` EXISTS. `ambiguousTrancheIds` is not a verdict,
  * it is a QUESTION, and the ONLY thing that ever answers it is the broker-book
- * sweep — armed inside the xts branch alone, because in simulate mode the
+ * sweep — armed only with a live Delta adapter, because in simulate mode the
  * "broker's book" is our own invention. Parking a tranche there with nothing to
  * settle it leaves the desk order non-terminal FOREVER: never filled, never
  * failed, never re-placed, blocking the tag for the rest of a paper session.
@@ -364,198 +361,6 @@ export function partitionInterruptedTranches(
   return { brokerOrderIds, failedTrancheIds, ambiguousTrancheIds }
 }
 
-/**
- * XTS connection settings, from the broker store with env as the fallback.
- *
- * Phase A §6: credentials entered in the portal must be the ones that are used.
- * They were not — this process read env only, so the Brokers page was a form
- * that changed nothing about how the gateway logged in.
- *
- * PRECEDENCE: sealed secret, then `meta`, then env. The store is the operator's
- * most recent deliberate act; env is what the machine was started with.
- *
- * `clientId` is read from `meta` rather than the secret because it is an account
- * identifier, not a credential (and `sanitiseMeta` does not strip it) — but the
- * secret is checked first anyway, so an operator who put it there is not
- * punished for it.
- */
-interface XtsConfig {
-  readonly baseUrl: string
-  readonly appKey: string
-  readonly secretKey: string
-  readonly uniqueKey?: string
-  readonly hostLookupUrl?: string
-  readonly prefix?: string
-  readonly clientId?: string
-  readonly investorClient?: boolean
-  readonly source: 'broker-store' | 'env' | 'mixed'
-}
-
-export async function loadXtsConfig(
-  read: () => Promise<{ meta: Record<string, unknown>; secret: Record<string, unknown> }>,
-  env: NodeJS.ProcessEnv,
-  logFn: (m: string, c?: Record<string, unknown>) => void,
-): Promise<XtsConfig> {
-  const { meta, secret } = await read()
-  const seen = { store: false, env: false }
-  const pick = (key: string, envName: string): string | undefined => {
-    const fromStore = firstString(secret[key], meta[key])
-    if (fromStore !== undefined) {
-      seen.store = true
-      return fromStore
-    }
-    const fromEnv = firstString(env[envName])
-    if (fromEnv !== undefined) seen.env = true
-    return fromEnv
-  }
-
-  const baseUrl = pick('baseUrl', 'XTS_BASE_URL')
-  const appKey = pick('appKey', 'XTS_APP_KEY')
-  const secretKey = pick('secretKey', 'XTS_SECRET_KEY')
-  const missing = [
-    baseUrl === undefined ? 'baseUrl/XTS_BASE_URL' : null,
-    appKey === undefined ? 'appKey/XTS_APP_KEY' : null,
-    secretKey === undefined ? 'secretKey/XTS_SECRET_KEY' : null,
-  ].filter((m): m is string => m !== null)
-  if (missing.length > 0) {
-    throw new Error(
-      `XTS is not configured: ${missing.join(', ')} — set them on the Brokers page or in the environment`,
-    )
-  }
-
-  const uniqueKey = pick('uniqueKey', 'XTS_UNIQUE_KEY')
-  const hostLookupUrl = pick('hostLookupUrl', 'XTS_HOST_LOOKUP_URL')
-  const prefix = pick('prefix', 'XTS_PREFIX')
-  const clientId = pick('clientId', 'XTS_CLIENT_ID')
-  const investorRaw = pick('investorClient', 'XTS_INVESTOR_CLIENT')
-
-  const cfg: XtsConfig = {
-    baseUrl: baseUrl as string,
-    appKey: appKey as string,
-    secretKey: secretKey as string,
-    ...(uniqueKey === undefined ? {} : { uniqueKey }),
-    ...(hostLookupUrl === undefined ? {} : { hostLookupUrl }),
-    ...(prefix === undefined ? {} : { prefix }),
-    ...(clientId === undefined ? {} : { clientId }),
-    // Only an EXPLICIT setting overrides the derivation; anything unparseable is
-    // ignored rather than silently read as false, which would turn an investor
-    // account into a dealer one on a typo.
-    ...(investorRaw === undefined ? {} : { investorClient: investorRaw !== 'false' && investorRaw !== '0' }),
-    source: seen.store && seen.env ? 'mixed' : seen.store ? 'broker-store' : 'env',
-  }
-  logFn('XTS config resolved', {
-    source: cfg.source,
-    baseUrl: cfg.baseUrl,
-    clientId: cfg.clientId ?? '(from login)',
-    hostLookup: cfg.hostLookupUrl !== undefined,
-  })
-  return cfg
-}
-
-function firstString(...values: unknown[]): string | undefined {
-  for (const v of values) {
-    if (typeof v === 'string' && v.trim() !== '') return v.trim()
-    if (typeof v === 'boolean') return String(v)
-  }
-  return undefined
-}
-
-/**
- * Read the stored XTS credentials, or nothing at all.
- *
- * A missing/unusable `DESK_MASTER_KEY` is NOT fatal here, unlike in the API: the
- * gateway can still run entirely on env credentials, and refusing to boot the
- * only process that can place orders because a page that is not being used
- * cannot be decrypted would be its own outage.
- */
-async function readBrokerStore(
-  db: { collection: (name: string) => unknown },
-  logFn: (m: string, c?: Record<string, unknown>) => void,
-): Promise<{ meta: Record<string, unknown>; secret: Record<string, unknown> }> {
-  const empty = { meta: {}, secret: {} }
-  try {
-    const key = requireMasterKey()
-    const store = new BrokerStore(db as never, key)
-    const row = await store.get('xts')
-    const read = await store.readSecret('xts')
-    if (read.kind === 'unreadable') {
-      // Distinct from absent, and the operator must hear about it: re-entering
-      // credentials over the top would destroy the evidence of which it was.
-      logFn('BROKER STORE: the stored XTS credential will not decrypt — falling back to env', {
-        reason: read.reason,
-      })
-      return { meta: row.meta, secret: {} }
-    }
-    return { meta: row.meta, secret: read.kind === 'ok' ? read.secret : {} }
-  } catch (err) {
-    logFn('broker store unavailable — using environment credentials', { error: String(err) })
-    return empty
-  }
-}
-
-/**
- * Build the XTS session over direct REST — no SDK.
- *
- * The token is persisted to Mongo and reused. XTS invalidates the previous
- * session on each login, so logging in on every boot would kill the session a
- * sibling process is actively trading on; `ensureSession` only logs in when we
- * hold no token, and `XtsAdapter` re-logs in on a session error.
- */
-async function buildSession(
-  cfg: XtsConfig,
-  store: {
-    read(): Promise<{ token: string; userID: string; clientCodes: readonly string[] } | null>
-    write(token: string, userID: string, clientCodes: readonly string[]): Promise<void>
-  },
-  /**
-   * `login: false` builds the client and performs NO login — the broker link
-   * is released (see `broker-link.ts`), and a login here would kill the
-   * session the key is being used for elsewhere. The client still carries any
-   * stored token so the link's own release can log it out.
-   */
-  opts: { readonly login: boolean } = { login: true },
-): Promise<XtsSession & { readonly client: XtsRestClient; ensureSession(): Promise<void> }> {
-  const existing = await store.read()
-  const session = createXtsRestSession({
-    baseUrl: cfg.baseUrl,
-    appKey: cfg.appKey,
-    secretKey: cfg.secretKey,
-    ...(cfg.uniqueKey === undefined ? {} : { uniqueKey: cfg.uniqueKey }),
-    ...(cfg.hostLookupUrl === undefined ? {} : { hostLookupUrl: cfg.hostLookupUrl }),
-    ...(cfg.prefix === undefined ? {} : { prefix: cfg.prefix }),
-    ...(cfg.clientId === undefined ? {} : { clientId: cfg.clientId }),
-    ...(cfg.investorClient === undefined ? {} : { investorClient: cfg.investorClient }),
-    // The codes travel WITH the token: a reused token that arrives without
-    // them leaves the client believing it is an investor with no code, and an
-    // order placed in that state carries an empty clientID.
-    ...(existing === null
-      ? {}
-      : {
-          existingToken: existing.token,
-          existingUserID: existing.userID,
-          existingClientCodes: existing.clientCodes,
-        }),
-    onToken: (token, userID, clientCodes) => {
-      void store.write(token, userID, clientCodes)
-    },
-    log,
-  })
-  if (!opts.login) {
-    log('XTS session NOT established — the broker link is released; no login until an operator reconnects it', {
-      storedTokenPresent: existing !== null,
-    })
-    return session
-  }
-  await session.ensureSession()
-  log('XTS session ready', {
-    reusedToken: existing !== null,
-    clientCode: session.client.clientCodes[0] ?? '',
-    clientCodeConfigured: cfg.clientId !== undefined,
-    isInvestorClient: session.client.isInvestorClient,
-  })
-  return session
-}
-
 // ------------------------------------------------------------- placement
 
 /**
@@ -590,8 +395,8 @@ export interface PlacerPorts {
   /**
    * WHICH BROKER THIS DOCUMENT GOES TO — asked PER ORDER, not wired once (D14).
    *
-   * A paper document (`mode: 'paper'`, written by the engine endpoint's rail)
-   * is placed on the SIMULATOR; everything else goes to the real adapter. That
+   * Delta only for an exact `mode: 'live'` document with `DESK_DX_LIVE=1`
+   * (`dx-edge.ts:chooseAdapter`); everything else is the SIMULATOR. That
    * is the whole of what separates a paper order from a live one on this path:
    * same queue, same claim, same plan, same tranche cursor, same chaser, same
    * fill correlation — a rehearsal that skipped any of them would be rehearsing
@@ -606,14 +411,20 @@ export interface PlacerPorts {
   /** The instrument master's answer, already narrowed to what a plan needs. */
   readonly resolveContract: (tradingsymbol: string) => ResolvedContract | null
   readonly freeze: () => FreezeLimits
+  /**
+   * THE DELTA CAPS (spec §8): why this order is too big to route, or null.
+   * Asked of BOTH rails, before any broker sees the order — paper rehearses the
+   * same refusal live would make. Absent (NSE) is no cap.
+   */
+  readonly capRefusal?: (order: GatewayOrderDoc, contract: ResolvedContract | null) => string | null
   /** Gate 2 — the Strategies page switch. Not asked of a PAPER order. */
   readonly allowsLive: (tag: string) => Promise<boolean>
   /** Gate 3 — the kill switch. */
   readonly readHalt: () => Promise<{ state: HaltState; reason: string }>
   /**
-   * Gate 5 — the broker link. Null while this process may talk to XTS; the
-   * refusal text while an operator has released the session. Asked of LIVE
-   * orders only — paper never spoke to XTS. See `broker-link.ts`.
+   * Gate 5 — the broker link. Null while this process may talk to the live
+   * broker; the refusal text while an operator has released it. Asked of LIVE
+   * orders only. The Delta gateway has no session to release and answers null.
    */
   readonly linkRefusal: () => string | null
   /** Gate 4 — how old a queued order that ADDS exposure may be. */
@@ -677,24 +488,12 @@ interface TrancheState {
 }
 
 /**
- * IS THIS A PAPER ORDER? Asked of the document, and FAIL-CLOSED.
+ * IS THIS A PAPER ORDER? Asked of the document, FAIL-CLOSED TO PAPER.
  *
- * Only an explicit `mode: 'paper'` — the one thing `PaperRail` stamps when the
- * engine endpoint routes through the gateway queue — answers true. Everything
- * else, including a document with no mode at all (which is every live order
- * this desk has ever written), is treated as LIVE.
- *
- * The direction of that default is the whole safety argument. A live order
- * mistaken for paper would be simulated and never placed: a missing position,
- * visible immediately, recoverable. A paper order mistaken for live would place
- * a REAL order from a rehearsal, which is not recoverable — and even that is
- * caught downstream, because a live order still has to pass the Strategies-page
- * allowlist in this process's own second gate.
- *
- * IT DELEGATES to `journal.ts`'s `orderMode`, which is the same rule stated
- * once. This predicate chooses a BROKER and that one stamps the journal, and
- * two spellings of "is this document paper" would eventually disagree — with
- * the log saying a rehearsal while the adapter said the exchange.
+ * The declared rail (`journal.ts:orderMode`): only an EXACT `mode: 'live'` is
+ * live; everything else — `'paper'`, no mode, `'Live'` — is paper. A paper
+ * order is simulated and skips the Strategies-page LIVE gate; whether a live
+ * one actually reaches Delta is `dx-edge.ts:routesToDelta`.
  *
  * Exported so the property is provable without booting a gateway.
  */
@@ -908,7 +707,7 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
     }
     /**
      * A PAPER ORDER HAS NO BROKER BOOK TO SETTLE IT, whatever mode this process
-     * is in — the sweep reads the XTS orderbook, and a simulated order has no
+     * is in — the sweep reads the broker's order book, and a simulated order has no
      * row in it. So an ambiguous paper tranche would sit non-terminal forever,
      * blocking its tag for the rest of the session; the old rule (book it
      * failed, terminally) is the right one for it, exactly as it is for a whole
@@ -1067,14 +866,23 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
     }
 
     /**
-     * Gate 5: the broker link. When an operator has released the XTS session
-     * this process is LOGGED OUT — there is no session to place with, and
-     * placing would first re-log in, which is the one thing the release
-     * forbids (it would kill whatever the key is being used for elsewhere).
-     * So EVERY live order is refused here, exits included: this is not a rule
-     * about exposure, it is the absence of a broker. The reason names the
-     * switch so the operator knows where to turn it back on. Paper is not
-     * asked — it never spoke to XTS.
+     * The Delta caps — per-order contracts and notional — refused HERE, before
+     * any gate that could route the order, on paper and live alike. A close is
+     * exempt (`dxCapRefusal`): it goes out reduce-only and cannot add exposure.
+     */
+    const capped = ports.capRefusal?.(order, ports.resolveContract(order.tradingsymbol)) ?? null
+    if (capped !== null) {
+      await refuseSlice(laterSlice(tranches), {
+        clientOrderId, tag: order.tag, tradingsymbol: order.tradingsymbol,
+        reason: capped, phase: 'FAILED', errorClass: 'fatal', label: 'CAPPED', mode,
+      })
+      return
+    }
+
+    /**
+     * Gate 5: the broker link. When an operator has released the live broker,
+     * EVERY live order is refused here, exits included: this is not a rule
+     * about exposure, it is the absence of a broker. Paper is not asked.
      */
     const linkRefusal = paper ? null : ports.linkRefusal()
     if (linkRefusal !== null) {
@@ -1269,14 +1077,14 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
         /**
          * The CLASS the adapter decided, not one re-derived from the text.
          *
-         * `XtsOrderError` carries it because `unknown` and `fatal` are both
-         * thrown without a retry and are indistinguishable afterwards by
-         * message alone. Falling back to a fresh classification covers a
-         * non-XTS adapter (the simulator) and anything thrown before the
-         * adapter is reached.
+         * `BrokerOrderError` (Delta's `DxOrderError` is one) carries it because
+         * `unknown` and `fatal` are both thrown without a retry and are
+         * indistinguishable afterwards by message alone. Falling back to a
+         * fresh classification covers the simulator and anything thrown before
+         * the adapter is reached.
          */
         const errorClass =
-          err instanceof XtsOrderError ? err.klass : classifyXtsError(message)
+          err instanceof BrokerOrderError ? err.klass : classifyBrokerError(message)
         if (errorClass === 'unknown') {
           /**
            * WE DO NOT KNOW WHETHER THIS ORDER IS LIVE (F-3).
@@ -1728,400 +1536,139 @@ export async function main(): Promise<void> {
   refreshRef.unref()
 
   /**
-   * Broker mode.
+   * Broker mode: `simulate` (default) or `delta` (`dx-edge.ts`). A typo stops
+   * the boot rather than guessing.
    *
    * `simulate` exists so the ENTIRE live path — durable write, nudge, claim,
-   * freeze split, placement, fill correlation, journal — can be exercised
-   * locally with no XTS account and no real money. The simulator implements the
-   * same `BrokerAdapter` interface and fills realistically (MARKET at the last
-   * tick, LIMIT at the touch when the book crosses it and otherwise only when
-   * the market trades through it), so a bug in the wiring shows up here rather
-   * than on the first live order.
+   * plan, placement, fill correlation, journal — can be exercised with no
+   * Delta account and no real money. The simulator implements the same
+   * `BrokerAdapter` interface and fills at the touch (a sell at the bid, a buy
+   * at the ask) when the book crosses, charging Delta's fee on DX.
    *
-   * It is opt-IN. Defaulting to simulate would let a misconfigured production
-   * gateway silently place nothing while looking healthy.
+   * `delta` builds the Delta adapter ONLY when `DESK_DX_LIVE=1` too. Without
+   * it the whole gateway simulates, whatever the documents say.
    */
-  const brokerMode = process.env['DESK_BROKER'] ?? 'simulate'
+  const brokerMode = brokerModeFromEnv(process.env)
+  const liveRail = liveRailEnabled(process.env)
+  const venue = venueFromEnv(process.env)
+  const onDx = venue.id === 'dx'
   /**
-   * THE PAPER BROKER, BUILT UNCONDITIONALLY (D14).
+   * The latest `.DEXBTUSD` index, from `md.spot` underlying BTC. The fee
+   * model's notional and the notional cap read it; null until the feed speaks.
+   */
+  let btcIndex: number | null = null
+  /**
+   * THE PAPER BROKER, BUILT UNCONDITIONALLY (D14). It serves every document
+   * that is not routed to Delta — on a simulate box, all of them.
    *
-   * It used to exist only in simulate mode. It now exists always, because the
-   * engine endpoint's PAPER orders reach this queue on a box whose live adapter
-   * is XTS — a paper rehearsal running beside a live session is exactly the
-   * shape the desk needs before it flips a book live, and a simulator that only
-   * existed when the whole gateway was simulated could not serve it.
-   *
-   * It costs nothing when nothing paper is queued: a Map, a tick handler, and
-   * no connection to anything.
+   * On DX it charges Delta's option fee at the price each fill took, and echoes
+   * the Delta product id as the exchange token (Delta ids are not packed).
    */
   const paperAdapter = new SimulatorAdapter({
     slippage: Number(process.env['DESK_SIM_SLIPPAGE'] ?? 0),
+    ...(onDx ? { feeModel: dxSimFee(() => btcIndex, log), packedTokens: false } : {}),
   })
-  let adapter: BrokerAdapter & { ingestOrderUpdate?: (d: Record<string, unknown>) => unknown }
-  /** Resolved with the rest of the XTS config; the order socket lives on it. */
-  let xtsBaseUrl = ''
-  /**
-   * The key the session token is sealed with (F-46), or null for plaintext.
-   *
-   * Declared out here because the order-socket block below reads the same
-   * document, and derived only inside the xts branch: in simulate mode there is
-   * no session to seal, and a "DESK_MASTER_KEY is missing" line about a token
-   * that is never written would be noise on every local run.
-   */
-  let sessionKey: Buffer | null = null
-  /** Owns the order socket's lifetime across token rotations. Null in simulate. */
-  let orderSocket: OrderSocketSupervisor | null = null
-  /**
-   * The operator's "turn XTS off" switch. Null in simulate — there is no
-   * session to release. Read at call time by the placer and the live chaser,
-   * which are wired outside the xts branch that builds it.
-   */
-  let brokerLink: BrokerLink | null = null
-  /** One pass of the link poll; a no-op in simulate. Kicked once at the end of boot. */
-  let pollBrokerLink: () => Promise<void> = async () => {}
-  /**
-   * Called on every successful login, with the token it produced.
-   *
-   * A no-op stub until the supervisor is built, because the boot login runs
-   * inside `buildSession` — before there is an adapter to hang a socket off.
-   */
-  let onTokenRotated: (token: string, userID: string) => void = () => {}
+  let adapter: BrokerAdapter = paperAdapter
+  /** The live Delta adapter, or null — `chooseAdapter` never routes to null. */
+  let dxAdapter: DxAdapter | null = null
+  let dxRest: DxRest | null = null
+  /** Delta's private socket (order updates). Null unless the live rail is on. */
+  let privateSocket: DxPrivateSocket | null = null
   /**
    * Arms the broker-book sweep, once the fill watcher it replays into exists.
-   *
-   * A no-op in simulate mode — there is no broker whose book could be the truth
-   * — which is also why this is a hook rather than an unconditional call.
+   * A no-op in simulate mode — the simulator's book is our own invention.
    */
   let startBrokerSweep: (fills: FillWatcher) => void = () => {}
   /**
-   * Is anything going to answer an AMBIGUOUS tranche?
-   *
-   * Read by `recoverInterrupted`, and false for the whole life of a simulate
-   * process. Set from inside the hook rather than from `brokerMode` so it
-   * cannot drift from the thing it describes: the flag is true exactly when the
+   * Is anything going to answer an AMBIGUOUS tranche? True exactly when the
    * sweep timer has actually been armed.
    */
   let brokerSweepArmed = false
 
-  if (brokerMode === 'simulate') {
-    // ONE INSTANCE serves both rails here: with no real broker there is nothing
-    // for a paper order to be kept apart FROM, and two simulators would mean a
-    // tick filling an order on one of them and not the other. Everything below
-    // asks `adapter === paperAdapter` rather than reading a mode string, so the
-    // question "is there a separate live broker" cannot drift from the answer.
-    adapter = paperAdapter
+  if (brokerMode === 'delta' && !liveRail) {
+    log('BROKER MODE: delta, but DESK_DX_LIVE is not 1 — EVERY order is simulated; no Delta session is opened')
+  }
+  if (!liveRail) {
     log('BROKER MODE: simulate — no real orders will be placed')
   } else {
-    const cfg = await loadXtsConfig(
-      () => readBrokerStore(mongo.db as never, log),
-      process.env,
-      log,
-    )
-    const tokens = mongo.db.collection(BROKER_SESSION_COLLECTION)
-    /**
-     * F-46. The session token is SEALED at rest with the same `DESK_MASTER_KEY`
-     * that seals the credentials which mint it; a legacy plaintext doc is still
-     * read once and rewritten sealed by the next login. `session-store.ts` owns
-     * both shapes and the failure policy — a value that will not open is "no
-     * session", never a throw out of the only process that can place orders.
-     */
-    sessionKey = sessionMasterKey(process.env, log)
-    // Best-effort, before the first write: the doc is upserted below, and a TTL
-    // index that could not be built must not stop the gateway booting (F-42).
-    await ensureSessionTtlIndex(tokens as never, log)
-    /**
-     * THE BROKER LINK, read BEFORE the login. An operator who released the
-     * session and then restarted this process must get back a gateway that
-     * stays logged out — see `broker-link.ts`. Unreadable is the default: the
-     * desk has always booted connected, and a Mongo hiccup here must not
-     * silently become "never logs in again".
-     */
-    let bootLinkDesire = readLinkDesire(null)
-    try {
-      bootLinkDesire = readLinkDesire(await safety.findOne({ _id: BROKER_LINK_ID as never }))
-    } catch (err) {
-      log('broker link: state unreadable at boot — booting connected', { error: String(err) })
-    }
-    const session = await buildSession(cfg, {
-      read: async () => {
-        const doc = (await tokens.findOne({ _id: 'xts' })) as Record<string, unknown> | null
-        const rec = openSessionDoc(doc, sessionKey, log)
-        if (rec === null) return null
-        // A doc without codes predates them being persisted (login always
-        // stores at least [userID]) — reusing it would recreate the very
-        // empty-clientID state this exists to prevent. Log in fresh instead.
-        if (rec.clientCodes.length === 0) return null
-        return rec
-      },
-      write: async (token, userID, clientCodes) => {
-        await tokens.updateOne(
-          { _id: 'xts' },
-          { $set: sessionTokenUpdate({ token, userID, clientCodes }, sessionKey, Date.now()) },
-          { upsert: true },
-        )
-        /**
-         * EVERY LOGIN LANDS HERE — boot, the snapshot loop's expiry re-login,
-         * and the adapter's single-flight relogin all funnel through `onToken`.
-         * That makes this the one place that always knows the token changed,
-         * which is exactly what the order socket needs and never had.
-         *
-         * A no-op until the supervisor exists (the boot login runs before the
-         * adapter does); the explicit `sync` after wiring covers that case.
-         */
-        onTokenRotated(token, userID)
-      },
-    }, { login: bootLinkDesire.desired !== 'released' })
-    xtsBaseUrl = cfg.baseUrl
-
-    /**
-     * The link. Its ports close over `orderSocket`, which is built further
-     * down (it needs the adapter) — read at call time, never captured.
-     */
-    const link = new BrokerLink(
-      {
-        logout: () => session.client.logout(),
-        // The RAW session, not the guarded one below: this is the one login
-        // the release permits, and it flows through `onToken` like every
-        // other, so the token is stored and the socket rewired.
-        login: async () => {
-          await session.relogin()
-        },
-        closeSocket: () => orderSocket?.close(),
-        clearStoredToken: async () => {
-          await tokens.deleteOne({ _id: 'xts' })
-        },
-        record: async (ack) => {
-          await safety.updateOne({ _id: BROKER_LINK_ID as never }, { $set: { ...ack } }, { upsert: true })
-        },
-        now: () => Date.now(),
-        log,
-      },
-      bootLinkDesire.desired,
-    )
-    brokerLink = link
-    /**
-     * EVERY OTHER LOGIN PASSES THROUGH THIS GUARD. The adapter re-logs in on a
-     * session error and the snapshot loop re-logs in on expiry; while the link
-     * is released both must FAIL instead — a re-login is precisely what would
-     * kill the session the key is being used for elsewhere.
-     */
-    const linkedSession: XtsSession = {
-      current: () => session.current(),
-      relogin: async () => {
-        const refusal = link.refusal()
-        if (refusal !== null) throw new Error(refusal)
-        return await session.relogin()
-      },
-    }
-    adapter = new XtsAdapter({
-      session: linkedSession,
-      log,
-      // Belt and braces: the REST client applies this too, but the adapter is
-      // what actually stamps `clientID` on the order, so the override lives at
-      // the point of use as well as at the point of configuration.
-      ...(cfg.clientId === undefined ? {} : { clientId: cfg.clientId }),
-      // The instrument master is Zerodha-sourced, and Zerodha PACKS its token;
-      // XTS wants the raw exchange token. `packedToExchangeToken` (gateway.ts)
-      // is the one rule for the unpacking — the fill watcher compares broker
-      // rows against the order document with the same function, so the token
-      // that goes out is exactly the token that is matched coming back. A
-      // packed value here names an instrument that does not exist, which XTS
-      // ACKs and then voids without a trace: the 2026-08-04 phantom books.
-      exchangeInstrumentId: (intent) => {
-        const packed = intent.instrument.instrumentToken ?? 0
-        return packed > 0 ? packedToExchangeToken(packed) : packed
-      },
+    const cfg = await loadDxConfig(() => readDeltaBrokerStore(mongo.db as never, log), process.env, log)
+    const rest = new DxRest({
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      apiSecret: cfg.apiSecret,
+      userAgent: DX_USER_AGENT,
     })
-    log('BROKER MODE: xts — LIVE ORDERS ARE POSSIBLE')
+    dxRest = rest
+    const live = new DxAdapter({ rest, log })
+    dxAdapter = live
+    adapter = live
+    log('BROKER MODE: delta — LIVE ORDERS ARE POSSIBLE for documents with mode: live')
 
     /**
-     * Snapshot what the BROKER holds, so the desk can be reconciled against it.
-     *
-     * Only in xts mode: the simulator's book is our own invention, and
-     * publishing it as "the broker's view" would defeat the entire purpose of
-     * having one. In simulate mode the snapshot is simply never written, and
-     * the dashboard says the broker view is unavailable.
-     *
-     * `session.current()` rather than a second client, so this shares the
-     * gateway's token instead of racing it.
+     * Delta's dead-man switch: Delta cancels every open BTC option order if
+     * this process stops acking (ttl 30 s, acked every 10 s).
      */
-    const snapshots = mongo.db.collection(BROKER_SNAPSHOT_COLLECTION)
-    const snapshotBroker = async (): Promise<void> => {
-      /**
-       * RELEASED: no call to XTS at all. A FAILED snapshot is still written so
-       * the System page sees a live process and a broker unreachable BY
-       * CHOICE — and the daily archive below is left alone, because an empty
-       * book must not become the day's record. See `releasedSnapshot`.
-       */
-      if (!link.connected) {
-        try {
-          await snapshots.updateOne(
-            { _id: 'xts' },
-            { $set: releasedSnapshot(Date.now(), link.reason) },
-            { upsert: true },
-          )
-        } catch (err) {
-          log('broker snapshot write failed', { error: err instanceof Error ? err.message : String(err) })
-        }
-        return
-      }
-      let snap = await takeBrokerSnapshot(session.current(), Date.now())
-      /**
-       * RELOGIN AND RETRY ONCE on an expired session.
-       *
-       * These reads use `session.current()` directly, so they do not go through
-       * the adapter's own relogin-on-`session`-error path. Without this, a
-       * token that expires — which it does daily, and did across a restart on
-       * 2026-07-30 — leaves the broker view permanently dead with
-       * `Token/Authorization not found`, on the one screen whose job is telling
-       * you what the broker really holds.
-       *
-       * `snap.errorClass` is the snapshot's OWN classification, which it now
-       * carries into Mongo for the dashboard to read. One classification, one
-       * answer — the retry decision and the displayed reason cannot disagree.
-       */
-      if (!snap.ok && snap.errorClass === 'session') {
-        log('broker snapshot: session expired, re-logging in')
-        try {
-          // Through the guard: a release that landed between the read above
-          // and this line must refuse the login, not perform it.
-          await linkedSession.relogin()
-          snap = await takeBrokerSnapshot(session.current(), Date.now())
-        } catch (err) {
-          log('broker snapshot: relogin failed', {
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-      try {
-        await snapshots.updateOne({ _id: 'xts' }, { $set: snap }, { upsert: true })
-        /**
-         * THE DAILY ARCHIVE. The live doc above is overwritten every 30s, so
-         * the broker's orderbook/tradebook/positions had no history at all —
-         * "what did the broker hold at Tuesday's close" was unanswerable.
-         * One dated doc per IST day, overwritten through the session, means
-         * the last write of the day IS the end-of-day record. Best-effort:
-         * an archive miss must not cost the live view.
-         */
-        const istDay = new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10)
-        await mongo.db
-          .collection('desk-broker-snapshot-daily')
-          .updateOne({ _id: `xts-${istDay}` as never }, { $set: { ...snap, day: istDay } }, { upsert: true })
-      } catch (err) {
-        // Never take the loop down over a write; the next tick retries.
-        log('broker snapshot write failed', {
-          error: err instanceof Error ? err.message : String(err),
-        })
-        return
-      }
-      if (!snap.ok) log('broker snapshot INCOMPLETE', { error: snap.error })
-    }
-    void snapshotBroker()
-    const snapTimer = setInterval(() => void snapshotBroker(), BROKER_SNAPSHOT_MS)
-    snapTimer.unref()
+    const heartbeat = createDxHeartbeat({ rest, log })
+    void heartbeat.beat()
+    const hbTimer = setInterval(() => void heartbeat.beat(), DX_HEARTBEAT_MS)
+    hbTimer.unref()
+
+    /** Order updates as they happen; the broker sweep below is the fallback. */
+    privateSocket = new DxPrivateSocket(cfg.wsUrl, {
+      apiKey: cfg.apiKey,
+      apiSecret: cfg.apiSecret,
+      onFrame: (f) => {
+        if (f.kind === 'other') live.onPrivateFrame(f.raw)
+      },
+      onState: (state) => log(`Delta private socket ${state}`),
+    })
+    privateSocket.subscribe('orders', ['all'])
 
     /**
-     * Cancel requests written by desk-api, performed here because this process
-     * owns the session. Polled FAST — a cancel is what you reach for when
-     * something is wrong, and making that wait for the 30s snapshot cadence
-     * would be the wrong trade entirely.
-     *
-     * The order book is re-read per batch rather than reused from the snapshot,
-     * so `clientID` and `OrderUniqueIdentifier` come off a CURRENT row. A
-     * 30-second-old row could name a status that has since changed.
+     * Cancel requests desk-api writes, performed here because this process
+     * owns the Delta key. A paper order's cancel is the paper drain's.
      */
     const cancels = mongo.db.collection(CANCEL_COLLECTION)
     const drainCancels = async (): Promise<void> => {
       try {
-        const pending = (await cancels
-          .find({ status: 'pending' })
-          .toArray()) as unknown as { _id: string }[]
-        if (pending.length === 0) return
-
-        /**
-         * RELEASED: fail the live cancels NOW rather than leave `pending` rows
-         * that read as work in progress. There is no session to cancel with,
-         * and the operator asked for exactly that; the row says so.
-         */
-        if (!link.connected) {
-          for (const req of pending) {
-            const id = String(req._id)
-            if (await isPaperBrokerOrder(id)) continue
-            await cancels.updateOne(
-              { _id: id as never },
-              { $set: { status: 'failed', finishedAt: Date.now(), error: link.refusal() ?? '' } },
-            )
-            log('CANCEL FAILED', { appOrderID: id, detail: 'broker link released' })
-          }
-          return
-        }
-
-        const client = session.current()
-        if (client.getOrderBook === undefined) {
-          log('cannot cancel: this adapter exposes no getOrderBook')
-          return
-        }
-        // ABORT THE BATCH if the book cannot be read. Falling through with an
-        // empty list would make every pending cancel report "already gone",
-        // marking live orders as handled when nothing was even attempted.
-        const book = await client.getOrderBook()
-        const rows = rowsOf(book.result)
+        const pending = (await cancels.find({ status: 'pending' }).toArray()) as unknown as { _id: string }[]
         for (const req of pending) {
           const id = String(req._id)
-          /**
-           * NOT A PAPER ORDER'S CANCEL. `sim-3` is not in the broker's book, so
-           * `cancelBrokerOrder` would answer "already gone" and mark the row
-           * DONE — telling an operator a simulated order was cancelled while it
-           * carried on working. The paper drain below owns those.
-           */
           if (await isPaperBrokerOrder(id)) continue
-          const out = await cancelBrokerOrder(session.current(), rows, id)
+          let ok = false
+          let error = ''
+          try {
+            ok = await live.cancelOrder(id)
+            if (!ok) error = 'Delta is not holding this order open — it has already filled or been cancelled'
+          } catch (err) {
+            error = err instanceof Error ? err.message : String(err)
+          }
           await cancels.updateOne(
             { _id: id as never },
-            {
-              $set: {
-                status: out.ok ? 'done' : 'failed',
-                finishedAt: Date.now(),
-                error: out.error,
-              },
-            },
+            { $set: { status: ok ? 'done' : 'failed', finishedAt: Date.now(), error } },
           )
-          log(out.ok ? 'cancel done' : 'CANCEL FAILED', { appOrderID: id, detail: out.error })
+          log(ok ? 'cancel done' : 'CANCEL FAILED', { brokerOrderId: id, detail: error })
         }
       } catch (err) {
-        // Never take the loop down; the next tick retries whatever is pending.
-        log('cancel drain failed', {
-          error: err instanceof Error ? err.message : String(err),
-        })
+        log('cancel drain failed', { error: err instanceof Error ? err.message : String(err) })
       }
     }
     const cancelTimer = setInterval(() => void drainCancels(), CANCEL_POLL_MS)
     cancelTimer.unref()
 
     /**
-     * THE BROKER-BOOK SWEEP (F-1). Wired here, inside the xts branch, for the
-     * same reason the snapshot is: in simulate mode the "broker's book" is our
-     * own invention, and replaying it as truth would defeat the purpose of
-     * having one — and can only ever confirm what the simulator already told us.
-     *
-     * Deferred by one tick because `fills` is constructed below this block; a
-     * `startBrokerSweep` hook keeps the wiring in one place rather than
-     * scattering half of it past the fill watcher.
+     * THE BROKER-BOOK SWEEP (F-1), over Delta's own order book. The LIVE queue
+     * only: `{mode: 'live'}` is exactly what `chooseAdapter` routes here.
      */
     startBrokerSweep = (fillWatcher: FillWatcher): void => {
       const sweep = createBrokerSweep(
         {
-          adapter,
+          adapter: live,
           queue,
           fills: fillWatcher,
           journal,
           orders: mongo.db.collection('desk-gateway-orders') as never,
-          // THE LIVE QUEUE ONLY. A paper order has no row in the broker's book,
-          // so every pass would find it traceless and — past the ambiguous TTL
-          // — declare a simulated order never placed, or alert on it as a
-          // resting order nobody is watching. `$ne` matches a missing field, so
-          // this narrows to live and excludes nothing that was already scanned.
-          ordersFilter: { mode: { $ne: 'paper' } },
+          ordersFilter: { mode: 'live' },
           now: () => Date.now(),
           log,
         },
@@ -2130,41 +1677,13 @@ export async function main(): Promise<void> {
           workingAlertMs: positiveEnvMs('DESK_WORKING_ALERT_MS', DEFAULT_WORKING_ALERT_MS),
         },
       )
-      // `run()` never rejects (it catches its own errors), but the `.catch` is
-      // kept anyway: an unhandled rejection from an interval kills the only
-      // process that can place orders, and that guarantee must not depend on
-      // a promise made in another file.
       const sweepTimer = setInterval(() => {
-        // Released: the broker book cannot be read, and reading it would
-        // first re-log in. The sweep resumes on its next tick after reconnect.
-        if (!link.connected) return
         void sweep.run().catch((err: unknown) => log('broker sweep threw', { error: String(err) }))
       }, positiveEnvMs('DESK_BROKER_SWEEP_MS', 45_000))
       sweepTimer.unref()
       brokerSweepArmed = true
-      log('broker sweep armed — fills, ambiguous placements and resting orders reconcile from the broker book')
+      log('broker sweep armed — fills, ambiguous placements and resting orders reconcile from the Delta book')
     }
-
-    /**
-     * THE LINK POLL. Same cadence as the cancel drain, for the same reason: an
-     * operator who pressed Release is waiting to log in elsewhere. Unreadable
-     * is "as you were" — the state never flips on a Mongo hiccup — and
-     * `reconcile` never rejects. Kicked once at the end of boot (below, after
-     * the socket exists) so a released boot completes its release and every
-     * boot writes its ack.
-     */
-    pollBrokerLink = async (): Promise<void> => {
-      let doc: unknown
-      try {
-        doc = await safety.findOne({ _id: BROKER_LINK_ID as never })
-      } catch (err) {
-        log('broker link: state unreadable, keeping current state', { error: String(err) })
-        return
-      }
-      await link.reconcile(readLinkDesire(doc))
-    }
-    const linkTimer = setInterval(() => void pollBrokerLink(), BROKER_LINK_POLL_MS)
-    linkTimer.unref()
   }
 
   // --- fills: correlate broker updates back to our intents ----------------
@@ -2212,7 +1731,7 @@ export async function main(): Promise<void> {
   /**
    * ONE CHASER PER RAIL, and the split exists for a blunt reason: a chase is a
    * `modifyOrder` against a BROKER ORDER ID, and a paper order's id (`sim-3`)
-   * means nothing to XTS. A single chaser over the whole collection would send
+   * means nothing to Delta. A single chaser over the whole collection would send
    * reprices for simulated orders to the real broker — which either errors on
    * every pass or, far worse, names an id that happens to exist.
    *
@@ -2263,15 +1782,10 @@ export async function main(): Promise<void> {
   } else if (adapter === paperAdapter) {
     armChaser('simulate', adapter)
   } else {
-    // A released link stops the LIVE chaser only: a reprice is a `modifyOrder`
-    // against XTS. The paper chaser never touches the broker and carries on.
-    armChaser(
-      'live',
-      adapter,
-      { mode: { $ne: 'paper' } },
-      () => chaseDisabled(process.env) || brokerLink?.connected === false,
-    )
-    armChaser('paper', paperAdapter, { mode: 'paper' })
+    // Each chaser reads exactly the documents its adapter holds: Delta the
+    // exact-live ones, the simulator everything else.
+    armChaser('live', adapter, { mode: 'live' })
+    armChaser('paper', paperAdapter, { mode: { $ne: 'live' } })
   }
 
   /**
@@ -2344,6 +1858,9 @@ export async function main(): Promise<void> {
       queue,
       journal,
       orders: mongo.db.collection('desk-gateway-orders') as never,
+      // What the simulator holds: everything on a simulate box, the non-live
+      // documents beside a live Delta adapter.
+      ordersFilter: adapter === paperAdapter ? {} : { mode: { $ne: 'live' } },
       bootedAt: Date.now(),
       now: () => Date.now(),
       log,
@@ -2387,6 +1904,16 @@ export async function main(): Promise<void> {
    * Subscribed once when the two are the same object (simulate mode), or a
    * second update would be handled twice.
    */
+  /**
+   * A live Delta fill carries DELTA'S REPORTED commission (spec §5.4a), read
+   * off `/v2/fills` for that order. None reported yet → no fee on the row,
+   * never an invented one; the simulator's fills already carry theirs.
+   */
+  const withLiveFee = async (from: BrokerAdapter, update: PlacedOrder): Promise<PlacedOrder> => {
+    if (from !== dxAdapter || dxRest === null || update.fee !== undefined || !(update.filledQty > 0)) return update
+    const fee = await deltaCommission(dxRest, update.brokerOrderId)
+    return fee === null ? update : { ...update, fee }
+  }
   const watchFills = (from: BrokerAdapter): void => {
     const rail: 'live' | 'paper' | undefined =
       adapter === paperAdapter ? undefined : from === paperAdapter ? 'paper' : 'live'
@@ -2394,54 +1921,22 @@ export async function main(): Promise<void> {
       // `handle` never rejects (it catches its own errors), but the `void` is
       // still guarded by the crash guard above: an unhandled rejection reaching
       // Node 24 from here kills the only process that can place orders.
-      void fills.handle(update, rail === undefined ? {} : { rail }).catch((err: unknown) => {
-        log('fill watcher threw', { clientOrderId: update.clientOrderId, error: String(err) })
-      })
+      void withLiveFee(from, update)
+        .then((u) => fills.handle(u, rail === undefined ? {} : { rail }))
+        .catch((err: unknown) => {
+          log('fill watcher threw', { clientOrderId: update.clientOrderId, error: String(err) })
+        })
     })
   }
   watchFills(adapter)
   if (adapter !== paperAdapter) watchFills(paperAdapter)
-
-  // The XTS interactive socket, if the SDK exposes one. Absent it, fills still
-  // arrive via the reconciliation sweep — degraded, not broken.
-  //
-  // Wired THROUGH the supervisor rather than directly, so that every later
-  // login rebuilds it. The socket's token lives in its handshake query string
-  // and never changes after construction, so a token rotation silently
-  // disconnects it for good — see `order-socket.ts` for the session this cost.
-  if (adapter instanceof XtsAdapter) {
-    const xtsAdapter = adapter
-    // Sealed or legacy-plaintext, opened the same way `buildSession` opens it —
-    // one reader for one document, so the socket can never be wired with bytes
-    // the session itself refused (F-46).
-    const doc = (await mongo.db
-      .collection(BROKER_SESSION_COLLECTION)
-      .findOne({ _id: 'xts' })) as Record<string, unknown> | null
-    const stored = openSessionDoc(doc, sessionKey, log)
-    orderSocket = new OrderSocketSupervisor({
-      wire: async (token, userID) =>
-        await wireOrderSocket(xtsAdapter, xtsBaseUrl, token, userID, log),
-      log,
-    })
-    // Arm the rotation hook BEFORE the first wiring: a relogin racing the boot
-    // must rewire rather than be dropped on the floor.
-    onTokenRotated = (token, userID) => {
-      void orderSocket?.sync(token, userID)
-    }
-    // Not while released: a token left behind by a release that happened
-    // while this process was down must not be handed to a socket. The link's
-    // first poll logs it out instead.
-    if (brokerLink?.connected !== false) {
-      await orderSocket.sync(stored?.token ?? '', stored?.userID ?? '')
-    }
-  }
 
   /**
    * The market-data fan-out: the QuoteMap the peg reads, and the simulator that
    * fills a resting paper order when a real tick crosses it: the touch, or a
    * print through it.
    *
-   * ONE simulator, always — `paperAdapter` serves the paper rail in xts mode
+   * ONE simulator, always — `paperAdapter` serves the paper rail beside Delta
    * and BOTH rails in simulate mode, so listing it once is the whole list.
    * Feeding one simulator twice would fill a resting order off a single print
    * twice, which is why the list is built here rather than appended to.
@@ -2456,16 +1951,20 @@ export async function main(): Promise<void> {
    *
    * The ports are the things that vary at runtime: reference data is refreshed
    * on an interval, so the resolver and the freeze table are ASKED per order
-   * instead of captured here, and the broker sweep is armed above only in xts
-   * mode, so `sweepArmed` is read per recovery.
+   * instead of captured here, and the broker sweep is armed above only
+   * with a live Delta adapter, so `sweepArmed` is read per recovery.
    */
+  /** Read once; a typo stops the boot. NSE has no caps. */
+  const dxCaps = onDx ? dxCapsFromEnv(process.env) : null
+  if (dxCaps !== null) log('DX caps', { ...dxCaps })
   const placer = createOrderPlacer({
     queue,
     journal,
     fills,
-    // Per document — the simulator for a paper order, the real adapter for
-    // everything else. See `PlacerPorts.adapterFor` and `isPaperOrder`.
-    adapterFor: (doc) => (isPaperOrder(doc) ? paperAdapter : adapter),
+    // Per document — Delta only for an exact `mode: 'live'` with the live
+    // rail on; the simulator for everything else (`dx-edge.ts`).
+    adapterFor: (doc) =>
+      chooseAdapter<BrokerAdapter>(doc, process.env, { simulator: paperAdapter, delta: dxAdapter }),
     resolveContract: (tradingsymbol) => {
       const contract = master.resolveSymbol(tradingsymbol)
       if (contract === null || contract.instrumentToken === undefined) return null
@@ -2480,9 +1979,23 @@ export async function main(): Promise<void> {
       }
     },
     freeze: () => freeze,
+    ...(dxCaps === null
+      ? {}
+      : {
+          capRefusal: (order: GatewayOrderDoc, contract: ResolvedContract | null) =>
+            dxCapRefusal({
+              caps: dxCaps,
+              quantity: order.quantity,
+              lotSize: contract?.lotSize ?? venue.qtyStep,
+              deskOp: order.desk_op,
+              index: btcIndex,
+            }),
+        }),
     allowsLive,
     readHalt,
-    linkRefusal: () => brokerLink?.refusal() ?? null,
+    // No session to release on Delta: the kill switch and the Strategies page
+    // are the gates; Delta's heartbeat is the dead-man switch.
+    linkRefusal: () => null,
     orderMaxAgeMs,
     sweepArmed: () => brokerSweepArmed,
     now: () => Date.now(),
@@ -2532,6 +2045,13 @@ export async function main(): Promise<void> {
   bus.subscribe<{ token: number; price: number }>('md.tick', (m) => {
     onTick(m.payload)
   })
+  /** The BTC index for the fee model's notional and the notional cap. */
+  bus.subscribe<{ underlying?: string; price?: number }>('md.spot', (m) => {
+    const p = m.payload
+    if (p?.underlying === 'BTC' && typeof p.price === 'number' && Number.isFinite(p.price) && p.price > 0) {
+      btcIndex = p.price
+    }
+  })
   bus.subscribe<NudgePayload>(ORDER_NUDGE_TOPIC, () => {
     nudged = true
     void sweep()
@@ -2548,116 +2068,52 @@ export async function main(): Promise<void> {
   }, 1000)
   tick.unref()
 
+  /**
+   * DELTA SETTLEMENT (DX only): every minute, each still-open leg of an
+   * expired contract is booked at the price in `dx-settlements` — paper and
+   * live — and never at any other. See `dx-settlement.ts`.
+   */
+  if (onDx) {
+    const settlement = createDxSettlementJob({
+      listBooks: () => listOpenBooks(mongo.db as never),
+      settlements: async () =>
+        (await mongo.db.collection(DX_SETTLEMENTS_COLLECTION).find({}).toArray()) as unknown as DxSettlementRow[],
+      workingOn: (tag, mode, tradingsymbol) => countWorking(mongo.db as never, tag, mode, tradingsymbol),
+      book: mongoSettlementBooker({ db: mongo.db as never, now: () => Date.now(), log }),
+      alert: async (w) => {
+        await journal.record({
+          clientOrderId: `settle-${w.tag}-${w.mode}-${w.tradingsymbol}`,
+          phase: 'FAILED', ok: false, tag: w.tag, tradingsymbol: w.tradingsymbol, ts: Date.now(), mode: w.mode,
+          error:
+            `Delta's settlement price for ${w.tradingsymbol} (expiry ${w.expiry}) is still missing ` +
+            `${Math.round(w.overdueMs / 60_000)} min after 12:00 UTC — the leg is NOT settled; ` +
+            'it will be booked at Delta\'s price as soon as dx-settlements has it',
+          errorClass: 'fatal',
+          detail: { source: 'dx-settlement', expiry: w.expiry },
+        })
+      },
+      now: () => Date.now(),
+      log,
+    })
+    const settleTimer = setInterval(() => void settlement.run(), DX_SETTLEMENT_POLL_MS)
+    settleTimer.unref()
+    void settlement.run()
+  }
+
   await sweep()
   booted = true
   log('gateway up', { workerId, pending: await queue.pendingCount() })
-  // The link's first pass: a released boot finishes its release here (the
-  // socket now exists to close), and every boot writes its ack.
-  void pollBrokerLink()
 
   const shutdown = (signal: string): void => {
     log(`${signal} received, shutting down`)
     // Before Mongo, so a socket still reconnecting cannot hold the exit open
     // past the 10s backstop below.
-    orderSocket?.close()
+    privateSocket?.close()
     void bus.close().then(() => mongo.close()).then(() => process.exit(0))
     setTimeout(() => process.exit(1), 10_000).unref()
   }
   process.on('SIGTERM', () => shutdown('SIGTERM'))
   process.on('SIGINT', () => shutdown('SIGINT'))
-}
-
-/**
- * Subscribe to the XTS interactive socket for order updates.
- *
- * `socket.io-client` directly — that is a generic transport library, not the
- * XTS SDK, and XTS's socket layer is socket.io.
- *
- * OPTIONAL BY DESIGN. If the socket cannot be established the gateway still
- * places orders and learns their fate from the order book on the next sweep.
- * Refusing to start without it would trade "fills arrive late" for "no orders
- * at all", which is strictly worse.
- */
-async function wireOrderSocket(
-  adapter: XtsAdapter,
-  baseUrl: string,
-  token: string,
-  userID: string,
-  logFn: (m: string, c?: Record<string, unknown>) => void,
-): Promise<OrderSocketHandle | null> {
-  try {
-    if (baseUrl === '') throw new Error('no XTS base URL resolved')
-    const { createRequire } = await import('node:module')
-    const req = createRequire(import.meta.url)
-    // socket.io-client is PINNED TO v2: the broker's server speaks Engine.IO 3
-    // (its handshake answers with v2's length-prefixed framing no matter what
-    // EIO version is requested), which a v4 client cannot parse — it connects,
-    // fails silently, and no fill ever arrives. v2 exports the lookup function
-    // itself; v3+ exports `{ io }`. Accept both so a future upgrade cannot
-    // silently wire nothing.
-    type SocketLookup = (
-      url: string,
-      opts: Record<string, unknown>,
-    ) => {
-      on(ev: string, cb: (d: unknown) => void): void
-      // v2 exposes both; typed optional so a version that drops one cannot turn
-      // a teardown into a TypeError inside the login path.
-      close?(): void
-      disconnect?(): void
-    }
-    const mod: unknown = req('socket.io-client')
-    const io: SocketLookup | undefined =
-      typeof mod === 'function' ? (mod as SocketLookup) : (mod as { io?: SocketLookup }).io
-    if (io === undefined) throw new Error('socket.io-client exports neither a lookup nor io()')
-    const base = baseUrl.replace(/\/$/, '')
-    // The exact contract of the SDK that ran this account for years
-    // (xts-interactive-api interactiveSocket.js:112-116): `apiType` is
-    // REQUIRED — without it the server drops the connection on sight — and
-    // transports are left at socket.io's polling-then-upgrade default, which
-    // is what the broker's nginx actually accepts. `publishFormat` and
-    // `broadcastMode` are marketdata-socket parameters and do not belong here.
-    const socket = io(base, {
-      path: process.env['XTS_SOCKET_PATH'] ?? '/interactive/socket.io',
-      query: { token, userID, apiType: 'INTERACTIVE' },
-      reconnection: true,
-    })
-    socket.on('connect', () => logFn('XTS order socket connected'))
-    socket.on('disconnect', () => logFn('XTS order socket DISCONNECTED — fills will lag'))
-    socket.on('error', (d: unknown) => logFn('XTS socket error', { error: String(d) }))
-
-    const ingest = (d: unknown): void => {
-      // XTS emits the payload as a JSON STRING on some deployments and an
-      // object on others. Accept both rather than silently dropping fills.
-      const parsed = typeof d === 'string' ? safeParse(d) : (d as Record<string, unknown> | null)
-      if (parsed !== null) adapter.ingestOrderUpdate(parsed)
-    }
-    socket.on('order', ingest)
-    // Trades carry fill detail that order events sometimes omit; both feed the
-    // same correlation path and duplicates are suppressed downstream.
-    socket.on('trade', ingest)
-    return {
-      close: () => {
-        // `close()` stops reconnection outright; `disconnect()` is the v2 alias.
-        // Either is enough — what must not happen is the old socket surviving a
-        // rewire and continuing to retry with a token the server has rejected.
-        if (typeof socket.close === 'function') socket.close()
-        else if (typeof socket.disconnect === 'function') socket.disconnect()
-      },
-    }
-  } catch (err) {
-    logFn('could not wire the XTS order socket — fills will arrive via the sweep', {
-      error: String(err),
-    })
-    return null
-  }
-}
-
-function safeParse(s: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(s) as Record<string, unknown>
-  } catch {
-    return null
-  }
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {

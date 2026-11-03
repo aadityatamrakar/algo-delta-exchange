@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { XtsOrderError, type PlacedOrder } from '@algomaker/brokers'
+import { BrokerOrderError, type PlacedOrder } from '@algomaker/brokers'
 import type { OrderIntent } from '@algomaker/order-bus'
 import {
   DxAdapter,
@@ -178,8 +178,8 @@ test('a transport failure or 5xx is UNKNOWN and is never retried; a 400 is fatal
     await assert.rejects(adapter(rest).placeOrder(intent()), (e: unknown) => {
       assert.ok(e instanceof DxOrderError)
       assert.equal(e.klass, klass)
-      // The gateway reads the class off XtsOrderError; DxOrderError must be one.
-      assert.ok(e instanceof XtsOrderError)
+      // The gateway reads the class off BrokerOrderError; DxOrderError must be one.
+      assert.ok(e instanceof BrokerOrderError)
       return true
     })
     assert.equal(rest.placed.length, 1)
