@@ -78,7 +78,7 @@ import {
   liveRailEnabled,
   stampedPaperRail,
 } from './dx-edge.ts'
-import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore } from './dx-config.ts'
+import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore, storedApiKey } from './dx-config.ts'
 import { DemoRail, createAdapterRouter, demoKeyReadiness, holdsLegs } from './dx-demo.ts'
 import { OiCapGate, demoOiCapSource, liveOiCapSource, type MasterCap } from './dx-oicap.ts'
 import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
@@ -1694,7 +1694,10 @@ export async function main(): Promise<void> {
   if (!liveRail) {
     log('BROKER MODE: simulate — no real orders will be placed')
   } else {
-    const cfg = await loadDxConfig(() => readDeltaBrokerStore(mongo.db as never, log), process.env, log)
+    const cfg = await loadDxConfig(() => readDeltaBrokerStore(mongo.db as never, log), process.env, log, {
+      // A testnet key typed into the live card is refused (and the reverse below).
+      otherCardKey: async () => storedApiKey(await readDeltaBrokerStore(mongo.db as never, () => {}, 'delta-demo')),
+    })
     const rest = new DxRest({
       baseUrl: cfg.baseUrl,
       apiKey: cfg.apiKey,
@@ -1906,7 +1909,12 @@ export async function main(): Promise<void> {
             () => readDeltaBrokerStore(mongo.db as never, log, 'delta-demo'),
             process.env,
             log,
-            liveApiKey === undefined ? {} : { liveApiKey },
+            {
+              ...(liveApiKey === undefined ? {} : { liveApiKey }),
+              // The `delta` card itself, whatever DESK_BROKER says: a simulate
+              // box has no liveApiKey and would compare against nothing.
+              otherCardKey: async () => storedApiKey(await readDeltaBrokerStore(mongo.db as never, () => {}, 'delta')),
+            },
           ),
         now: () => Date.now(),
         log,

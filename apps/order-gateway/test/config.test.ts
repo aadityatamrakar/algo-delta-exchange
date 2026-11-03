@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { positiveEnvMs } from '../src/main.ts'
 import { DX_DEMO_REST_URL, DX_DEMO_WS_URL } from '@algomaker/dx'
-import { DX_DEFAULT_BASE_URL, DX_DEFAULT_WS_URL, loadDxConfig, loadDxDemoConfig } from '../src/dx-config.ts'
+import { DX_DEFAULT_BASE_URL, DX_DEFAULT_WS_URL, loadDxConfig, loadDxDemoConfig, storedApiKey } from '../src/dx-config.ts'
 
 /**
  * The Delta credentials: the BROKER STORE (`desk-brokers` kind `delta`, typed
@@ -151,6 +151,52 @@ test('demo: the same key as production is refused — it would be the real accou
     () => loadDxDemoConfig(store({ apiKey: 'SAME', apiSecret: 'DS' }), {}, quiet, { liveApiKey: 'SAME' }),
     /same API key as production/,
   )
+})
+
+test("demo: a key equal to the stored `delta` card's key is refused even when the live rail is off (no liveApiKey)", async () => {
+  // A simulate box never builds the live rail, so `liveApiKey` is undefined —
+  // the card itself is read for the comparison.
+  const reads: string[] = []
+  await assert.rejects(
+    () =>
+      loadDxDemoConfig(store({ apiKey: 'REAL', apiSecret: 'DS' }), {}, quiet, {
+        otherCardKey: async () => {
+          reads.push('delta')
+          return 'REAL'
+        },
+      }),
+    /same API key as production/,
+  )
+  assert.deepEqual(reads, ['delta'])
+  // The production env key counts too.
+  await assert.rejects(
+    () => loadDxDemoConfig(store({ apiKey: 'REAL', apiSecret: 'DS' }), { DX_API_KEY: 'REAL' }, quiet),
+    /same API key as production/,
+  )
+  // Different keys load.
+  const cfg = await loadDxDemoConfig(store({ apiKey: 'DK', apiSecret: 'DS' }), { DX_API_KEY: 'REAL' }, quiet, {
+    otherCardKey: async () => 'REAL',
+  })
+  assert.equal(cfg.apiKey, 'DK')
+})
+
+test("live: a key equal to the stored `delta-demo` card's key is refused — a testnet key in the live card", async () => {
+  await assert.rejects(
+    () => loadDxConfig(store({ apiKey: 'TEST', apiSecret: 'S' }), {}, quiet, { otherCardKey: async () => 'TEST' }),
+    /same API key as the demo/,
+  )
+  await assert.rejects(
+    () => loadDxConfig(store({ apiKey: 'TEST', apiSecret: 'S' }), { DX_DEMO_API_KEY: 'TEST' }, quiet),
+    /same API key as the demo/,
+  )
+  const cfg = await loadDxConfig(store({ apiKey: 'K', apiSecret: 'S' }), {}, quiet, { otherCardKey: async () => 'TEST' })
+  assert.equal(cfg.apiKey, 'K')
+})
+
+test('storedApiKey: secret first, then meta, trimmed; nothing stored is undefined', () => {
+  assert.equal(storedApiKey({ secret: { apiKey: ' A ' }, meta: { apiKey: 'B' } }), 'A')
+  assert.equal(storedApiKey({ secret: {}, meta: { apiKey: 'B' } }), 'B')
+  assert.equal(storedApiKey({ secret: {}, meta: {} }), undefined)
 })
 
 test('production credentials go to Delta Exchange India only — not any other host', async () => {
