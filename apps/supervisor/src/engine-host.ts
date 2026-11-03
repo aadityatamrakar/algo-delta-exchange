@@ -179,6 +179,7 @@ import {
   totalPnl,
 } from '@algomaker/desk-engine'
 import { roundToStep, venueFromEnv, type VenueSpec } from '@algomaker/venue'
+import type { DeskAlert } from '@algomaker/core'
 import type {
   BullSInputs,
   ChainSnap,
@@ -303,6 +304,13 @@ export interface EngineHostDeps {
    * last-decision line stays the mark's, exactly as before.
    */
   onDecision?(reason: string): void
+  /**
+   * AN ALERT FOR THE OPERATOR (`desk-alerts`, `@algomaker/core`'s
+   * `createAlertSink`): a BULL-S book's stale held-leg quote (`warn`) and its
+   * stale exit (`critical`) — see `bullSAlertsOf`. Fire-and-forget; the host
+   * also swallows anything it throws. Absent = nowhere to send them.
+   */
+  alert?(alert: DeskAlert): void
   /**
    * The contract's tick size, for flooring a maker quote onto the exchange's
    * grid. `null`/absent falls back to the venue's `defaultTick` — see `#quoteAt`.
@@ -679,7 +687,45 @@ export const BS_EXIT_TRIGGERS: ReadonlySet<Trigger> = new Set<Trigger>([
   'bs-flat',
   'bs-close',
   'bs-expiry',
+  // A straddle bought back because a held leg's quote went stale, and the
+  // excess of a lopsided straddle bought back: both take risk off.
+  'bs-stale',
+  'bs-balance',
 ])
+
+/**
+ * WHAT A BULL-S DECISION MUST TELL THE OPERATOR, as `desk-alerts` docs.
+ *
+ *   - `bs-stale` — a straddle is being closed because a held leg's quote has
+ *     been stale past `bs_stale_exit_s`: CRITICAL, key `<tag>:stale-exit`.
+ *   - any straddle whose `staleSinceMs` is set (`markState`, so a held pass
+ *     counts too): new straddles are refused — WARN, key `<tag>:stale-quote`.
+ *
+ * The message is the decision's own reason, which names the stale leg. The
+ * sink dedupes per key (10 min), so this is asked every pass.
+ */
+export function bullSAlertsOf(tag: string, mode: Mode, decision: EngineDecision): DeskAlert[] {
+  const out: DeskAlert[] = []
+  const base = { source: 'supervisor', mode, tag } as const
+  if (decision.trigger === 'bs-stale') {
+    out.push({
+      ...base,
+      severity: 'critical',
+      key: `${tag}:stale-exit`,
+      message: `${tag}: closing a straddle on a stale quote — ${decision.reason}`,
+    })
+  }
+  const stale = decision.markState.bs.groups.filter((g) => g.staleSinceMs > 0)
+  if (stale.length > 0) {
+    out.push({
+      ...base,
+      severity: 'warn',
+      key: `${tag}:stale-quote`,
+      message: `${tag}: held-leg quote stale at ${stale.map((g) => g.strike).join(', ')} — no new straddles; ${decision.reason}`,
+    })
+  }
+  return out
+}
 
 const IST_OFFSET_MS = 330 * 60_000
 const DAY_MS = 86_400_000
@@ -1468,7 +1514,7 @@ export class EngineHost {
     const decision = this.#decide(inputs, dials, state, markCtx)
     const reason = this.#withMarks(inputs, decision)
     this.#journal(markCtx, inputs, dials, reason)
-    this.#tellReason(dials, reason)
+    this.#tellReason(dials, reason, decision)
 
     if (
       on === false &&
@@ -1661,7 +1707,7 @@ export class EngineHost {
     const decision = this.#decide(inputs, dials, state, markCtx)
     const reason = this.#withMarks(inputs, decision)
     this.#journal(markCtx, inputs, dials, reason)
-    this.#tellReason(dials, reason)
+    this.#tellReason(dials, reason, decision)
     // `markState`, never `stateAfter`: nothing is routed under a working
     // package, so the guard's streak and the anchor step are all that happened.
     await this.#persistRuleState(state, decision.markState)
@@ -1932,13 +1978,28 @@ export class EngineHost {
     return decision.reason === '' ? marks.note : `${decision.reason} · ${marks.note}`
   }
 
-  /** The pass's reason to the page, for a BULL-S book (`EngineHostDeps.onDecision`). */
-  #tellReason(dials: Dials, reason: string): void {
+  /**
+   * The pass's reason to the page, and its alerts to the operator, for a
+   * BULL-S book (`EngineHostDeps.onDecision`, `EngineHostDeps.alert`).
+   */
+  #tellReason(dials: Dials, reason: string, decision: EngineDecision): void {
     if (!dials.bs_enabled) return
     try {
       this.#d.onDecision?.(reason)
     } catch {
       // The page's line is the least important thing here; never a decision's cost.
+    }
+    if (this.#d.alert === undefined) return
+    try {
+      for (const a of bullSAlertsOf(this.#d.tag, this.#d.mode, decision)) {
+        try {
+          this.#d.alert(a)
+        } catch {
+          // An alert that cannot be written is never the reason an exit does not go.
+        }
+      }
+    } catch {
+      // Nor is working out what to say.
     }
   }
 
