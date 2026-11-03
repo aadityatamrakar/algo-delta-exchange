@@ -55,6 +55,7 @@ import {
   isWeekday,
 } from '@algomaker/core'
 import { WsTransportServer } from '@algomaker/bus'
+import { venueFromEnv } from '@algomaker/venue'
 import { connectMongo } from '../../api/src/mongo.ts'
 import { DeskStore, type StoredBook } from '../../api/src/store.ts'
 import type { BookRow } from '../../api/src/books-registry.ts'
@@ -593,6 +594,18 @@ export function spotPayload(underlying: string, t: KiteTick, ts: number): Record
 }
 
 export async function main(): Promise<void> {
+  /**
+   * DELTA HANDS OVER BEFORE ANYTHING KITE RUNS. `DESK_VENUE=dx` boots
+   * `dx-main.ts`, which imports no Kite module: no Zerodha login, no Kite
+   * socket, no enctoken canary, no history or margin endpoint. Read first, and
+   * `venueFromEnv` throws on an unknown value, so a typo stops the boot rather
+   * than falling through to a Kite login on the Delta desk.
+   */
+  if (venueFromEnv().id === 'dx') {
+    const { mainDx } = await import('./dx-main.ts')
+    return await mainDx()
+  }
+
   /**
    * INSTALLED FIRST, before the env is read (audit F-41/F-53).
    *
