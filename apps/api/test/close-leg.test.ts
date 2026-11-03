@@ -880,6 +880,22 @@ describe('realised-to-date on the positions payload', () => {
     assert.equal(p.realised, 5 * LOT * (30.9 - 40))
   })
 
+  test('realised is NET of the fees on the fills (sinceEntry builds on it)', async () => {
+    await seedBook()
+    await decide({
+      decisionId: 'fee-open', createdAt: NOW - 3 * 86_400_000,
+      fills: [{ tradingsymbol: DEAD, side: 'Sell', qty: 5 * LOT, price: 30.9,
+                ts: NOW - 3 * 86_400_000, op: 'open', fee: 2.5 }],
+    })
+    await decide({
+      decisionId: 'fee-close', createdAt: NOW - 3_600_000,
+      fills: [{ tradingsymbol: DEAD, side: 'Buy', qty: 5 * LOT, price: 40,
+                ts: NOW - 3_600_000, op: 'close', fee: 1.5 }],
+    })
+    const p = await svc.positions(TAG, MODE, { realised: true })
+    assert.ok(Math.abs((p.realised ?? NaN) - (5 * LOT * (30.9 - 40) - 4)) < 1e-9)
+  })
+
   test('it is OPT-IN: the plain call carries no field at all', async () => {
     // The Books page calls positions() once per book on a 5s poll; the fill
     // journal must not be scanned for a payload that never renders the figure.

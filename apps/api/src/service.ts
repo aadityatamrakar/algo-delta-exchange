@@ -61,6 +61,7 @@ import type { MarketableConfig } from './marketable.ts'
 import { lookbackDaysOf, type LegQuote } from './pnl-jobs.ts'
 import type { ExitQuote, ExitSide } from './marks.ts'
 import { PnlStore, pnlKey } from './pnlstore.ts'
+import { feeOf } from './rollup.ts'
 import { paperFillEvent, routedCollection, withOrderContext, type OrderRail, railFor } from './rail.ts'
 // The SAME venue day `submit.ts` judges "expires today" with — the IST date on
 // NSE, the settlement day on DX; never the host's own zone.
@@ -1906,6 +1907,9 @@ export class BridgeService {
       if (partitionOpenPositions(positions, fills).truncated.length > 0) return null
       let realised = 0
       for (const p of positions) realised += p.realised
+      // NET of the venue's fees, as the day's `cumRealized` is. 0 on NSE,
+      // whose fills carry no `fee`.
+      for (const f of fills) realised -= feeOf(f)
       return realised
     } catch {
       return null
