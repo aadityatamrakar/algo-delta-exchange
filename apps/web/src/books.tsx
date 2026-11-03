@@ -61,6 +61,7 @@ import { liveStartStatement } from './live-copy.ts'
 import { PHONE, goTo, usePoll, useMedia } from './shell.tsx'
 import { ModeBadge } from './mode.tsx'
 import { Money } from './pnl.tsx'
+import { MarksFallbackBadge } from './marks-source.tsx'
 import { useReauth, withReauth } from './auth.tsx'
 import { bullsPatch, bullsStatement, isBullS, type BullSAction } from './bulls.ts'
 import { ManualOrderDialog } from './manual-order.tsx'
@@ -256,7 +257,10 @@ function BookCard(props: {
           </VStack>
           <VStack gap={0}>
             <Text size="sm" color="secondary">P&L</Text>
-            <Money value={pnl?.total ?? null} size="sm" />
+            <HStack gap={1} align="center">
+              <Money value={pnl?.total ?? null} size="sm" />
+              <MarksFallbackBadge fallback={pnl?.marksFallback} />
+            </HStack>
           </VStack>
         </HStack>
         <LastMarkCell row={row} />
@@ -515,7 +519,14 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
     },
     {
       key: 'pnl', header: 'P&L', align: 'end', width: pixel(110),
-      renderCell: ({ pnl }) => <Money value={pnl?.total ?? null} size="sm" />,
+      // The incomplete badge sits under the figure: a demo-rail row with legs
+      // still on production prices is another exchange's number.
+      renderCell: ({ pnl }) => (
+        <VStack gap={0} align="end">
+          <Money value={pnl?.total ?? null} size="sm" />
+          <MarksFallbackBadge fallback={pnl?.marksFallback} />
+        </VStack>
+      ),
     },
     {
       key: 'lastMark', header: 'Last mark', width: pixel(160),

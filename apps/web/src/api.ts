@@ -66,6 +66,24 @@ export interface BridgeLeg {
   origin?: 'manual' | 'repair'
 }
 
+/** The exchange a book's marks came off. See `PositionsResponse.marksSource`. */
+export type MarksSource = 'delta' | 'delta-demo'
+
+/**
+ * THE DELTA TESTNET PRICE SOCKET, as desk-marketdata reports it in `md.health`
+ * and the bridge passes through on the market-data card's `extra.demo`.
+ * Optional everywhere: a bridge or marketdata a deploy behind sends none.
+ */
+export interface DemoFeedHealth {
+  url: string
+  connected: boolean
+  /** How long it has been down. Null when connected (or not measured). */
+  downForMs: number | null
+  tokens: number
+  staleTokens: number
+  oldestAgeMs: number
+}
+
 export interface PositionsResponse {
   /**
    * THE BOOK'S KEY, since Phase 0. A symbol can now carry several variants at
@@ -149,6 +167,17 @@ export interface PositionsResponse {
    * `undefined` must render as "not stated" rather than as "not held".
    */
   repairHold?: { applyId: string; heldAt: number; untilMs: number } | null
+  /**
+   * WHICH EXCHANGE PRICED THESE MARKS. `'delta-demo'` — Delta's testnet, for a
+   * paper book on the demo rail; `'delta'` — production. Optional: an older
+   * bridge sends neither field, and absent renders no label at all.
+   */
+  marksSource?: MarksSource
+  /**
+   * Tradingsymbols marked at PRODUCTION prices because no demo quote has
+   * arrived yet. Non-empty ⇒ the figures are incomplete, and the page says so.
+   */
+  marksFallback?: string[]
 }
 
 export interface BookSummary {
@@ -1273,6 +1302,10 @@ export interface PnlStrategy {
   /** The legs missing a mark, by tradingsymbol. Non-empty ⇒ partial. */
   unpriced: string[]
   complete: boolean
+  /** Same as `PositionsResponse.marksSource` — which exchange priced this row. */
+  marksSource?: MarksSource
+  /** Same as `PositionsResponse.marksFallback`. Non-empty ⇒ incomplete. */
+  marksFallback?: string[]
 }
 
 /** The pair behind a leg's mark. Same-frame bid and ask — never blended. */
