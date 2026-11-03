@@ -58,10 +58,10 @@ const FEED = {
   msSinceLastTick: 1200, bookCount: 2, booksIncomplete: 0, ready: true,
 }
 
-const XTS_ROW = {
-  kind: 'xts',
-  label: 'XTS live',
-  meta: { baseUrl: 'https://xts.example', uniqueKey: 'UK-1', clientId: 'DEALER01' },
+const DELTA_ROW = {
+  kind: 'delta',
+  label: 'Delta live',
+  meta: { baseUrl: 'https://api.india.delta.exchange' },
   configured: true,
   state: 'ok',
   lastVerifiedAt: 1_700_000_000_000,
@@ -139,8 +139,8 @@ function mount(over: {
         ? { body: over.failures ?? FAILURES }
         : { status: over.failuresStatus, body: { error: 'the journal is unreadable' } }
     }
-    if (path === '/v1/desk/brokers' && method === 'GET') return { body: { brokers: [XTS_ROW] } }
-    if (path === '/v1/desk/brokers/xts/test') return { body: { ok: true, verifiedAt: NOW } }
+    if (path === '/v1/desk/brokers' && method === 'GET') return { body: { brokers: [DELTA_ROW] } }
+    if (path === '/v1/desk/brokers/delta/test') return { body: { ok: true, verifiedAt: NOW } }
     return { body: {} }
   })
   render(<ModeProvider><StatusPage /></ModeProvider>)
@@ -162,12 +162,12 @@ describe('the status page', () => {
     expect(screen.getByText('Market data')).toBeTruthy()
     // Brokers: same.
     expect(await screen.findByText('Brokers')).toBeTruthy()
-    expect(await screen.findByText('XTS live')).toBeTruthy()
+    expect(await screen.findByText('Delta live')).toBeTruthy()
   })
 
   test('it asks each section its own endpoint', async () => {
     const sent = mount()
-    await screen.findByText('XTS live')
+    await screen.findByText('Delta live')
     const gets = new Set(sent.filter((r) => r.method === 'GET').map((r) => r.path))
     expect(gets.has('/v1/desk/system')).toBe(true)
     expect(gets.has('/v1/desk/feed')).toBe(true)
@@ -286,12 +286,12 @@ describe('a component that has stopped writing', () => {
 describe('the brokers section still writes', () => {
   test('Test connection fires its POST', async () => {
     const sent = mount()
-    await screen.findByText('XTS live')
+    await screen.findByText('Delta live')
     const button = screen.getAllByRole('button', { name: 'Test connection' })[0]
     expect(button).toBeTruthy()
     act(() => { button?.click() })
     await waitFor(() =>
-      expect(sent.some((r) => r.method === 'POST' && r.path === '/v1/desk/brokers/xts/test')).toBe(true))
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/v1/desk/brokers/delta/test')).toBe(true))
     // And the verdict comes back onto the page, as it did on its own screen.
     expect(await screen.findByText('Login succeeded')).toBeTruthy()
   })
@@ -422,7 +422,7 @@ describe('order failures', () => {
     expect(screen.queryByText(/no order failures today/i)).toBe(null)
     // And the sections either side still render.
     expect(await screen.findByText('Systems')).toBeTruthy()
-    expect(await screen.findByText('XTS live')).toBeTruthy()
+    expect(await screen.findByText('Delta live')).toBeTruthy()
   })
 })
 
