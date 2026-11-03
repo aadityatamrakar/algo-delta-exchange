@@ -8,6 +8,7 @@ import {
   DX_PROD_WS_URL,
   assertRailHost,
   isDemoHost,
+  isProdHost,
 } from '../src/hosts.ts'
 
 test('the testnet hosts are the ones Delta publishes for India', () => {
@@ -45,4 +46,20 @@ test('production credentials never reach testnet', () => {
     assert.throws(() => assertRailHost('live', url), /testnet/i, url)
   }
   assert.throws(() => assertRailHost('live', 'garbage'), /not a URL/)
+})
+
+test('production credentials go to Delta Exchange India ONLY — any other host is refused', () => {
+  assert.doesNotThrow(() => assertRailHost('live', 'wss://public-socket.india.delta.exchange'))
+  assert.doesNotThrow(() => assertRailHost('live', 'https://API.INDIA.DELTA.EXCHANGE/'))
+  for (const url of [
+    'https://example.com',
+    'http://api.india.delta.exchange',
+    'http://127.0.0.1:9',
+    'https://api.india.delta.exchange.example.com',
+    'https://api.delta.exchange',
+  ]) {
+    assert.throws(() => assertRailHost('live', url), /only be sent to Delta Exchange India/, url)
+  }
+  assert.equal(isProdHost(DX_PROD_REST_URL), true)
+  assert.equal(isProdHost(DX_DEMO_REST_URL), false)
 })

@@ -29,11 +29,11 @@ test('the broker store supplies the key and secret, and the India hosts are the 
 
 test('meta.baseUrl is used, and the store WINS over the environment', async () => {
   const cfg = await loadDxConfig(
-    store({ apiKey: 'K', apiSecret: 'S' }, { baseUrl: 'https://api-alt.india.delta.exchange' }),
+    store({ apiKey: 'K', apiSecret: 'S' }, { baseUrl: 'https://api.india.delta.exchange/' }),
     { DX_API_KEY: 'EK', DX_API_SECRET: 'ES', DX_BASE_URL: 'https://env.example.com' },
     quiet,
   )
-  assert.equal(cfg.baseUrl, 'https://api-alt.india.delta.exchange')
+  assert.equal(cfg.baseUrl, 'https://api.india.delta.exchange')
   assert.equal(cfg.apiKey, 'K')
 })
 
@@ -150,5 +150,12 @@ test('demo: the same key as production is refused — it would be the real accou
   await assert.rejects(
     () => loadDxDemoConfig(store({ apiKey: 'SAME', apiSecret: 'DS' }), {}, quiet, { liveApiKey: 'SAME' }),
     /same API key as production/,
+  )
+})
+
+test('production credentials go to Delta Exchange India only — not any other host', async () => {
+  await assert.rejects(
+    () => loadDxConfig(store({ apiKey: 'K', apiSecret: 'S' }, { baseUrl: 'https://example.com' }), {}, quiet),
+    /only be sent to Delta Exchange India/,
   )
 })

@@ -43,5 +43,6 @@ export {
   DX_DEMO_PUBLIC_WS_URL,
   assertRailHost,
   isDemoHost,
+  isProdHost,
   type DxCredentialRail,
 } from './hosts.ts'

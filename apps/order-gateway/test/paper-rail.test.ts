@@ -270,6 +270,8 @@ function desk(
      * with this as the book's `dx_paper_rail`, and `demo` as the demo rail.
      */
     readonly bookRail?: 'sim' | 'demo'
+    /** Is the stored demo key usable? Default yes. */
+    readonly demoReady?: { ok: true } | { ok: false; why: string }
     readonly demo?: Pick<Broker, 'placeOrder' | 'onOrderUpdate'>
   } = {},
 ): {
@@ -330,9 +332,10 @@ function desk(
             simulator: paper as Pick<Broker, 'placeOrder'>,
             live: live as Pick<Broker, 'placeOrder'>,
             demo: (opts.demo ?? demo) as Pick<Broker, 'placeOrder'>,
-            bookRail: async () => opts.bookRail ?? 'sim',
-            stamp: async (doc, rail) => {
-              await orders.updateOne({ clientOrderId: doc['clientOrderId'] }, { $set: { dx_paper_rail: rail } })
+            bookState: async () => ({ setting: opts.bookRail ?? 'demo', held: false, lastUsed: null }),
+            demoReady: async () => opts.demoReady ?? { ok: true },
+            stamp: async (doc, rail, note) => {
+              await orders.updateOne({ clientOrderId: doc['clientOrderId'] }, { $set: { dx_paper_rail: rail, dx_rail_note: note } })
             },
           }),
     resolveContract: (s) => (s === SYMBOL ? CONTRACT : null),
@@ -387,6 +390,23 @@ test("a PAPER order on a 'demo' book reaches the demo rail and is stamped demo; 
   assert.equal(d.doc()['dx_paper_rail'], 'demo')
   assert.equal(d.doc()['state'], 'PLACED')
   assert.deepEqual(d.allowlistAsked, [])
+  // The journal says which rail was used.
+  const planned = d.events.rows.find((e) => e['phase'] === 'PLANNED')
+  const detail = planned?.['detail'] as Record<string, unknown> | undefined
+  assert.equal(detail?.['rail'], 'demo')
+  assert.match(String(detail?.['railNote']), /Delta testnet/)
+})
+
+test('no verified demo key: a PAPER order falls back to the SIMULATOR, and the journal says why', async () => {
+  const d = desk({ mode: 'paper' }, { bookRail: 'demo', demoReady: { ok: false, why: 'no Delta Demo key stored' } })
+  await d.sweep()
+  await d.settle()
+  assert.equal(d.paper.placed.length, 1)
+  assert.equal(d.demo.placed.length, 0)
+  assert.equal(d.doc()['dx_paper_rail'], 'sim')
+  const detail = d.events.rows.find((e) => e['phase'] === 'PLANNED')?.['detail'] as Record<string, unknown> | undefined
+  assert.equal(detail?.['rail'], 'sim')
+  assert.equal(detail?.['railNote'], 'simulator — no Delta Demo key stored')
 })
 
 test("a LIVE order on a book whose paper rail is 'demo' still goes to the live adapter, unstamped", async () => {

@@ -52,10 +52,11 @@ import { Link } from '@astryxdesign/core/Link'
 import { Table, proportional, pixel } from '@astryxdesign/core/Table'
 import type { TableColumn } from '@astryxdesign/core/Table'
 import {
-  api, ago, explain, inSession, paperRailOf, pastExpiry, seriesOf, signed, sign, RED,
+  api, ago, explain, inSession, pastExpiry, seriesOf, signed, sign, RED,
   type BookRow, type BookSummary, type DeskMode, type PnlStrategy,
 } from './api.ts'
 import { VENUE } from './venue.ts'
+import { railUsedBadge } from './paper-rail.tsx'
 import { liveStartStatement } from './live-copy.ts'
 import { PHONE, goTo, usePoll, useMedia } from './shell.tsx'
 import { ModeBadge } from './mode.tsx'
@@ -165,10 +166,12 @@ function BookCell(props: { row: BookRow; legs: number | undefined }): React.Reac
       </Text>
       {/* NEVER SILENCED: a book still carrying legs past its own expiry. */}
       {alarm ? <Badge variant="error" label="carrying legs past expiry" /> : null}
-      {/* A paper book on Delta's testnet says so on its row; Sim is the quiet default. Switched in Dials. */}
-      {VENUE.id === 'dx' && props.row.mode === 'paper' && paperRailOf(props.row) === 'demo'
-        ? <Badge variant="warning" label="Demo rail (testnet)" />
-        : null}
+      {/* WHICH RAIL this paper book's last order went to — Delta's testnet or the
+          simulator — so a Demo book with no verified key is not a surprise. Set in Dials. */}
+      {(() => {
+        const b = VENUE.id === 'dx' ? railUsedBadge(props.row) : null
+        return b === null ? null : <Badge variant={b.variant} label={b.label} />
+      })()}
     </VStack>
   )
 }

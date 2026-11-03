@@ -554,18 +554,18 @@ export function booksRoutes(deps: BooksDeps): Route {
       if (parts.length === 2 && parts[1] === 'settle-expired' && method === 'POST') return await handleSettleExpired(deps, ctx, tag)
 
       /**
-       * `POST .../:tag/paper-rail` — `{ mode: 'paper', rail: 'sim' | 'demo' }`.
+       * `POST .../:tag/paper-rail` — `{ mode: 'paper', rail: 'demo' | 'sim' }`.
        *
-       * WHERE THIS PAPER BOOK'S ORDERS GO: the gateway's simulator, or Delta's
-       * testnet through the `delta-demo` credentials. The gateway reads it per
-       * order, so it applies from the book's next order; an order already
-       * placed stays on the rail it was placed on.
+       * WHERE THIS PAPER BOOK'S ORDERS GO. `demo` (the default) is Delta's
+       * testnet whenever a verified `delta-demo` key exists, else the
+       * simulator; `sim` forces the simulator. The gateway reads it per order,
+       * so it applies from the book's next order.
        *
-       * REFUSED WHILE THE BOOK HOLDS LEGS OR HAS A DECISION WORKING. A close
-       * must reach the exchange its open went to: a sim-opened leg closed on
-       * testnet is a reduce-only order against nothing, and a testnet leg
-       * closed on the simulator books the desk flat while testnet still
-       * holds it. Unknown (an unreadable desk-books document) is not flat.
+       * NOT REFUSED ON A HOLDING BOOK, because the gateway already keeps a
+       * book that holds legs on the rail it last traded (`dx_rail_used`) until
+       * it is flat — a close must reach the exchange its open went to, and
+       * that is enforced where the order is routed, which also covers a demo
+       * key being added or failing its Test under a holding book.
        *
        * PAPER ONLY: a live order goes to Delta production or nowhere, and no
        * row field can change that. No password — nothing on either rail can
@@ -584,40 +584,13 @@ export function booksRoutes(deps: BooksDeps): Route {
         }
         const rail = body['rail']
         if (!isPaperRail(rail)) {
-          send(400, { error: "rail must be 'sim' or 'demo'" })
+          send(400, { error: "rail must be 'demo' or 'sim'" })
           return true
         }
         const existing = await store.getBook(tag, 'paper')
         if (existing === null) {
           send(404, { error: `'${tag}' has no book registered in paper` })
           return true
-        }
-        if (existing.dx_paper_rail !== rail) {
-          const held = heldOnFile(await store.bookDoc(tag, 'paper'))
-          if (held === null || held.length > 0) {
-            send(409, {
-              error:
-                held === null
-                  ? `'${tag}': its desk-books document cannot be read, so the desk cannot tell whether it holds ` +
-                    `legs — the rail was not changed`
-                  : `'${tag}' holds ${held.length} open leg(s) — ${held.join(', ')} — on the ` +
-                    `${existing.dx_paper_rail === 'demo' ? 'Delta testnet' : 'simulator'}; their closes must go ` +
-                    `there too. Flatten the book first, then switch the rail.`,
-              ...(held === null ? {} : { legs: held }),
-            })
-            return true
-          }
-          const working = await workingOnFile(deps.db, tag, 'paper')
-          if (working !== null) {
-            send(409, {
-              error:
-                `'${tag}': decision ${working} is still working on the ` +
-                `${existing.dx_paper_rail === 'demo' ? 'Delta testnet' : 'simulator'} — wait for it to finish, ` +
-                `then switch the rail.`,
-              decisionId: working,
-            })
-            return true
-          }
         }
         const row = await store.setPaperRail(tag, rail, now(), ctx.principal.name)
         log('book paper rail set', { tag, rail, before: existing.dx_paper_rail, setBy: ctx.principal.name })

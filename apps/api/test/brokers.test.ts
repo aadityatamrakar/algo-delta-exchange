@@ -18,7 +18,7 @@ import assert from 'node:assert/strict'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { seal } from '@algomaker/secrets'
-import { DX_DEMO_REST_URL, DX_PROD_REST_URL, isDemoHost, signRequest } from '@algomaker/dx'
+import { DX_DEMO_REST_URL, DX_PROD_REST_URL, isDemoHost, isProdHost, signRequest } from '@algomaker/dx'
 import { connectMongo, type MongoHandle } from '../src/mongo.ts'
 import { createBridgeServer } from '../src/server.ts'
 import { bearerGate } from '../src/authgate.ts'
@@ -53,11 +53,17 @@ let dxSeen: { method: string; url: string; apiKey: string; signed: boolean; user
  * with no network; anything else goes where it says.
  */
 let fetched: string[] = []
+/** Set to make the next credential test's transport fail, as an unreachable host does. */
+let unreachable = false
 const routedFetch: typeof fetch = (input, init) => {
   const url = String(input instanceof Request ? input.url : input)
   fetched.push(url)
+  if (unreachable) return Promise.reject(new TypeError('fetch failed'))
+  // Both Delta hosts are answered by the local stub: the guard only lets the
+  // real hosts through, and a test must never reach either of them.
   if (isDemoHost(url)) return fetch(url.replace(DX_DEMO_REST_URL, brokerBase), init)
-  return fetch(input, init)
+  if (isProdHost(url)) return fetch(url.replace(DX_PROD_REST_URL, brokerBase), init)
+  return Promise.reject(new Error(`test fetch refused a non-Delta host: ${url}`))
 }
 
 /**
@@ -122,6 +128,7 @@ beforeEach(async () => {
   dxReply = { status: 200, body: {} }
   dxSeen = []
   fetched = []
+  unreachable = false
 })
 
 function itMongo(name: string, fn: () => Promise<void>): void {
@@ -162,7 +169,7 @@ const dxConfig = {
 
 const configured = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   ...dxConfig,
-  meta: { ...dxConfig.meta, baseUrl: brokerBase },
+  meta: { ...dxConfig.meta, baseUrl: DX_PROD_REST_URL },
   ...over,
 })
 
@@ -189,7 +196,7 @@ itMongo('PUT stores credentials and the list never returns them', async () => {
   assert.equal(row['configured'], true)
   assert.equal(row['state'], 'ok')
   assert.equal(row['label'], 'Delta India')
-  assert.deepEqual(row['meta'], { baseUrl: brokerBase, account: 'desk-1' })
+  assert.deepEqual(row['meta'], { baseUrl: DX_PROD_REST_URL, account: 'desk-1' })
 
   // The sealed blob is in Mongo and is not the plaintext.
   const doc = await handle!.db.collection(BROKER_COLLECTION).findOne({ kind: 'delta' })
@@ -204,11 +211,11 @@ itMongo('a credential-shaped key in meta is stripped rather than echoed', async 
   // (or a form) that puts a password there must not turn it into a response.
   await put('/v1/desk/brokers/delta', {
     ...configured(),
-    meta: { baseUrl: brokerBase, apiSecret: SECRETS.apiSecret, apiToken: 'x', nested: { a: 1 } },
+    meta: { baseUrl: DX_PROD_REST_URL, apiSecret: SECRETS.apiSecret, apiToken: 'x', nested: { a: 1 } },
   })
   const body = await assertNoSecret(await get('/v1/desk/brokers'), 'GET with dirty meta')
   const meta = (body['brokers'] as Record<string, unknown>[])[0]?.['meta'] as Record<string, unknown>
-  assert.deepEqual(meta, { baseUrl: brokerBase })
+  assert.deepEqual(meta, { baseUrl: DX_PROD_REST_URL })
 })
 
 itMongo('PUT without a secret leaves the stored credential untouched', async () => {
@@ -315,11 +322,8 @@ itMongo('a successful signed wallet read records lastVerifiedAt and reports the 
 })
 
 itMongo('a Delta host that is unreachable is still 200 ok:false', async () => {
-  await put('/v1/desk/brokers/delta', {
-    ...configured(),
-    // Port 1 is reserved and refuses instantly; a DNS name would hang.
-    meta: { baseUrl: 'http://127.0.0.1:1' },
-  })
+  await put('/v1/desk/brokers/delta', configured())
+  unreachable = true
   const body = await assertNoSecret(await post('/v1/desk/brokers/delta/test'), 'POST test unreachable')
   assert.equal(body['ok'], false)
   assert.equal(typeof body['error'], 'string')
@@ -357,31 +361,77 @@ itMongo('delta-demo Test is a signed wallet read against the TESTNET by default'
   assert.equal(dxSeen[0]?.apiKey, SECRETS.apiKey)
 })
 
-itMongo('demo credentials are refused for the production host, before any request', async () => {
-  await put('/v1/desk/brokers/delta-demo', { meta: { baseUrl: DX_PROD_REST_URL }, secret: SECRETS })
-  const body = await assertNoSecret(await post('/v1/desk/brokers/delta-demo/test'), 'POST demo prod host')
-  assert.equal(body['ok'], false)
-  assert.match(String(body['error']), /demo credentials may only be sent to the testnet/)
-  assert.deepEqual(fetched, [])
-  // A local host is not testnet either: the demo rail is an allowlist.
-  await put('/v1/desk/brokers/delta-demo', { meta: { baseUrl: brokerBase } })
-  const local = await assertNoSecret(await post('/v1/desk/brokers/delta-demo/test'), 'POST demo local host')
-  assert.equal(local['ok'], false)
-  assert.deepEqual(fetched, [])
-  assert.equal(dxSeen.length, 0)
+// ------------------------------------- one card, one exchange (3 Nov guard)
+
+itMongo('the delta card REFUSES a testnet URL — a demo key can no longer overwrite the real one', async () => {
+  await put('/v1/desk/brokers/delta', configured())
+  const before = await handle!.db.collection(BROKER_COLLECTION).findOne({ kind: 'delta' })
+  // What happened on 3 Nov: the demo key, typed into the production card.
+  const res = await put('/v1/desk/brokers/delta', {
+    meta: { baseUrl: DX_DEMO_REST_URL },
+    secret: { apiKey: 'demo-key-1', apiSecret: 'demo-secret-1' },
+  })
+  assert.equal(res.status, 400)
+  const body = await assertNoSecret(res, 'PUT delta testnet url')
+  assert.match(String(body['error']), /testnet/)
+  assert.match(String(body['error']), /Delta Demo \(testnet\) card/)
+  const after = await handle!.db.collection(BROKER_COLLECTION).findOne({ kind: 'delta' })
+  assert.equal(after?.['secret'], before?.['secret'], 'the real key is untouched')
+  assert.deepEqual(after?.['meta'], before?.['meta'])
 })
 
-itMongo('production credentials are refused for the testnet host, before any request', async () => {
-  await put('/v1/desk/brokers/delta', { meta: { baseUrl: DX_DEMO_REST_URL }, secret: SECRETS })
-  const body = await assertNoSecret(await post('/v1/desk/brokers/delta/test'), 'POST delta testnet host')
-  assert.equal(body['ok'], false)
-  assert.match(String(body['error']), /production credentials must never be sent to the testnet/)
+itMongo('the delta card refuses any host that is not Delta Exchange India production', async () => {
+  for (const baseUrl of ['https://example.com', 'http://api.india.delta.exchange', 'http://127.0.0.1:9', 'https://cdn-ind.testnet.deltaex.org']) {
+    const res = await put('/v1/desk/brokers/delta', { meta: { baseUrl }, secret: SECRETS })
+    assert.equal(res.status, 400, baseUrl)
+    await assertNoSecret(res, `PUT delta ${baseUrl}`)
+  }
+  assert.equal(await handle!.db.collection(BROKER_COLLECTION).countDocuments({ kind: 'delta' }), 0)
+})
+
+itMongo('the delta-demo card refuses anything that is not a testnet host', async () => {
+  for (const baseUrl of [DX_PROD_REST_URL, 'https://example.com', 'http://cdn-ind.testnet.deltaex.org', 'http://127.0.0.1:9']) {
+    const res = await put('/v1/desk/brokers/delta-demo', { meta: { baseUrl }, secret: SECRETS })
+    assert.equal(res.status, 400, baseUrl)
+    const body = await assertNoSecret(res, `PUT demo ${baseUrl}`)
+    assert.match(String(body['error']), /testnet/)
+  }
+  assert.equal(await handle!.db.collection(BROKER_COLLECTION).countDocuments({ kind: 'delta-demo' }), 0)
+  // A blank base URL is the testnet default, and is accepted.
+  const ok = await put('/v1/desk/brokers/delta-demo', { meta: { baseUrl: '' }, secret: SECRETS })
+  assert.equal(ok.status, 200)
+})
+
+itMongo('a secret-only save onto a row whose STORED host is wrong is refused too', async () => {
+  // The row the 3 Nov incident left behind, written before this guard existed.
+  await handle!.db.collection(BROKER_COLLECTION).insertOne({ kind: 'delta', meta: { baseUrl: DX_DEMO_REST_URL } })
+  const res = await put('/v1/desk/brokers/delta', { secret: SECRETS })
+  assert.equal(res.status, 400)
+  assert.match(String((await assertNoSecret(res, 'PUT secret-only bad row'))['error']), /testnet/)
+  // Correcting the host in the same save is how it is fixed.
+  const fixed = await put('/v1/desk/brokers/delta', { meta: { baseUrl: DX_PROD_REST_URL }, secret: SECRETS })
+  assert.equal(fixed.status, 200)
+})
+
+itMongo('Test refuses a stored row on the wrong exchange, before any request — both directions', async () => {
+  const sealedNow = await (async () => {
+    await put('/v1/desk/brokers/delta', configured())
+    return (await handle!.db.collection(BROKER_COLLECTION).findOne({ kind: 'delta' }))?.['secret']
+  })()
+  await handle!.db.collection(BROKER_COLLECTION).updateOne({ kind: 'delta' }, { $set: { meta: { baseUrl: DX_DEMO_REST_URL } } })
+  const live = await assertNoSecret(await post('/v1/desk/brokers/delta/test'), 'POST delta on testnet')
+  assert.equal(live['ok'], false)
+  assert.match(String(live['error']), /production credentials must never be sent to the testnet/)
+  await handle!.db.collection(BROKER_COLLECTION).insertOne({ kind: 'delta-demo', secret: sealedNow, meta: { baseUrl: DX_PROD_REST_URL } })
+  const demo = await assertNoSecret(await post('/v1/desk/brokers/delta-demo/test'), 'POST demo on prod')
+  assert.equal(demo['ok'], false)
+  assert.match(String(demo['error']), /demo credentials may only be sent to the testnet/)
   assert.deepEqual(fetched, [])
   assert.equal(dxSeen.length, 0)
 })
 
 itMongo('an incomplete Delta credential is refused before any request is signed', async () => {
-  await put('/v1/desk/brokers/delta', { meta: { baseUrl: brokerBase }, secret: { apiKey: 'k' } })
+  await put('/v1/desk/brokers/delta', { meta: { baseUrl: DX_PROD_REST_URL }, secret: { apiKey: 'k' } })
   const body = await assertNoSecret(await post('/v1/desk/brokers/delta/test'), 'POST test no secret')
   assert.equal(body['ok'], false)
   assert.match(String(body['error']), /secret\.apiKey and secret\.apiSecret are required/)

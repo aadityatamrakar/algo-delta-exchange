@@ -164,6 +164,45 @@ describe('the broker form', () => {
     })
   })
 
+  test('the live card REFUSES a testnet URL, says so plainly, and sends nothing', async () => {
+    const sent = mountBrokers()
+    await openEditor()
+    type('Base URL', DELTA_DEMO_BASE_URL)
+    type('API key', 'demo-k')
+    type('API secret', 'demo-s')
+    expect(await screen.findByText('Wrong exchange for this card')).toBeTruthy()
+    expect(screen.getByText(/That is the Delta TESTNET — a demo key belongs on the Delta Demo \(testnet\) card/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save credential' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(puts(sent).length).toBe(0)
+    // Any other non-production host is refused too.
+    type('Base URL', 'https://example.com')
+    expect(screen.getByText(/is not it/)).toBeTruthy()
+  })
+
+  test('the demo card refuses the production URL, says so plainly, and sends nothing', async () => {
+    const sent = mountBrokers([DELTA_ROW])
+    await openEditor('Delta Demo (testnet)', 'Delta Demo (testnet)')
+    type('Base URL', 'https://api.india.delta.exchange')
+    expect(await screen.findByText('Wrong exchange for this card')).toBeTruthy()
+    expect(screen.getByText(/That is PRODUCTION — the real key belongs on the Delta Exchange India card/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Save (credential unchanged)' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(puts(sent).length).toBe(0)
+  })
+
+  test("the api's own refusal of a save is shown as it wrote it", async () => {
+    const refusal = "Not saved: the Delta Exchange India card only takes https://api.india.delta.exchange."
+    installFetch(({ path, method }) => {
+      if (path === '/v1/desk/brokers' && method === 'GET') return { body: { brokers: [DELTA_ROW] } }
+      if (method === 'PUT') return { status: 400, body: { error: refusal } }
+      return { body: {} }
+    })
+    render(<BrokersSection />)
+    await openEditor()
+    act(() => { screen.getByRole('button', { name: 'Save (credential unchanged)' }).click() })
+    expect(await screen.findByText('Could not save')).toBeTruthy()
+    expect(screen.getByText(/only takes https:\/\/api\.india\.delta\.exchange/)).toBeTruthy()
+  })
+
   test('half a credential cannot be saved', async () => {
     const sent = mountBrokers()
     await openEditor()
