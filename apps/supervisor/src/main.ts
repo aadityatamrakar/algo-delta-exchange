@@ -113,6 +113,7 @@ import { OptionMaster } from '@algomaker/instruments'
 import type { NudgeKind } from '../../api/src/engine-notify.ts'
 import { connectMongo } from '../../api/src/mongo.ts'
 import type { Database } from '../../api/src/store.ts'
+import { DEMO_TICK_TOPIC, type MarksVenue } from '../../api/src/books-registry.ts'
 import { loadStoredInstruments } from '../../marketdata/src/sync-runner.ts'
 import {
   ensureSubscriptionIndexes,
@@ -122,6 +123,7 @@ import {
 import { MarginPoll } from './book-margin.ts'
 import { ChainView, type ChainToken, type MdTick, type WarmMark } from './chain-view.ts'
 import { DecisionsClient } from './decisions-client.ts'
+import { marksNoteOf, overlayDemo } from './demo-marks.ts'
 import {
   EngineHost,
   MarkClock,
@@ -428,6 +430,15 @@ interface BookRuntime {
    * it could name another book's forward. `#snapFor` is the only writer.
    */
   forwardSource: ForwardSource | null
+  /**
+   * For a book marked on Delta's testnet (`#marksVenue`): the contracts its
+   * LAST snap marked off production for want of a fresh demo quote
+   * (`demo-marks.ts`). `null` = production-marked. Written by `#snapFor` only,
+   * read by the host's `marksNote` in the same pass.
+   */
+  demoFallback: ReadonlyMap<string, string> | null
+  /** The DEMO view's clock this book last evaluated against — `lastEvalTickMs`'s twin. */
+  lastEvalDemoTickMs: number
 }
 
 /**
@@ -496,6 +507,14 @@ export class Supervisor {
   readonly #marksJournal: MarksJournal
   readonly #margin: MarginPoll
   readonly #chain: ChainView
+  /**
+   * DELTA TESTNET QUOTES (`md.tick.demo`), for paper books on the demo rail —
+   * the exchange their positions live on. Keyed by the desk's own tokens, never
+   * snapped on its own: its quotes are laid over a demo-marked book's
+   * production snap, wing by wing (`demo-marks.ts`). A prod-marked book never
+   * reads it.
+   */
+  readonly #demoChain: ChainView
   readonly #hosts = new Map<string, BookRuntime>()
   readonly #registry: RegistryPoll
   readonly #timers: ReturnType<typeof setInterval>[] = []
@@ -573,6 +592,12 @@ export class Supervisor {
        * this: it carries the index over the contract's tenor at the desk rate.
        */
       carryFor: () => 1,
+    })
+    // No index and no carry: this view never prices a forward — the forward a
+    // demo-marked book decides on stays production's.
+    this.#demoChain = new ChainView({
+      tokensFor: (symbol, expiry) => this.#d.master().tokensFor(symbol, expiry),
+      futureToken: (symbol) => this.#d.master().futureToken(symbol),
     })
     this.#registry = new RegistryPoll({
       collection: deps.db.collection('desk-books-registry') as unknown as RegistryCollection,
@@ -869,9 +894,16 @@ export class Supervisor {
     const offSpot = this.#d.bus.subscribe<MdSpot>('md.spot', (msg) => {
       this.onSpot(msg.payload)
     })
+    // Delta's testnet, on its own topic and into its own view: no `md.tick`
+    // consumer can read a demo price, and only a demo-marked book reads this.
+    const offDemo = this.#d.bus.subscribe<MdTick>(DEMO_TICK_TOPIC, (msg) => {
+      if (this.#stopping) return
+      this.#demoChain.onTick(msg.payload)
+    })
     this.#unsubscribe = (): void => {
       offTick()
       offSpot()
+      offDemo()
     }
   }
 
@@ -1083,6 +1115,8 @@ export class Supervisor {
       lastEvalTickMs: 0,
       lastEvalMs: 0,
       forwardSource: null,
+      demoFallback: null,
+      lastEvalDemoTickMs: 0,
       host: new EngineHost({
         tag: book.tag,
         mode: book.mode,
@@ -1139,6 +1173,10 @@ export class Supervisor {
         onStandDown: (reason) => {
           runtime.standDown = reason
         },
+        // Named in the reason for a book marked on Delta's testnet, and only
+        // for one — `null` keeps a production book's reason the engine's alone.
+        marksNote: (contracts) =>
+          runtime.demoFallback === null ? null : marksNoteOf(runtime.demoFallback, contracts),
         cancelWorking: workingOrderCanceller(
           {
             collection: this.#d.db.collection('desk-gateway-orders') as never,
@@ -1257,7 +1295,28 @@ export class Supervisor {
       },
     )
     runtime.forwardSource = snap === null ? null : this.#chain.forwardSource
-    return snap
+    if (this.#marksVenue(runtime.book) !== 'demo') {
+      runtime.demoFallback = null
+      return snap
+    }
+    // The demo view is declared even when there is no snap, so the testnet's
+    // ticks for this chain are kept from the book's very first pass.
+    const demo = this.#demoChain.quotes(runtime.book.symbol, runtime.book.expiry)
+    if (snap === null) return null
+    const rows = this.#d.master().tokensFor(runtime.book.symbol, runtime.book.expiry)
+    const marked = overlayDemo(snap, rows, demo, nowMs)
+    runtime.demoFallback = marked.fallback
+    return marked.snap
+  }
+
+  /**
+   * WHOSE PRICES MARK THIS BOOK: the registry row's (`ManagedBook.marks`,
+   * re-read every poll) — on a venue that HAS a testnet rail. NSE has none, so
+   * every NSE book is production-marked whatever its row says.
+   */
+  #marksVenue(book: ManagedBook): MarksVenue {
+    if ((this.#d.venue ?? NSE).id === 'nse') return 'prod'
+    return book.marks
   }
 
   /**
@@ -1320,8 +1379,13 @@ export class Supervisor {
       runtime.lastEvalMs = nowMs
       return true
     }
-    if (!this.#chain.touchedSince(runtime.lastEvalTickMs)) return false
+    // A demo-marked book is also woken by its own exchange's ticks.
+    const demo = this.#marksVenue(runtime.book) === 'demo'
+    const prodNew = this.#chain.touchedSince(runtime.lastEvalTickMs)
+    const demoNew = demo && this.#demoChain.touchedSince(runtime.lastEvalDemoTickMs)
+    if (!prodNew && !demoNew) return false
     runtime.lastEvalTickMs = this.#chain.lastTickMs
+    runtime.lastEvalDemoTickMs = this.#demoChain.lastTickMs
     return true
   }
 

@@ -432,6 +432,19 @@ export interface EngineHostDeps {
    * gone quiet. Nothing branches on it.
    */
   onStandDown?(reason: string | null): void
+  /**
+   * WHOSE PRICES MARKED THIS PASS, for a book marked on Delta's testnet
+   * (`demo-marks.ts`). Asked once per decision with the contracts that matter
+   * to it — the legs held and the strikes being opened — and the note it
+   * answers is appended to the reason the page and the journal read
+   * (`marks: Delta demo, prod fallback on …`), with a WARN whenever the set of
+   * contracts marked off production changes. A fallback is never silent.
+   *
+   * ABSENT, or `null`: production marks, and the reason is the engine's alone.
+   */
+  marksNote?(
+    contracts: ReadonlyArray<{ readonly strike: number; readonly optType: OptType }>,
+  ): { readonly note: string; readonly fallback: ReadonlyArray<string> } | null
 }
 
 /**
@@ -1234,6 +1247,8 @@ export class EngineHost {
    * evaluated every 2 s for as long as the switch stays off.
    */
   #standingDown = false
+  /** The prod-fallback contracts last logged (`marksNote`), joined. '' = none. */
+  #marksFallback = ''
   /**
    * What the page was last told the stand-down is for. The latch is one
    * incident, but the REASON follows the book: "holding, no new risk" while
@@ -1445,8 +1460,9 @@ export class EngineHost {
     }
     const markCtx = this.#marks.next(nowMs)
     const decision = this.#decide(inputs, dials, state, markCtx)
-    this.#journal(markCtx, inputs, dials, decision.reason)
-    this.#tellReason(dials, decision.reason)
+    const reason = this.#withMarks(inputs, decision)
+    this.#journal(markCtx, inputs, dials, reason)
+    this.#tellReason(dials, reason)
 
     if (
       on === false &&
@@ -1637,8 +1653,9 @@ export class EngineHost {
     const inputs = await this.#inputs(state, chain, dials, nowMs)
     const markCtx = this.#marks.next(nowMs)
     const decision = this.#decide(inputs, dials, state, markCtx)
-    this.#journal(markCtx, inputs, dials, decision.reason)
-    this.#tellReason(dials, decision.reason)
+    const reason = this.#withMarks(inputs, decision)
+    this.#journal(markCtx, inputs, dials, reason)
+    this.#tellReason(dials, reason)
     // `markState`, never `stateAfter`: nothing is routed under a working
     // package, so the guard's streak and the anchor step are all that happened.
     await this.#persistRuleState(state, decision.markState)
@@ -1862,6 +1879,51 @@ export class EngineHost {
         'really holds',
       { ...ctx, why, cancelRequests: outcome.requested },
     )
+  }
+
+  /**
+   * The decision's reason with the marks venue named (`EngineHostDeps.
+   * marksNote`), for the journal and the page — never for what is routed.
+   */
+  #withMarks(inputs: EngineInputs, decision: EngineDecision): string {
+    const read = this.#d.marksNote
+    if (read === undefined) return decision.reason
+    const contracts: Array<{ strike: number; optType: OptType }> = inputs.legs.map((l) => ({
+      strike: l.strike,
+      optType: l.optType,
+    }))
+    for (const a of decision.actions) {
+      if (a.op === 'open') contracts.push({ strike: a.strike, optType: a.optType })
+    }
+    let marks: ReturnType<NonNullable<EngineHostDeps['marksNote']>>
+    try {
+      marks = read(contracts)
+    } catch {
+      return decision.reason
+    }
+    if (marks === null) {
+      // Production-marked (the row moved off the demo rail): nothing to name.
+      this.#marksFallback = ''
+      return decision.reason
+    }
+    const { tag, mode, log } = this.#d
+    const fallback = marks.fallback.join(', ')
+    if (fallback !== this.#marksFallback) {
+      if (fallback !== '') {
+        log.warn(`marks: prod fallback on ${fallback} — no fresh Delta demo quote`, {
+          tag,
+          mode,
+          instruments: marks.fallback,
+        })
+      } else {
+        log.info('marks: every contract this book holds or trades is on Delta demo again', {
+          tag,
+          mode,
+        })
+      }
+      this.#marksFallback = fallback
+    }
+    return decision.reason === '' ? marks.note : `${decision.reason} · ${marks.note}`
   }
 
   /** The pass's reason to the page, for a BULL-S book (`EngineHostDeps.onDecision`). */
