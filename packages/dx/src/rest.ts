@@ -88,8 +88,14 @@ export class DxRest {
 
   // ---------------------------------------------------------------- public
 
-  /** All pages of `/v2/products` for the filter. */
-  async products(q: { contractTypes?: string[]; states?: string[]; underlying?: string[] } = {}): Promise<DxProduct[]> {
+  /**
+   * All pages of `/v2/products` for the filter. `expiryDate` (YYYY-MM-DD) is
+   * sent as `expiry`, which matches the settlement date across EVERY
+   * underlying and settlement time — keep `underlying` set alongside it.
+   */
+  async products(
+    q: { contractTypes?: string[]; states?: string[]; underlying?: string[]; expiryDate?: string } = {},
+  ): Promise<DxProduct[]> {
     const out: DxProduct[] = []
     let after: string | undefined
     for (let page = 0; page < 1000; page++) {
@@ -97,6 +103,7 @@ export class DxRest {
         contract_types: csv(q.contractTypes),
         states: csv(q.states),
         underlying_asset_symbols: csv(q.underlying),
+        expiry: q.expiryDate,
         page_size: 500,
         after,
       }, undefined, false)

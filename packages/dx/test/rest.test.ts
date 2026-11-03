@@ -153,6 +153,15 @@ test('products: public, filtered, and follows the after cursor to the last page'
   assert.equal(calls[0]?.headers['User-Agent'], 'algomaker-dx/1')
 })
 
+test('products: expiryDate is sent as expiry, YYYY-MM-DD unchanged', async () => {
+  const { fn, calls } = fakeFetch([{ body: { success: true, result: [], meta: { after: null } } }])
+  await rest(fn).products({ states: ['expired', 'settled'], underlying: ['BTC'], expiryDate: '2026-11-03' })
+  const u = new URL(calls[0]?.url ?? '')
+  assert.equal(u.searchParams.get('expiry'), '2026-11-03')
+  assert.equal(u.searchParams.get('states'), 'expired,settled')
+  assert.equal(u.searchParams.get('underlying_asset_symbols'), 'BTC')
+})
+
 test('tickers: expiryDate YYYY-MM-DD is sent as Delta\'s DD-MM-YYYY', async () => {
   const fx = JSON.parse(readFileSync(new URL('./fixtures/tickers-btc-041126.json', import.meta.url), 'utf8'))
   const { fn, calls } = fakeFetch([{ body: fx }])
