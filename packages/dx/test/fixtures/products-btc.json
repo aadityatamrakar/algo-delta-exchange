@@ -1,0 +1,267 @@
+{
+ "_note": "C-BTC-80400-041126 is the LIVE product sample in docs/research/delta/delta-api-reference.md \u00a73 (nested objects trimmed there). The 76600 call/put are that sample with symbol, id (from the 3 Nov ticker snapshot), strike and type changed; the ETH option and BTCUSD perpetual are the same sample re-labelled, for the filter tests.",
+ "success": true,
+ "result": [
+  {
+   "id": 161447,
+   "symbol": "C-BTC-80400-041126",
+   "contract_type": "call_options",
+   "description": "BTC call option expiring on 4-11-2026",
+   "short_description": "BTC  Call",
+   "state": "live",
+   "trading_status": "operational",
+   "disruption_reason": null,
+   "strike_price": "80400",
+   "settlement_time": "2026-11-04T12:00:00Z",
+   "settlement_price": null,
+   "launch_time": "2026-11-01T12:10:16Z",
+   "contract_value": "0.001",
+   "contract_unit_currency": "BTC",
+   "tick_size": "0.1",
+   "underlying_asset": {
+    "id": 13,
+    "symbol": "BTC",
+    "precision": 8,
+    "minimum_precision": 4
+   },
+   "quoting_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "settling_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "spot_index": {
+    "id": 14,
+    "symbol": ".DEXBTUSD",
+    "index_type": "spot_pair",
+    "is_composite": true,
+    "price_method": "orderbook",
+    "tick_size": "0.5",
+    "impact_size": "1"
+   },
+   "maker_commission_rate": "0.0001",
+   "taker_commission_rate": "0.0001",
+   "position_size_limit": 50000,
+   "product_specs": {
+    "premium_commission_rate": 0.035,
+    "max_oi_usd": 30000000
+   }
+  },
+  {
+   "id": 161669,
+   "symbol": "C-BTC-76600-041126",
+   "contract_type": "call_options",
+   "description": "BTC call option expiring on 4-11-2026",
+   "short_description": "BTC  Call",
+   "state": "live",
+   "trading_status": "operational",
+   "disruption_reason": null,
+   "strike_price": "76600",
+   "settlement_time": "2026-11-04T12:00:00Z",
+   "settlement_price": null,
+   "launch_time": "2026-11-01T12:10:16Z",
+   "contract_value": "0.001",
+   "contract_unit_currency": "BTC",
+   "tick_size": "0.1",
+   "underlying_asset": {
+    "id": 13,
+    "symbol": "BTC",
+    "precision": 8,
+    "minimum_precision": 4
+   },
+   "quoting_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "settling_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "spot_index": {
+    "id": 14,
+    "symbol": ".DEXBTUSD",
+    "index_type": "spot_pair",
+    "is_composite": true,
+    "price_method": "orderbook",
+    "tick_size": "0.5",
+    "impact_size": "1"
+   },
+   "maker_commission_rate": "0.0001",
+   "taker_commission_rate": "0.0001",
+   "position_size_limit": 50000,
+   "product_specs": {
+    "premium_commission_rate": 0.035,
+    "max_oi_usd": 30000000
+   }
+  },
+  {
+   "id": 161668,
+   "symbol": "P-BTC-76600-041126",
+   "contract_type": "put_options",
+   "description": "BTC put option expiring on 4-11-2026",
+   "short_description": "BTC  Put",
+   "state": "live",
+   "trading_status": "operational",
+   "disruption_reason": null,
+   "strike_price": "76600",
+   "settlement_time": "2026-11-04T12:00:00Z",
+   "settlement_price": null,
+   "launch_time": "2026-11-01T12:10:16Z",
+   "contract_value": "0.001",
+   "contract_unit_currency": "BTC",
+   "tick_size": "0.1",
+   "underlying_asset": {
+    "id": 13,
+    "symbol": "BTC",
+    "precision": 8,
+    "minimum_precision": 4
+   },
+   "quoting_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "settling_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "spot_index": {
+    "id": 14,
+    "symbol": ".DEXBTUSD",
+    "index_type": "spot_pair",
+    "is_composite": true,
+    "price_method": "orderbook",
+    "tick_size": "0.5",
+    "impact_size": "1"
+   },
+   "maker_commission_rate": "0.0001",
+   "taker_commission_rate": "0.0001",
+   "position_size_limit": 50000,
+   "product_specs": {
+    "premium_commission_rate": 0.035,
+    "max_oi_usd": 30000000
+   }
+  },
+  {
+   "id": 170001,
+   "symbol": "C-ETH-2800-041126",
+   "contract_type": "call_options",
+   "description": "BTC call option expiring on 4-11-2026",
+   "short_description": "BTC  Call",
+   "state": "live",
+   "trading_status": "operational",
+   "disruption_reason": null,
+   "strike_price": "2800",
+   "settlement_time": "2026-11-04T12:00:00Z",
+   "settlement_price": null,
+   "launch_time": "2026-11-01T12:10:16Z",
+   "contract_value": "0.001",
+   "contract_unit_currency": "BTC",
+   "tick_size": "0.1",
+   "underlying_asset": {
+    "id": 15,
+    "symbol": "ETH",
+    "precision": 8,
+    "minimum_precision": 4
+   },
+   "quoting_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "settling_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "spot_index": {
+    "id": 14,
+    "symbol": ".DEXBTUSD",
+    "index_type": "spot_pair",
+    "is_composite": true,
+    "price_method": "orderbook",
+    "tick_size": "0.5",
+    "impact_size": "1"
+   },
+   "maker_commission_rate": "0.0001",
+   "taker_commission_rate": "0.0001",
+   "position_size_limit": 50000,
+   "product_specs": {
+    "premium_commission_rate": 0.035,
+    "max_oi_usd": 30000000
+   }
+  },
+  {
+   "id": 27,
+   "symbol": "BTCUSD",
+   "contract_type": "perpetual_futures",
+   "description": "BTC call option expiring on 4-11-2026",
+   "short_description": "BTC  Call",
+   "state": "live",
+   "trading_status": "operational",
+   "disruption_reason": null,
+   "strike_price": null,
+   "settlement_time": null,
+   "settlement_price": null,
+   "launch_time": "2026-11-01T12:10:16Z",
+   "contract_value": "0.001",
+   "contract_unit_currency": "BTC",
+   "tick_size": "0.1",
+   "underlying_asset": {
+    "id": 13,
+    "symbol": "BTC",
+    "precision": 8,
+    "minimum_precision": 4
+   },
+   "quoting_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "settling_asset": {
+    "id": 14,
+    "symbol": "USD",
+    "precision": 8,
+    "minimum_precision": 2
+   },
+   "spot_index": {
+    "id": 14,
+    "symbol": ".DEXBTUSD",
+    "index_type": "spot_pair",
+    "is_composite": true,
+    "price_method": "orderbook",
+    "tick_size": "0.5",
+    "impact_size": "1"
+   },
+   "maker_commission_rate": "0.0001",
+   "taker_commission_rate": "0.0001",
+   "position_size_limit": 50000,
+   "product_specs": {
+    "premium_commission_rate": 0.035,
+    "max_oi_usd": 30000000
+   }
+  }
+ ],
+ "meta": {
+  "after": null,
+  "before": null,
+  "limit": 100,
+  "total_count": 5
+ }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@algomaker/dx",
+  "version": "1.0.0",
+  "description": "Delta Exchange India client: request signer, REST, public/private WebSocket, product and ticker normaliser, option fees, and the DxAdapter BrokerAdapter. Thin native fetch + ws; no network in tests.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@algomaker/brokers": "1.0.0",
+    "@algomaker/instruments": "1.0.0",
+    "@algomaker/order-bus": "1.0.0",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}
