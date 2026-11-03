@@ -36,6 +36,8 @@
  * arguments precisely so a fixture can replay a session that is long over.
  */
 
+import type { VenueSpec } from '@algomaker/venue';
+
 export type Side = 'Buy' | 'Sell';
 export type OptType = 'CE' | 'PE';
 /** What a leg is. A share leg is a `'future'` too: delta-1, no gamma. */
@@ -187,6 +189,13 @@ export interface EngineInputs {
    * measure — which is the whole defect this migration exists to retire.
    */
   readonly strikeGreeksOverride?: StrikeGreekReader;
+  /**
+   * The venue this book trades on. ABSENT IS NSE, so every existing caller,
+   * fixture and parity suite is unchanged. On DX the NSE session gate and the
+   * 15:30 settle do not apply: the market is 24x7 and greeks price to the
+   * venue's expiry instant (`@algomaker/venue`).
+   */
+  readonly venue?: VenueSpec;
 }
 
 export type EngineAction =

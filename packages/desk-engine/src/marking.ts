@@ -82,6 +82,7 @@
  * fixture can replay a session that is long over.
  */
 import { b76Greeks, b76ImpliedVol, b76Price } from '@algomaker/greeks';
+import { NSE, type VenueSpec } from '@algomaker/venue';
 import { DECISION_CLOCK_CLOSE_MIN } from './session.ts';
 import type {
   ChainSnap,
@@ -208,11 +209,20 @@ function utcDayMs(dateIso: string): number | null {
  * this engine manages is NSE equity/F&O. A `dateIst` or `expiry` that is not
  * a real day returns 0, which surfaces downstream as `hasGreeks: false` — no
  * greeks beats greeks priced off a tenor invented by month rollover.
+ *
+ * `venue` absent is NSE and everything above. Any other venue is 24x7 and
+ * prices in calendar time to its expiry instant (`venueYearFrac` below).
  */
-export function yearFrac(dateIst: string, expiry: string, minuteOfDay: number): number {
+export function yearFrac(
+  dateIst: string,
+  expiry: string,
+  minuteOfDay: number,
+  venue: VenueSpec = NSE,
+): number {
   const from = utcDayMs(dateIst);
   const to = utcDayMs(expiry);
   if (from === null || to === null) return 0;
+  if (venue.id !== 'nse') return venueYearFrac(from, expiry, minuteOfDay, venue);
 
   const days = Math.round((to - from) / 86_400_000);
   if (days > 0) return days / 365;
@@ -224,6 +234,31 @@ export function yearFrac(dateIst: string, expiry: string, minuteOfDay: number): 
   const remaining = Math.max(MIN_REMAINING_MIN, DECISION_CLOCK_CLOSE_MIN - minute);
   return remaining / (60 * 24) / 365;
 }
+
+const IST_OFFSET_MS = 330 * 60_000;
+const YEAR_MS = 365 * 86_400_000;
+
+/**
+ * A 24x7 venue's tenor: calendar time from the IST clock reading to the
+ * venue's expiry instant (DX: 12:00 UTC), whole days and the clock alike.
+ * Floored at `MIN_REMAINING_MIN` while the contract still trades, for the same
+ * reason as NSE's expiry day; 0 at and after the instant, when it has settled.
+ */
+function venueYearFrac(
+  fromDayMs: number,
+  expiry: string,
+  minuteOfDay: number,
+  venue: VenueSpec,
+): number {
+  const minute = Number.isFinite(minuteOfDay) ? minuteOfDay : 0;
+  const nowMs = fromDayMs + minute * 60_000 - IST_OFFSET_MS;
+  const remaining = venue.expiryInstantMs(expiry) - nowMs;
+  if (!(remaining > 0)) return 0;
+  return Math.max(MIN_REMAINING_MIN * 60_000, remaining) / YEAR_MS;
+}
+
+/** The rate a venue prices at: NSE `RISK_FREE` (0.065), DX 0. */
+const rateOf = (venue: VenueSpec): number => (venue.id === 'nse' ? RISK_FREE : venue.rate);
 
 /** The identifying half of a `LegView` — what the caller knows before marking. */
 export interface LegPosition {
@@ -278,6 +313,7 @@ export function markLeg(
   dateIst: string,
   minuteOfDay: number,
   pricing: PricingMode,
+  venue: VenueSpec = NSE,
 ): LegView {
   const mark = markPrice(q, pricing, leg.side);
   const shares = leg.lots * leg.lotSize;
@@ -285,7 +321,7 @@ export function markLeg(
   const dir = leg.side === 'Sell' ? -1 : 1;
   const mtm = mark === null ? 0 : dir * (mark - leg.entry) * shares;
 
-  const g = solveGreeks(midOf(q), chain, leg.strike, leg.optType, dateIst, minuteOfDay);
+  const g = solveGreeks(midOf(q), chain, leg.strike, leg.optType, dateIst, minuteOfDay, venue);
 
   return {
     instrument: leg.instrument,
@@ -339,13 +375,14 @@ export function strikeGreeks(
   optType: OptType,
   dateIst: string,
   minuteOfDay: number,
+  venue: VenueSpec = NSE,
 ): { iv: number; delta: number; gamma: number; theta: number; vega: number } | null {
   const row = chain.strikes.find((s) => Math.abs(s.strike - strike) <= STRIKE_EPS);
   if (row === undefined) return null;
   const q = optType === 'CE' ? row.ce : row.pe;
   if (q === null) return null;
 
-  const g = solveGreeks(midOf(q), chain, strike, optType, dateIst, minuteOfDay);
+  const g = solveGreeks(midOf(q), chain, strike, optType, dateIst, minuteOfDay, venue);
   if (g === null) return null;
   return { iv: g.iv, delta: g.delta, gamma: g.gamma, theta: g.theta, vega: g.vega };
 }
@@ -401,12 +438,13 @@ export function theoreticalPrice(
   optType: OptType,
   dateIst: string,
   minuteOfDay: number,
+  venue: VenueSpec = NSE,
 ): number | null {
   const base = {
     future: chain.spot,
     strike,
-    t: yearFrac(dateIst, chain.expiry, minuteOfDay),
-    rate: RISK_FREE,
+    t: yearFrac(dateIst, chain.expiry, minuteOfDay, venue),
+    rate: rateOf(venue),
     type: optType,
   } as const;
 
@@ -440,7 +478,8 @@ export function greekReader(inputs: EngineInputs): StrikeGreekReader {
   const override = inputs.strikeGreeksOverride;
   if (inputs.pricing === 'parity' && override !== undefined) return override;
   const { chain, dateIst, minuteOfDay } = inputs;
-  return (strike, optType) => strikeGreeks(chain, strike, optType, dateIst, minuteOfDay);
+  const venue = inputs.venue ?? NSE;
+  return (strike, optType) => strikeGreeks(chain, strike, optType, dateIst, minuteOfDay, venue);
 }
 
 /**
@@ -456,13 +495,14 @@ function solveGreeks(
   optType: OptType,
   dateIst: string,
   minuteOfDay: number,
+  venue: VenueSpec,
 ): { iv: number; delta: number; gamma: number; theta: number; vega: number } | null {
   if (mid === null) return null;
   const inputs = {
     future: chain.spot,
     strike,
-    t: yearFrac(dateIst, chain.expiry, minuteOfDay),
-    rate: RISK_FREE,
+    t: yearFrac(dateIst, chain.expiry, minuteOfDay, venue),
+    rate: rateOf(venue),
     type: optType,
   } as const;
   const iv = b76ImpliedVol(mid, inputs);

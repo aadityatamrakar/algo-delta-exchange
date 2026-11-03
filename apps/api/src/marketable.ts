@@ -18,6 +18,7 @@
  * `spot()`, no bid/ask — so the buffer is taken off the mark the fill was
  * booked at rather than off the spread itself.
  */
+import { roundToStep, venueFromEnv } from '@algomaker/venue'
 import type { DeskSide } from './contract.ts'
 
 /** NFO options tick. Used when an instrument reports no usable tick size. */
@@ -84,7 +85,8 @@ export function marketableFromEnv(env: NodeJS.ProcessEnv = process.env): Marketa
   return {
     bufferPct: dial('DESK_MARKETABLE_BUFFER_PCT', 0.02),
     minTicks: dial('DESK_MARKETABLE_MIN_TICKS', 2),
-    tickSize: dial('DESK_MARKETABLE_TICK', 0.05),
+    // The venue's tick unless the env names one: NSE 0.05, Delta 0.1.
+    tickSize: dial('DESK_MARKETABLE_TICK', venueFromEnv(env).defaultTick),
     expiryBufferPct: dial('DESK_MARKETABLE_EXPIRY_BUFFER_PCT', 0.1),
   }
 }
@@ -136,5 +138,6 @@ export function marketableLimit(
 
   // Re-round after multiplying: `147 * 0.05` is 7.3500000000000005 in binary
   // floating point, and a price with a 16th decimal place is not on any grid.
-  return Math.round(bounded * tick * 100) / 100
+  // To the tick's own decimals (0.05 → 2, 0.1 → 1), never a fixed 2.
+  return roundToStep(bounded * tick, tick)
 }

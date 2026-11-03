@@ -222,7 +222,10 @@ export function spanLiteMargin(
   let anyShort = false;
 
   for (const leg of legs) {
-    const shares = Math.trunc(leg.lots) * Math.trunc(leg.lotSize);
+    // `lotSize` is NOT truncated: Python's `int(lot_size)` is the identity on
+    // every NSE lot, and on Delta (0.001 BTC per contract) it made every leg
+    // weigh nothing. Lots stay whole — contracts are.
+    const shares = Math.trunc(leg.lots) * leg.lotSize;
     if (!Number.isFinite(shares) || shares === 0) continue;
     const sign = leg.side === 'Buy' ? 1 : -1;
     const t = legTenor(leg, dateIst);
