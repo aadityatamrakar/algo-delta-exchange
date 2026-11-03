@@ -79,7 +79,7 @@ test('a re-create that fails still acks, so a switch Delta kept stays renewed', 
 
 test('retireDxHeartbeat: ack a live ttl, then 0, until Delta says the switch is disabled', async () => {
   const acks: number[] = []
-  let answer: unknown = true
+  let answer: boolean | string = true
   const r = retireDxHeartbeat({
     rest: { heartbeatAck: async (ttl) => { acks.push(ttl); return { process_enabled: ttl === 0 ? answer : true } } },
     log: () => {},

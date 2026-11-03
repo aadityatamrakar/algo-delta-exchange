@@ -81,7 +81,7 @@ import {
 import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore } from './dx-config.ts'
 import { DemoRail, createAdapterRouter, demoKeyReadiness, holdsLegs } from './dx-demo.ts'
 import { OiCapGate, demoOiCapSource, liveOiCapSource, type MasterCap } from './dx-oicap.ts'
-import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
+import { startDxBackstop, startDxDeadman, type DxBackstop } from './dx-backstop.ts'
 import {
   BROKER_SNAPSHOT_COLLECTION,
   createDeltaPositionsSnapshot,
@@ -1684,8 +1684,11 @@ export async function main(): Promise<void> {
    */
   let brokerSweepArmed = false
 
-  /** Delta's dead-man switch and REST host, for the Status heartbeat. Null in simulate mode. */
+  /** Delta's dead-man switch and REST host, for the Status heartbeat. Null in simulate mode, or retired. */
   let dxDeadman: { readonly healthy: boolean } | null = null
+  /** The exchange-resident backstop loops (`dx-backstop.ts`); null off Delta or with DX_BACKSTOP=0. */
+  let liveBackstop: DxBackstop | null = null
+  let demoBackstop: DxBackstop | null = null
   let dxHost: string | null = null
 
   if (brokerMode === 'delta' && !liveRail) {
@@ -1709,15 +1712,16 @@ export async function main(): Promise<void> {
     log('BROKER MODE: delta — LIVE ORDERS ARE POSSIBLE for documents with mode: live')
 
     /**
-     * Delta's dead-man switch: Delta cancels every open BTC option order if
-     * this process stops acking (ttl 30 s, acked every 10 s).
+     * Delta's dead-man switch — RETIRED while backstops run (its cancel_orders
+     * cancels the stop orders too; see dx-heartbeat.ts). dx-watchdog cancels
+     * the desk's non-stop working orders instead. With DX_BACKSTOP=0 it runs
+     * as before: Delta cancels every open BTC option order if this process
+     * stops acking (ttl 30 s, acked every 10 s).
      */
-    const heartbeat = createDxHeartbeat({ rest, log })
-    void heartbeat.beat()
-    const hbTimer = setInterval(() => void heartbeat.beat(), DX_HEARTBEAT_MS)
-    hbTimer.unref()
-    dxDeadman = heartbeat
+    dxDeadman = startDxDeadman({ rest, log, env: process.env })
     dxHost = hostOf(cfg.baseUrl)
+    /** One reduce-only stop resting on Delta per short leg (`dx-backstop.ts`). */
+    liveBackstop = startDxBackstop({ rail: 'live', rest, db: mongo.db, log, env: process.env })
 
     /** Delta's positions for Status' Positions truth (`gateway-heartbeat.ts`). */
     const positionsSnapshot = createDeltaPositionsSnapshot({
@@ -1938,9 +1942,8 @@ export async function main(): Promise<void> {
           })
           void demoMargin.take()
           setInterval(() => void demoMargin.take(), DELTA_MARGIN_MS).unref()
-          const hb = createDxHeartbeat({ rest, log })
-          void hb.beat()
-          setInterval(() => void hb.beat(), DX_HEARTBEAT_MS).unref()
+          startDxDeadman({ rest, log, env: process.env })
+          demoBackstop = startDxBackstop({ rail: 'demo', rest, db: mongo.db, log, env: process.env })
           demoSocket = new DxPrivateSocket(cfg.wsUrl, {
             apiKey: cfg.apiKey,
             apiSecret: cfg.apiSecret,
@@ -2199,6 +2202,10 @@ export async function main(): Promise<void> {
     const rail: 'live' | 'paper' | undefined =
       from === demoRail ? 'paper' : adapter === paperAdapter ? undefined : from === paperAdapter ? 'paper' : 'live'
     from.onOrderUpdate((update: PlacedOrder) => {
+      // A backstop's own update is the backstop loop's, never a desk fill.
+      const backstop = from === dxAdapter ? liveBackstop : demoRail !== null && from === demoRail ? demoBackstop : null
+      if (backstop !== null && backstop.onOrderUpdate(update)) return
+      if (backstop !== null && update.filledQty > 0) backstop.nudge()
       // `handle` never rejects (it catches its own errors), but the `void` is
       // still guarded by the crash guard above: an unhandled rejection reaching
       // Node 24 from here kills the only process that can place orders.
