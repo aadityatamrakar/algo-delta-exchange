@@ -117,6 +117,25 @@ test('sync writes every live BTC option and the .DEXBTUSD spot row', async () =>
   assert.deepEqual(r.calls[0], { contractTypes: ['call_options', 'put_options'], states: ['live'], underlying: ['BTC'] })
 })
 
+test('sync stores Delta\'s OI cap on each option row, and a later sync clears a lifted flag', async () => {
+  const capped = product(201, 77200, 'C', '2026-11-05', { product_specs: { max_oi_usd: 2_000_000, oi_reduce_only_mode: true } })
+  const r = rig({ live: [capped, product(202, 77200, 'P', '2026-11-05', { product_specs: { max_oi_usd: 2_000_000 } })] })
+  await runDxSync(r.deps)
+  const row = (t: number) => r.instruments.docs.find((d) => d['instrument_token'] === t)
+  assert.equal(row(201)?.['dx_max_oi_usd'], 2_000_000)
+  assert.equal(row(201)?.['dx_oi_reduce_only'], true)
+  assert.equal(row(202)?.['dx_oi_reduce_only'], false)
+  assert.equal(row(14)?.['dx_max_oi_usd'], undefined, 'the spot row carries no cap')
+  // the stored loader carries them through to every desk process
+  const stored = await loadStoredInstruments(r.instruments)
+  assert.equal(stored.find((x) => x.instrument_token === 201)?.dx_max_oi_usd, 2_000_000)
+  assert.equal(stored.find((x) => x.instrument_token === 201)?.dx_oi_reduce_only, true)
+  // the next sync: the flag lifted on Delta's side
+  const r2 = rig({ live: [product(201, 77200, 'C', '2026-11-05', { product_specs: { max_oi_usd: 2_000_000 } })], stored: [capped] })
+  await runDxSync(r2.deps)
+  assert.equal(r2.instruments.docs.find((d) => d['instrument_token'] === 201)?.['dx_oi_reduce_only'], false)
+})
+
 test('an expired row is pruned once settled and unreferenced; a book leg or a registry row keeps it', async () => {
   const old = [
     product(101, 70000, 'C', '2026-11-04'), // settled, unreferenced → pruned

@@ -13,6 +13,7 @@
  * be opened once it prints.
  */
 
+import { oiCapCheck, oiUsdOf } from '@algomaker/dx'
 import type { OptionMaster } from '@algomaker/instruments'
 import type { InstrumentRef } from '@algomaker/order-bus'
 import type { QuoteCache } from './marks.ts'
@@ -64,6 +65,15 @@ export interface ChainQuote {
   readonly vega?: number
   readonly asOf: number
   readonly ageMs: number
+  /**
+   * DELTA'S OI CAP (present on Delta options with a cap on record): the
+   * contract's OI value (`oi × lot × spot`), its `max_oi_usd`, and whether a
+   * new position there would be refused — Delta accepts reduce-only orders
+   * at or over the cap. For a "capped" badge; never sent for NSE.
+   */
+  readonly oiUsd?: number | null
+  readonly capUsd?: number | null
+  readonly oiCapped?: boolean
 }
 
 export interface ChainRow {
@@ -99,6 +109,8 @@ export interface ChainDeps {
   readonly master: OptionMaster
   readonly marks: QuoteCache
   readonly now: () => number
+  /** Delta's OI cap per token (`MasterRefresher.oiCap`); absent → no cap fields. */
+  readonly oiCap?: (token: number) => { readonly capUsd: number | null; readonly reduceOnly: boolean; readonly lotSize: number } | null
 }
 
 export interface ChainOptions {
@@ -112,11 +124,20 @@ export interface ChainOptions {
   readonly display?: boolean
 }
 
-function quoteFor(deps: ChainDeps, token: number | undefined, display: boolean): ChainQuote | null {
+function quoteFor(deps: ChainDeps, token: number | undefined, display: boolean, spot: number | null = null): ChainQuote | null {
   if (token === undefined) return null
   const q = display ? deps.marks.displayQuote(token) : deps.marks.quote(token)
   if (q === null) return null
+  const cap = deps.oiCap?.(token) ?? null
+  const capFields =
+    cap === null
+      ? {}
+      : (() => {
+          const s = oiCapCheck({ oiUsd: oiUsdOf(q.oi, cap.lotSize, spot), capUsd: cap.capUsd, reduceOnly: cap.reduceOnly })
+          return { oiUsd: s.oiUsd, capUsd: s.capUsd, oiCapped: s.capped }
+        })()
   return {
+    ...capFields,
     price: q.price,
     oi: q.oi,
     volume: q.volume,
@@ -147,6 +168,12 @@ export function buildChain(
   const master = deps.master
   const meta = master.chain(underlying, expiry)
 
+  const spotToken = master.spotToken(underlying)
+  const tokenQuote =
+    spotToken === null ? null : display ? deps.marks.displayQuote(spotToken) : deps.marks.quote(spotToken)
+  // An underlying with NO index row (Delta's BTC) is priced off `md.spot`.
+  // One that has a row keeps reading it, exactly as before.
+  const spotQuote = spotToken === null ? deps.marks.spotQuote(underlying, display) : tokenQuote
   const rows: ChainRow[] = []
   for (const strike of master.strikes(underlying, expiry)) {
     /**
@@ -164,19 +191,13 @@ export function buildChain(
     const pe = master.resolve(underlying, expiry, strike, 'PE')
     rows.push({
       strike,
-      CE: quoteFor(deps, ce?.instrumentToken, display),
-      PE: quoteFor(deps, pe?.instrumentToken, display),
+      CE: quoteFor(deps, ce?.instrumentToken, display, spotQuote?.price ?? null),
+      PE: quoteFor(deps, pe?.instrumentToken, display, spotQuote?.price ?? null),
       ...(ce === null || ce === undefined ? {} : { ceContract: ce }),
       ...(pe === null || pe === undefined ? {} : { peContract: pe }),
     })
   }
 
-  const spotToken = master.spotToken(underlying)
-  const tokenQuote =
-    spotToken === null ? null : display ? deps.marks.displayQuote(spotToken) : deps.marks.quote(spotToken)
-  // An underlying with NO index row (Delta's BTC) is priced off `md.spot`.
-  // One that has a row keeps reading it, exactly as before.
-  const spotQuote = spotToken === null ? deps.marks.spotQuote(underlying, display) : tokenQuote
   const futureToken = master.future(underlying)?.instrumentToken
   const futureQuote = quoteFor(deps, futureToken, display)
 

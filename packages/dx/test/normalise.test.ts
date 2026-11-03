@@ -36,6 +36,9 @@ test('toInstrumentRow maps C-BTC-76600-041126 to a CE row on the 0.001 grid', ()
     instrument_type: 'CE',
     segment: 'DX-OPT',
     exchange: 'DELTA',
+    // the fixture's product_specs: max_oi_usd 30,000,000, no reduce-only flag
+    dx_max_oi_usd: 30000000,
+    dx_oi_reduce_only: false,
   })
 })
 

@@ -767,7 +767,8 @@ export function deskRoutes(deps: DeskDeps): Route {
           send(404, { error: `no listed expiries for '${chainFor}'` })
           return true
         }
-        send(200, buildChain({ master: m, marks, now: () => deps.now() }, chainFor, expiry))
+        const oiCap = master.oiCap?.bind(master)
+        send(200, buildChain({ master: m, marks, now: () => deps.now(), ...(oiCap === undefined ? {} : { oiCap }) }, chainFor, expiry))
         return true
       }
     }

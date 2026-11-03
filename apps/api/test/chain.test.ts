@@ -258,3 +258,41 @@ test('the listed expiries for an underlying, ascending', async () => {
   })
   assert.deepEqual(chainExpiries(new OptionMaster(rows), 'ETH'), { underlying: 'ETH', expiries: [] })
 })
+
+test('Delta OI cap: each leg carries oiUsd (oi × lot × spot), capUsd and oiCapped when a cap is on record', () => {
+  // The testnet call of 3 Nov 2026: 55,371 contracts × 0.001 × 76,462 ≈ $4.23M against a $2M cap.
+  const rows: InstrumentRow[] = []
+  for (const type of ['CE', 'PE'] as const) {
+    rows.push({
+      instrument_token: type === 'CE' ? 207610 : 207607,
+      tradingsymbol: `${type === 'CE' ? 'C' : 'P'}-BTC-77200-041126`,
+      name: 'BTC',
+      expiry: '2026-11-04',
+      strike: 77200,
+      tick_size: 0.1,
+      lot_size: 0.001,
+      instrument_type: type,
+      segment: 'DX-OPT',
+      exchange: 'DELTA',
+    })
+  }
+  const m = new OptionMaster(rows)
+  const marks = new QuoteCache({ now: () => 1_000_000 })
+  marks.update(207610, 742, 999_000, { oi: 55_371, bid: 735, ask: 750 })
+  marks.update(207607, 790, 999_000, { oi: 1_401, bid: 785, ask: 795 })
+  marks.updateSpot('BTC', 76_462, 999_500)
+  const caps = new Map([
+    [207610, { capUsd: 2_000_000, reduceOnly: true, lotSize: 0.001 }],
+    [207607, { capUsd: 2_000_000, reduceOnly: false, lotSize: 0.001 }],
+  ])
+  const chain = buildChain({ master: m, marks, now: () => 1_000_000, oiCap: (t) => caps.get(t) ?? null }, 'BTC', '2026-11-04')
+  const row = chain.rows.find((r) => r.strike === 77200)
+  assert.ok(row?.CE && row.PE)
+  assert.ok(Math.abs((row.CE.oiUsd ?? 0) - 4_233_777) < 1)
+  assert.equal(row.CE.capUsd, 2_000_000)
+  assert.equal(row.CE.oiCapped, true)
+  assert.equal(row.PE.oiCapped, false)
+  // No cap dependency (NSE): no cap fields at all.
+  const plain = buildChain({ master: m, marks, now: () => 1_000_000 }, 'BTC', '2026-11-04')
+  assert.equal('oiUsd' in (plain.rows[0]?.CE ?? {}), false)
+})

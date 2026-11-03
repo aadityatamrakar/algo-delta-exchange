@@ -297,6 +297,8 @@ export interface Clock {
 export interface MasterProvider {
   /** Current instrument master. Refreshed out of band by the sync job. */
   current(): OptionMaster
+  /** Delta's OI cap for a token (`MasterRefresher.oiCap`); absent off Delta. */
+  oiCap?(token: number): { readonly capUsd: number | null; readonly reduceOnly: boolean; readonly lotSize: number } | null
 }
 
 export interface BridgeDeps {
