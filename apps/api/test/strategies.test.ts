@@ -28,6 +28,7 @@ import {
   type StrategyRow,
 } from '../src/strategies.ts'
 import type { DeskAction } from '../src/contract.ts'
+import { DX } from '../src/venue.ts'
 
 const row = (over: Partial<StrategyRow> = {}): StrategyRow => ({
   ...DEFAULT_STRATEGY,
@@ -555,6 +556,20 @@ test('a bulk switch is parsed to exactly what was asked for, never its inverse',
 })
 
 // ---------------------------------------------------------------- day guard
+
+test('daily limits are stated in the venue currency: USD on DX, rupees on NSE', () => {
+  const dx = validateDailyLimits({ stop: -5 }, DX)
+  assert.equal(dx.ok, false)
+  if (!dx.ok) {
+    assert.match(dx.error, /USD/)
+    assert.doesNotMatch(dx.error, /rupee/)
+  }
+  const big = validateDailyLimits({ target: DAILY_LIMIT_MAX + 1 }, DX)
+  if (!big.ok) assert.match(big.error, /\$10,000,000/)
+  const nse = validateDailyLimits({ stop: -5 })
+  if (!nse.ok) assert.match(nse.error, /rupees/)
+  assert.equal(validateDailyLimits({ target: 250.5, stop: 100 }, DX).ok, true)
+})
 
 test('daily limits are POSITIVE rupees on both lines', () => {
   // A stop stated as -3000 is refused rather than negated: an operator who

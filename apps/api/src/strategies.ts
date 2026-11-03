@@ -39,6 +39,7 @@
 
 import type { DeskAction, DeskMode, Skip } from './contract.ts'
 import type { Validated } from './validate.ts'
+import { API_VENUE, formatMoney, type VenueSpec } from './venue.ts'
 
 /** Who runs the process. Nothing else about a row depends on this. */
 export type StrategyKind = 'external' | 'hosted'
@@ -177,7 +178,7 @@ export function withMode(
 }
 
 /**
- * THE DAY GUARD'S LINES, in rupees, both POSITIVE.
+ * THE DAY GUARD'S LINES, in the venue currency (rupees on NSE, USD on DX), both POSITIVE.
  *
  * `stop` is a positive number and the guard compares against `-stop`. A signed
  * field would let an operator type `3000` meaning "stop me at minus three
@@ -825,12 +826,18 @@ export function validateStrategyPatch(raw: unknown): Validated<StrategyPatch> {
  * expect to see in the P&L is reasonable, and a control that quietly reversed
  * their meaning is how a stop-loss ends up armed to fire on a profit.
  */
-export function validateDailyLimits(raw: unknown): Validated<DailyLimits | null> {
+export function validateDailyLimits(
+  raw: unknown,
+  venue: VenueSpec = API_VENUE,
+): Validated<DailyLimits | null> {
   if (raw === null) return { ok: true, value: null }
   if (!isObject(raw)) {
     return { ok: false, error: 'dailyLimits must be an object, or null to disarm the day guard' }
   }
   const out: { target?: number; stop?: number } = {}
+  // The numbers are bare; the venue says what they are. DX: USD. NSE: rupees.
+  const unit = venue.currency === 'INR' ? 'rupees' : 'USD'
+  const stopExample = venue.currency === 'INR' ? '3000' : '300'
   for (const key of ['target', 'stop'] as const) {
     const v = raw[key]
     if (v === undefined || v === null) continue
@@ -838,8 +845,8 @@ export function validateDailyLimits(raw: unknown): Validated<DailyLimits | null>
       return {
         ok: false,
         error:
-          `dailyLimits.${key} must be a positive number of rupees ` +
-          `(a stop is stated as ${key === 'stop' ? '3000, not -3000' : 'a positive gain'}); ` +
+          `dailyLimits.${key} must be a positive number of ${unit} ` +
+          `(a stop is stated as ${key === 'stop' ? `${stopExample}, not -${stopExample}` : 'a positive gain'}); ` +
           'send null to clear it',
       }
     }
@@ -847,7 +854,7 @@ export function validateDailyLimits(raw: unknown): Validated<DailyLimits | null>
       return {
         ok: false,
         error:
-          `dailyLimits.${key} may not exceed ₹${DAILY_LIMIT_MAX.toLocaleString('en-IN')} — ` +
+          `dailyLimits.${key} may not exceed ${formatMoney(DAILY_LIMIT_MAX, venue)} — ` +
           'a limit past anything this desk can lose or make is an unarmed guard that looks armed',
       }
     }
