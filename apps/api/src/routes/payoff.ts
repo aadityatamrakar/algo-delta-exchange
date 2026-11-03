@@ -118,7 +118,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { fixedClock, isMarketOpen } from '@algomaker/core'
+import { venueSessionOpen } from '../venue.ts'
 import {
   b76Greeks,
   yearsToExpiry,
@@ -571,7 +571,7 @@ export async function assemble(deps: ApiDeps, tag: string, mode: DeskMode): Prom
    * repairs are a menu, and the place-order path prices live and still refuses
    * on a dead feed.
    */
-  const closed = !isMarketOpen(fixedClock(asOf))
+  const closed = !venueSessionOpen(asOf)
   const warnings: string[] = []
   const doc = await deps.store.bookDoc(tag, mode)
   const row = await deps.store.getBook(tag, mode)

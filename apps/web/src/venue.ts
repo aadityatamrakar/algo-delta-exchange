@@ -41,3 +41,10 @@ export function exchangeOf(venue: VenueSpec): string {
 export const VENUE: VenueSpec = venueFromEnv({
   DESK_VENUE: (import.meta as { env?: Record<string, string | undefined> }).env?.['VITE_DESK_VENUE'],
 })
+
+/** The name the dashboard header and page title carry. */
+export function brandFor(venue: VenueSpec): string {
+  return venue.id === 'dx' ? 'Delta Desk' : 'SMPv2'
+}
+
+export const BRAND: string = brandFor(VENUE)

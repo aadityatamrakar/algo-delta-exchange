@@ -1030,6 +1030,19 @@ export class DeskStore {
     return (res.matchedCount ?? 0) > 0
   }
 
+  async deleteUnusedHostedRow(tag: string): Promise<boolean> {
+    const books = await this.#db.collection(COLLECTIONS.booksRegistry).countDocuments({ tag })
+    if (books > 0) return false
+    for (const c of [COLLECTIONS.paperTrade, COLLECTIONS.gatewayOrders]) {
+      if ((await this.#db.collection(c).countDocuments({ tag })) > 0) return false
+    }
+    const res: unknown = await this.#db
+      .collection(COLLECTIONS.strategies)
+      .deleteOne({ tag, kind: 'hosted' })
+    const n = (res as { deletedCount?: number } | null)?.deletedCount
+    return typeof n === 'number' && n > 0
+  }
+
   async clearSeededDisabledReason(tag: string, seeded: string): Promise<boolean> {
     const res = await this.#db
       .collection(COLLECTIONS.strategies)

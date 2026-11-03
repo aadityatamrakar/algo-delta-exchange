@@ -11,7 +11,7 @@
  * thing this API knows, so what leaves here is counted, never named.
  */
 
-import { fixedClock, isMarketOpen } from '@algomaker/core'
+import { venueSessionOpen } from '../venue.ts'
 import type { ApiDeps, Route, RouteCtx } from './kit.ts'
 
 /**
@@ -129,11 +129,11 @@ export function healthRoutes(deps: ApiDeps): Route {
          * What it buys is on the page: a silent feed at 11:00 on a Saturday is
          * how a shut market looks, and rendering that as "Feed is down" in red
          * every weekend is how an operator learns to ignore the colour red.
-         * `isMarketOpen` from `@algomaker/core` is the one server-side session
+         * `venueSessionOpen` (core `isMarketOpen` on NSE, always true on DX) is the one server-side session
          * rule — the runner gates on the same function — asked about THIS
          * route's clock rather than wall time, so a test can drive it.
          */
-        sessionOpen: isMarketOpen(fixedClock(deps.now())),
+        sessionOpen: venueSessionOpen(deps.now(), deps.venue),
       })
       return true
     }

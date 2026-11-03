@@ -8,6 +8,7 @@
 
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { DX, NSE } from '@algomaker/venue'
 import { DEFAULT_STRATEGY, type StrategyRow, isOn } from '../src/strategies.ts'
 import {
   HOSTED_STRATEGIES,
@@ -45,6 +46,17 @@ class FakeSeedStore implements SeedStore {
   }
 
   /** Same filter as DeskStore's: the EXACT text, or nothing happens. */
+  /** Tags a registry book or a trade still names; the real store counts both. */
+  readonly inUse = new Set<string>()
+  readonly deleted: string[] = []
+  async deleteUnusedHostedRow(tag: string): Promise<boolean> {
+    const row = this.rows.get(tag)
+    if (row === undefined || row.kind !== 'hosted' || this.inUse.has(tag)) return false
+    this.rows.delete(tag)
+    this.deleted.push(tag)
+    return true
+  }
+
   async clearSeededDisabledReason(tag: string, seeded: string): Promise<boolean> {
     const row = this.rows.get(tag)
     if (row === undefined || row.disabledReason !== seeded) return false
@@ -286,4 +298,20 @@ test("an operator's own chosen time on a premium seller is never overwritten", a
   })
   await seedHostedStrategies(store, NOW, log)
   assert.equal(store.rows.get('BULL_S_1')?.autostartAt, '0930')
+})
+
+test('on DX no catalogue row is seeded', async () => {
+  const { added } = await seedHostedStrategies(store, NOW, log, DX)
+  assert.equal(added, 0)
+  assert.equal(store.rows.size, 0)
+})
+
+test('on DX the NSE catalogue rows with no book and no trades are deleted, and named', async () => {
+  await seedHostedStrategies(store, NOW, log, NSE)
+  store.inUse.add('BULL_S_1')
+  const lines: string[] = []
+  await seedHostedStrategies(store, NOW, (m, x) => { lines.push(m + JSON.stringify(x ?? {})) }, DX)
+  assert.deepEqual(store.deleted.sort(), ['BULL_SNX_1', 'LION_S25_2'])
+  assert.deepEqual([...store.rows.keys()], ['BULL_S_1'])
+  assert.ok(lines.some((l) => l.includes('LION_S25_2')))
 })

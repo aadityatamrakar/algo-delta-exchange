@@ -10,6 +10,7 @@
  * Every helper takes the venue as a defaulted last argument: production passes
  * nothing and gets the process venue; a test passes `DX` and needs no env.
  */
+import { fixedClock, isMarketOpen } from '@algomaker/core'
 import { NSE, venueFromEnv, type VenueSpec } from '@algomaker/venue'
 
 export { DX, NSE, type VenueSpec } from '@algomaker/venue'
@@ -59,4 +60,13 @@ export function formatMoney(n: number, venue: VenueSpec = API_VENUE, opts: { sym
   if (venue.currency === 'INR') return `${symbol ? '₹' : ''}${n.toLocaleString('en-IN')}`
   const abs = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   return `${n < 0 ? '-' : ''}${symbol ? '$' : ''}${abs}`
+}
+
+/**
+ * Is the venue's session open at `ms`. NSE keeps the core rule the runner gates
+ * on (hours, weekends, holidays); every other venue answers for itself, and
+ * DX is always open.
+ */
+export function venueSessionOpen(ms: number, venue: VenueSpec = API_VENUE): boolean {
+  return isNse(venue) ? isMarketOpen(fixedClock(ms)) : venue.isOpen(ms)
 }

@@ -41,6 +41,7 @@ import { BooksPage } from './books.tsx'
 import { BookBuildPage } from './book-build.tsx'
 import { ReportsPage } from './reports.tsx'
 import { ChainPage } from './chain.tsx'
+import { BRAND } from './venue.ts'
 
 /**
  * The width at and above which the whole navbar fits on one row.
@@ -107,7 +108,7 @@ function NavDrawer(props: {
       // Backdrop click and Escape both arrive here; the drawer never re-opens
       // itself, so anything but a close is a no-op.
       onOpenChange={(open) => { if (!open) props.onClose() }}
-      header="SMPv2"
+      header={BRAND}
       side="start"
       label="Desk navigation"
     >
@@ -161,6 +162,8 @@ function Desk(props: {
    * visible way out of it but a reload. A layout query is the only thing that
    * can notice, so it is the only thing in this file that listens to one.
    */
+  useEffect(() => { document.title = BRAND }, [])
+
   useEffect(() => {
     if (!navOpen) return
     const mq = window.matchMedia(WIDE_NAV)
@@ -185,7 +188,7 @@ function Desk(props: {
               on a phone without reaching through `.desk-topbar > *`, which
               would also catch anything added to the bar later. */}
           <HStack gap={4} align="center" className="desk-topbar-left">
-            <Heading level={3}>SMPv2</Heading>
+            <Heading level={3}>{BRAND}</Heading>
             <HStack gap={1} align="center" wrap="wrap" className="desk-nav-wide">
               {/* NAV_ROUTES, not ROUTES: `#/build` is a page without a tab. */}
               {NAV_ROUTES.map((r) => (

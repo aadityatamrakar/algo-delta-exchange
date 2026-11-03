@@ -27,6 +27,7 @@ import { TextInput } from '@astryxdesign/core/TextInput'
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { api, ApiError, explain, setUnauthorizedHandler, type Session } from './api.ts'
 import { useAsync } from './shell.tsx'
+import { BRAND } from './venue.ts'
 
 type AuthStatus = 'checking' | 'in' | 'out'
 
@@ -199,7 +200,7 @@ export function LoginPage(): React.ReactElement {
       <Card width="100%" maxWidth={400}>
         <VStack gap={4} padding={5}>
           <VStack gap={1}>
-            <Heading level={2}>SMPv2</Heading>
+            <Heading level={2}>{BRAND}</Heading>
             <Text color="secondary" size="sm">
               Sign in to reach the desk. The session is a cookie this page cannot
               read, so a reload keeps you signed in — use Sign out to end it.

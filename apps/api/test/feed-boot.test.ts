@@ -289,3 +289,13 @@ test('the other two boot secrets are still required, and named', () => {
   assert.throws(() => requireBootEnv(noUrl), /DESK_MONGO_URL is required/)
   assert.throws(() => requireBootEnv(noToken), /DESK_API_TOKEN is required/)
 })
+
+test('on DX the feed reports sessionOpen true on a Saturday', async () => {
+  const { DX } = await import('@algomaker/venue')
+  const h = harness([])
+  h.setNow(Date.parse('2026-11-07T11:00:00Z'))
+  const res = await get({ ...h, route: healthRoutes({ ...h.deps, venue: DX }) }, '/v1/desk/feed')
+  assert.equal(res.body['sessionOpen'], true)
+  const nse = await get(h, '/v1/desk/feed')
+  assert.equal(nse.body['sessionOpen'], false)
+})
