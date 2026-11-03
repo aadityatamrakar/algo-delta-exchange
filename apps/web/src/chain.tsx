@@ -31,7 +31,7 @@ import { asOf, usePoll } from './shell.tsx'
 import { VENUE } from './venue.ts'
 import {
   atmIv, atmStraddle, atmStrike, expiryLabel, expiryPillLabel, daysToExpiry, formatCountdown,
-  groupExpiries, heatStep, isFar, itmSides, maxPain, putCallRatio, settlesAt, spotLineIndex,
+  groupExpiries, heatStep, indexChange, isFar, itmSides, maxPain, putCallRatio, settlesAt, spotLineIndex,
 } from './chain-model.ts'
 import './chain.css'
 
@@ -52,9 +52,10 @@ export const MISSING = '·'
 const finite = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
 
 function fixed(v: number | null | undefined, digits: number): string {
-  return finite(v)
-    ? v.toLocaleString(LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits })
-    : MISSING
+  if (!finite(v)) return MISSING
+  // A value that rounds to zero prints as 0.00, not -0.00 (a deep put's delta).
+  const shown = Math.abs(v) < 0.5 * 10 ** -digits ? 0 : v
+  return shown.toLocaleString(LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
 function upTo(v: number | null | undefined, digits: number): string {
@@ -209,10 +210,19 @@ function SideCells(props: {
             data-itm={itm ? 'true' : 'false'}
             data-heat={isHeat ? heat : undefined}
           >
-            {key === 'oi' && finite(value) && oiPct > 0 ? (
-              <span className="chain-oi-bar" style={{ inlineSize: `${oiPct}%` }} aria-hidden="true" />
-            ) : null}
-            {FLASHES.has(key) ? <Flash value={value} text={text} /> : <Fig text={text} />}
+            {key === 'oi' ? (
+              // The bar has its own track BESIDE the number, so it can never
+              // cover a digit: calls' track sits outside the figure and grows
+              // left, puts' mirrors it and grows right.
+              <span className="chain-oi">
+                <span className="chain-oi-track" aria-hidden="true">
+                  {finite(value) && oiPct > 0 ? (
+                    <span className="chain-oi-bar" style={{ inlineSize: `${oiPct}%` }} />
+                  ) : null}
+                </span>
+                <Flash value={value} text={text} />
+              </span>
+            ) : FLASHES.has(key) ? <Flash value={value} text={text} /> : <Fig text={text} />}
           </td>
         )
       })}
@@ -414,11 +424,7 @@ function Header(props: {
   asOfText: string | undefined
 }): React.ReactElement {
   const { spot, openSpot, rows } = props
-  const change = finite(spot) && finite(openSpot) ? spot - openSpot : null
-  const changePct = change !== null && finite(openSpot) && openSpot !== 0 ? (change / openSpot) * 100 : 0
-  const dir = change === null || change === 0 ? 'flat' : change > 0 ? 'up' : 'down'
-  const arrow = dir === 'up' ? '▲ ' : dir === 'down' ? '▼ ' : ''
-  const sign = dir === 'up' ? '+' : ''
+  const move = indexChange(spot, openSpot, LOCALE)
   const atmRow = rows.find((r) => r.strike === atmStrike(rows.map((x) => x.strike), spot))
   const pcr = putCallRatio(rows)
   const pain = maxPain(rows)
@@ -428,8 +434,8 @@ function Header(props: {
         <span className="chain-price-label">{`${props.underlying} index`}</span>
         <span className="chain-price-line">
           <Flash value={spot} text={fixed(spot, 2)} className="chain-price" />
-          <span className={`chain-change chain-change-${dir}`} title="Change since this page opened">
-            {change === null ? MISSING : `${arrow}${sign}${fixed(change, 2)} (${sign}${changePct.toFixed(2)}%)`}
+          <span className={`chain-change chain-change-${move?.dir ?? 'flat'}`} title="Change since this page opened">
+            {move === null ? MISSING : move.text}
           </span>
         </span>
         <span className="chain-asof">{props.asOfText ?? 'waiting for the first read'}</span>

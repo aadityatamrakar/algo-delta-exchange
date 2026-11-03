@@ -3,13 +3,15 @@
  * the settlement countdown, missing quotes, the expiry pill grouping, the
  * flash on a changed cell and the stale / empty / loading states.
  */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { installFetch } from './http.tsx'
 import type { ChainRowWire, ChainSide } from '../src/api.ts'
 import { ChainPage, ChainTable, ExpiryPills, MISSING } from '../src/chain.tsx'
 import {
-  daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, isFar, itmSides, maxPain,
+  daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, indexChange, isFar, itmSides, maxPain,
   putCallRatio, spotLineIndex,
 } from '../src/chain-model.ts'
 
@@ -242,5 +244,67 @@ describe('page states', () => {
     expect(screen.getByLabelText('Loading the option chain')).toBeTruthy()
     expect(await screen.findByText('No strikes are listed for BTC 06 Nov.')).toBeTruthy()
     expect(screen.queryByLabelText('Loading the option chain')).toBe(null)
+  })
+})
+
+describe('the row hover, the ATM row and the OI bars (operator, 3 Nov light-theme screenshot)', () => {
+  /** chain.css with its comments removed, so a rule is judged by what it declares. */
+  const css = readFileSync(resolve(process.cwd(), 'src', 'chain.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+  /** The declaration bodies of every rule whose selector mentions `needle`. */
+  function rulesFor(needle: string): string[] {
+    return [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter((m) => (m[1] ?? '').includes(needle))
+      .map((m) => m[2] ?? '')
+  }
+
+  test('the ATM row is marked by the theme class, with no inline colour on it or its cells', () => {
+    table(ROWS, 76290)
+    const row = screen.getByRole('rowheader', { name: '76,200' }).closest('tr') as HTMLElement
+    expect(row.classList.contains('chain-atm')).toBe(true)
+    expect(row.getAttribute('style')).toBe(null)
+    for (const cell of row.querySelectorAll<HTMLElement>('td, th')) {
+      expect(cell.style.background).toBe('')
+      expect(cell.style.backgroundColor).toBe('')
+    }
+  })
+
+  test('the hover and ATM rules use theme tokens only, never --color-tint-hover', () => {
+    const hover = rulesFor('.chain-row:hover')
+    expect(hover.length).toBeGreaterThan(0)
+    // The hover tints over the cell (inset shadow), never replaces its background or text colour.
+    for (const body of hover) {
+      expect(body).toContain('box-shadow')
+      expect(body).not.toMatch(/(^|[^-])background|(^|[^-])color\s*:/)
+    }
+    for (const body of [...rulesFor('.chain-atm'), ...rulesFor(':hover')]) {
+      expect(body).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|\bblack\b/i)
+      expect(body).toContain('var(--')
+    }
+    // `light-dark(black, white)` in the neutral theme: as a background it painted the row black.
+    expect(css).not.toContain('--color-tint-hover')
+  })
+
+  test('the OI bar has its own track beside the number and never contains it', () => {
+    table(ROWS, 76290)
+    for (const cell of document.querySelectorAll<HTMLElement>('td.chain-c-oi')) {
+      const track = cell.querySelector('.chain-oi-track') as HTMLElement
+      const figure = cell.querySelector('.chain-v') as HTMLElement
+      expect(track).not.toBe(null)
+      expect(track.contains(figure)).toBe(false)
+      expect(track.parentElement).toBe(figure.parentElement)
+      const bar = cell.querySelector('.chain-oi-bar')
+      if (bar !== null) expect(track.contains(bar)).toBe(true)
+    }
+  })
+})
+
+describe('the index change chip', () => {
+  test('shows two decimals of percent from 0.01%, and "flat" below it', () => {
+    expect(indexChange(76289.1, 76290)).toEqual({ dir: 'flat', text: 'flat' })
+    expect(indexChange(76290, 76290)).toEqual({ dir: 'flat', text: 'flat' })
+    expect(indexChange(76410.4, 76290)).toEqual({ dir: 'up', text: '▲ +120.40 (+0.16%)' })
+    expect(indexChange(76250, 76290)).toEqual({ dir: 'down', text: '▼ -40.00 (-0.05%)' })
+    expect(indexChange(76290, null)).toBe(null)
   })
 })
