@@ -13,7 +13,7 @@
  * worth exercising end to end, and a hand-written `touch()` stub would be the
  * one place it could silently answer "fresh" forever.
  */
-import { createOrderChaser, type ChaserOrdersCollection, type ChaserReadCollection } from '../src/order-chaser.ts'
+import { createOrderChaser, type ChaserOrdersCollection, type ChaserReadCollection, type CloseWorker } from '../src/order-chaser.ts'
 import { createQuoteMap, type QuoteMap } from '../src/quote-map.ts'
 import type { OrderEvent } from '../src/journal.ts'
 
@@ -133,6 +133,8 @@ export interface HarnessOptions {
    * test rather than a convenience.
    */
   ordersFilter?: Record<string, unknown>
+  /** The Delta close worker (`dx-close.ts`): exits are escalated, never handed back. */
+  closes?: CloseWorker
 }
 
 export function harness(opts: HarnessOptions = {}): Harness {
@@ -168,6 +170,7 @@ export function harness(opts: HarnessOptions = {}): Harness {
       ...(opts.disabled === undefined ? {} : { disabled: opts.disabled }),
       ...(opts.noQuotes === true ? {} : { quotes }),
       ...(opts.ordersFilter === undefined ? {} : { ordersFilter: opts.ordersFilter }),
+      ...(opts.closes === undefined ? {} : { closes: opts.closes }),
       now: () => clock.now,
       log: (m: string) => void logs.push(m),
     },

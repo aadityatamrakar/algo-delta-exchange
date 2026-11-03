@@ -67,7 +67,8 @@ import {
 } from './broker-sweep.ts'
 import { createPaperSweep, DEFAULT_PAPER_ORPHAN_MS } from './paper-sweep.ts'
 import { connectWithRetry, installCrashGuards } from './resilience.ts'
-import { chaseDialsFromEnv, chaseDisabled, createOrderChaser } from './order-chaser.ts'
+import { chaseDialsFromEnv, chaseDisabled, createOrderChaser, type CloseWorker } from './order-chaser.ts'
+import { closeDialsFromEnv, closeLimitPrice, createCloseBookSource, type CloseBookSource } from './dx-close.ts'
 import { createQuoteMap, quoteMaxAgeFromEnv } from './quote-map.ts'
 import {
   brokerModeFromEnv,
@@ -849,7 +850,7 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
   }
 
   const placeOne = async (
-    order: GatewayOrderDoc,
+    queued: GatewayOrderDoc,
     clientOrderId: string,
     doc: Record<string, unknown>,
     onPlacementStarted: () => void,
@@ -864,6 +865,31 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
     // of one order goes to the same place.
     const routed = routedOf(await ports.adapterFor(doc))
     const adapter = routed.adapter
+    /**
+     * A DELTA CLOSE IS PRICED OFF THE TOUCH (`dx-close.ts`), per slice, just
+     * before it goes out: the far side plus a buffer, never the mark, never
+     * MARKET. A passive close with a price of its own is left to the peg,
+     * which joins the touch itself. A pricer that fails costs nothing but the
+     * reprice — the exit still goes out at its own price.
+     */
+    let order = queued
+    let closePriced: string | null = null
+    const passiveWithPrice =
+      queued.workMode === 'passive' && queued.order_type === 'LIMIT' && (queued.limitPrice ?? 0) > 0
+    if (queued.desk_op === 'close' && ports.closePrice !== undefined && !passiveWithPrice) {
+      try {
+        const p = await ports.closePrice(queued, clientOrderId, routed.rail)
+        if (p !== null && Number.isFinite(p.limitPrice) && p.limitPrice > 0) {
+          order = { ...queued, order_type: 'LIMIT', limitPrice: p.limitPrice }
+          closePriced = p.note
+          log(`CLOSE PRICED ${queued.tradingsymbol} [${clientOrderId}]: ${p.limitPrice} — ${p.note}`)
+        }
+      } catch (err) {
+        log(`close pricing failed ${queued.tradingsymbol} [${clientOrderId}] — placing at its own price`, {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
     const { plan, tranches } = planFor(order, clientOrderId, doc)
 
     if (plan.rejected !== null) {
@@ -912,6 +938,7 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
         underlying: plan.underlying,
         underlyingSource: plan.underlyingSource,
         ...(freezeWarning === null ? {} : { freezeUnknown: true }),
+        ...(closePriced === null ? {} : { closePriced, limitPrice: order.limitPrice }),
         // WHICH RAIL, and why — present when the router answered (the DX gateway).
         ...(routed.rail === null ? {} : { rail: routed.rail }),
         ...(routed.note === '' ? {} : { railNote: routed.note }),
@@ -2071,12 +2098,54 @@ export async function main(): Promise<void> {
    * two adapters are the same object, so there is exactly ONE chaser over the
    * whole collection and the behaviour is identical to what it always was.
    */
+  /**
+   * DELTA EXITS (`dx-close.ts`): the book a close is priced and escalated off,
+   * per rail. LIVE — this process's WS quote when ≤ 5 s old, else production
+   * REST. DEMO — testnet REST only: the WS book is production's, not the
+   * testnet's. SIM — the WS quote only; the simulator fills at it anyway.
+   */
+  const closeDials = closeDialsFromEnv(process.env)
+  const touchOf = (token: number): ReturnType<typeof quotes.touch> => quotes.touch(token)
+  const closeBooks = {
+    live: createCloseBookSource({
+      touch: touchOf,
+      now: () => Date.now(),
+      wsMaxAgeMs: closeDials.wsMaxAgeMs,
+      ...(dxRest === null ? {} : { ticker: (s: string) => (dxRest as DxRest).ticker(s) }),
+      log,
+    }),
+    demo: createCloseBookSource({
+      touch: () => null,
+      now: () => Date.now(),
+      wsMaxAgeMs: closeDials.wsMaxAgeMs,
+      ticker: async (s: string) => {
+        const rest = demoRail?.rest ?? null
+        if (rest === null) throw new Error('the demo rail is not built')
+        return await rest.ticker(s)
+      },
+      log,
+    }),
+    sim: createCloseBookSource({ touch: touchOf, now: () => Date.now(), wsMaxAgeMs: closeDials.wsMaxAgeMs, log }),
+  }
+  const closeBookFor = (rail: string | null): CloseBookSource =>
+    rail === 'live' ? closeBooks.live : rail === 'demo' ? closeBooks.demo : closeBooks.sim
+  const closeWorker = (rail: 'live' | 'demo' | 'sim'): CloseWorker => ({
+    book: (doc) => closeBookFor(rail).book(doc),
+    alerts,
+    stepPct: closeDials.stepPct,
+    maxMult: closeDials.maxMult,
+    stepMs: closeDials.stepMs,
+  })
+  if (onDx) log('DX exits: priced off the touch, escalated until filled', { ...closeDials })
+
   const armChaser = (
     name: string,
     chaseAdapter: BrokerAdapter,
     ordersFilter?: Record<string, unknown>,
     /** Checked per pass by the chaser itself; the live rail adds the broker link. */
     disabled?: () => boolean,
+    /** DX only: closes escalate rather than being handed back. */
+    closes?: CloseWorker,
   ): void => {
     if (!chaseAdapter.capabilities.modify) {
       log(`${name} order chaser not armed — adapter '${chaseAdapter.name}' cannot modify orders`)
@@ -2092,6 +2161,7 @@ export async function main(): Promise<void> {
         quotes,
         ...(ordersFilter === undefined ? {} : { ordersFilter }),
         ...(disabled === undefined ? {} : { disabled }),
+        ...(closes === undefined ? {} : { closes }),
         now: () => Date.now(),
         log,
       },
@@ -2112,16 +2182,20 @@ export async function main(): Promise<void> {
   if (chaseDisabled(process.env)) {
     log('order chaser DISABLED by DESK_CHASE_DISABLED — resting orders will only be alerted on')
   } else {
+    // On Delta every rail's chaser escalates its closes (`dx-close.ts`); NSE is unchanged.
+    const closesFor = (rail: 'live' | 'demo' | 'sim'): CloseWorker | undefined => (onDx ? closeWorker(rail) : undefined)
     if (adapter === paperAdapter) {
-      armChaser('simulate', adapter, demoRail === null ? undefined : notDemo)
+      armChaser('simulate', adapter, demoRail === null ? undefined : notDemo, undefined, closesFor('sim'))
     } else {
       // Each chaser reads exactly the documents its adapter holds: Delta the
       // exact-live ones, the simulator everything else but demo.
-      armChaser('live', adapter, { mode: 'live' })
-      armChaser('paper', paperAdapter, { mode: { $ne: 'live' }, ...notDemo })
+      armChaser('live', adapter, { mode: 'live' }, undefined, closesFor('live'))
+      armChaser('paper', paperAdapter, { mode: { $ne: 'live' }, ...notDemo }, undefined, closesFor('sim'))
     }
     // The demo rail's own: a testnet order id means nothing to the simulator.
-    if (demoRail !== null) armChaser('demo', demoRail, { mode: { $ne: 'live' }, dx_paper_rail: 'demo' })
+    if (demoRail !== null) {
+      armChaser('demo', demoRail, { mode: { $ne: 'live' }, dx_paper_rail: 'demo' }, undefined, closesFor('demo'))
+    }
   }
 
   /**
@@ -2462,6 +2536,51 @@ export async function main(): Promise<void> {
       : {
           marginRefusal: (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) =>
             marginGate.refusal(order, clientOrderId, rail),
+        }),
+    ...(!onDx
+      ? {}
+      : {
+          /**
+           * A Delta close off the TOUCH (`dx-close.ts`), written onto the
+           * document too, so the chaser escalates from the price that went out.
+           * No book at all: the document's own price stands (a mark-based
+           * limit); a MARKET close with no book is named loudly — the adapter
+           * sends limits only.
+           */
+          closePrice: async (order: GatewayOrderDoc, clientOrderId: string, rail: string | null) => {
+            const contract = master.resolveSymbol(order.tradingsymbol)
+            const token = contract?.instrumentToken ?? order.instrument_token
+            const book = await closeBookFor(rail).book({ instrument_token: token, tradingsymbol: order.tradingsymbol })
+            const limitPrice =
+              book === null
+                ? null
+                : closeLimitPrice(order.transaction_type, book, {
+                    bufferPct: closeDials.bufferPct,
+                    minTicks: closeDials.minTicks,
+                    tickSize: contract?.tickSize ?? venue.defaultTick,
+                  })
+            if (book === null || limitPrice === null) {
+              if (order.order_type !== 'LIMIT' || !((order.limitPrice ?? 0) > 0)) {
+                alerts.raise({
+                  severity: 'critical',
+                  mode: orderMode(order as unknown as Record<string, unknown>),
+                  key: `close-unpriced:${clientOrderId}`,
+                  tag: order.tag,
+                  message:
+                    `${order.tradingsymbol} exit [${clientOrderId}] has no price: no fresh book on ${rail ?? 'sim'} ` +
+                    `(WS stale, REST ${book === null ? 'unavailable' : 'one-sided'}) and no limit of its own`,
+                })
+              }
+              return null
+            }
+            const far = order.transaction_type === 'BUY' ? book.ask : book.bid
+            const note = `${order.transaction_type === 'BUY' ? 'ask' : 'bid'} ${far} ${order.transaction_type === 'BUY' ? '+' : '-'} buffer (${book.source})`
+            await gatewayOrders.updateOne(
+              { clientOrderId },
+              { $set: { order_type: 'LIMIT', limitPrice, closePricedAt: Date.now(), closePriceNote: note } },
+            )
+            return { limitPrice, note }
+          },
         }),
     allowsLive,
     readHalt,

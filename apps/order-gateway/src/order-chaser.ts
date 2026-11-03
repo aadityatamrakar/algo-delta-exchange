@@ -125,6 +125,29 @@ import type { BrokerAdapter } from '@algomaker/brokers'
 import { isTerminalStatus } from './gateway.ts'
 import { orderMode, type OrderEvent, type OrderJournal } from './journal.ts'
 import type { QuoteMap, Touch } from './quote-map.ts'
+import type { AlertSink } from './alert-sink.ts'
+import { closeEscalationPrice, type CloseBook } from './dx-close.ts'
+
+/**
+ * DELTA EXITS (`dx-close.ts`): a `desk_op: 'close'` document is never handed
+ * back to a human. Where the normal schedule would `exhaust` it — the blind
+ * ladder's last rung, the peg's one cross, a peg past its deadline with no WS
+ * touch — it ESCALATES instead: every `stepMs`, `stepPct` further beyond the
+ * touch (`book`), capped at `maxMult` × the touch and the band, until it fills
+ * or Delta cancels it because the position is gone. A critical alert goes out
+ * the first time and every 10 min while it stays unfilled (the sink dedupes).
+ *
+ * ABSENT (NSE, or a gateway that did not wire it) every close keeps the old
+ * behaviour exactly.
+ */
+export interface CloseWorker {
+  /** The contract's book: WS when fresh, else the rail's Delta REST. Never throws. */
+  book(doc: Record<string, unknown>): Promise<CloseBook | null>
+  readonly alerts: AlertSink
+  readonly stepPct: number
+  readonly maxMult: number
+  readonly stepMs: number
+}
 
 /** How long an order may rest PLACED before the first reprice. */
 export const DEFAULT_CHASE_AFTER_MS = 15_000
@@ -423,6 +446,8 @@ export interface OrderChaserDeps {
    * that rests, never one that quietly reverts to crossing the spread.
    */
   readonly quotes?: Pick<QuoteMap, 'touch'>
+  /** Delta exits: escalate a close rather than hand it back. See `CloseWorker`. */
+  readonly closes?: CloseWorker
   /** Same double-push caveat as the sweep's: the journal usually notifies already. */
   readonly notify?: (event: OrderEvent) => void
   /**
@@ -607,6 +632,120 @@ export function createOrderChaser(deps: OrderChaserDeps, opts: ChaserOptions = {
     return accepted
   }
 
+  /** Is this document a Delta exit this chaser escalates rather than hands back? */
+  const isCloseWork = (doc: Record<string, unknown>): boolean =>
+    deps.closes !== undefined && doc['desk_op'] === 'close'
+
+  /** Closes already named as "at the cap, nothing more to send" — said once per process. */
+  const warnedAtCap = new Set<string>()
+
+  /**
+   * ONE STEP OF A DELTA EXIT THE NORMAL SCHEDULE DID NOT FILL — see
+   * `CloseWorker`. Called where `exhaust` would have been, and on every later
+   * pass once `closeEscalatedAt` is stamped (`chaseOne` routes it straight
+   * here, after the shared liveness and cancel-wins gates).
+   *
+   * The first call journals ONE loud line (the same shape `exhaust` writes, so
+   * the failures feed shows it) and stamps `closeEscalatedAt`; every call
+   * raises the critical alert, which the sink holds to one per 10 min.
+   * `closeSteps` advances only on a modify the broker accepted, exactly like
+   * the ladder's counter. At the cap the price stops moving and nothing is sent.
+   */
+  const escalateClose = async (
+    doc: Record<string, unknown>,
+    side: 'BUY' | 'SELL',
+    limitPrice: number,
+    liveIds: readonly string[],
+    now: number,
+  ): Promise<void> => {
+    const w = deps.closes
+    if (w === undefined) return
+    const base = String(doc['clientOrderId'] ?? '')
+    const symbol = String(doc['tradingsymbol'] ?? '')
+    const tag = String(doc['tag'] ?? '')
+    const mode = orderMode(doc)
+    const lastRaw = Number(doc['lastChasePrice'] ?? NaN)
+    const lastPrice = Number.isFinite(lastRaw) && lastRaw > 0 ? lastRaw : 0
+    const restingAt = lastPrice > 0 ? lastPrice : limitPrice
+    const escalatedAt = Number(doc['closeEscalatedAt'] ?? 0)
+    const first = !(Number.isFinite(escalatedAt) && escalatedAt > 0)
+    let steps = Number(doc['closeSteps'] ?? 0)
+    if (!Number.isFinite(steps) || steps < 0) steps = 0
+
+    if (first) {
+      steps = 0
+      const event: OrderEvent = {
+        clientOrderId: base,
+        phase: 'STATUS',
+        ok: false,
+        tag,
+        tradingsymbol: symbol,
+        ts: now,
+        mode,
+        error:
+          `${symbol} close still unfilled after the normal chase — escalating beyond the touch until filled ` +
+          `(resting at ${restingAt}; each step ${w.stepPct * 100}% further, capped at ${w.maxMult}x the touch)`,
+      }
+      await deps.journal.record(event)
+      deps.notify?.(event)
+      await deps.orders.updateOne({ clientOrderId: base }, { $set: { closeEscalatedAt: now, closeSteps: 0 } })
+      deps.log(`CLOSE ESCALATING ${symbol} [${base}]: ${event.error ?? ''}`)
+    }
+    w.alerts.raise({
+      severity: 'critical',
+      mode,
+      key: `close-unfilled:${base}`,
+      tag,
+      message:
+        `${symbol} exit [${base}] still unfilled after the normal chase — the gateway keeps repricing it ` +
+        `beyond the touch (last ${restingAt}); check the position on Delta`,
+    })
+
+    const step = steps + 1
+    const book = await w.book(doc).catch(() => null)
+    const price = closeEscalationPrice(side, step, {
+      book,
+      lastPrice,
+      limitPrice,
+      stepPct: w.stepPct,
+      maxMult: w.maxMult,
+      tickSize: Number(doc['tickSize'] ?? 0),
+    })
+    if (price === null) return
+    if (Math.abs(price - restingAt) < tickOf(Number(doc['tickSize'] ?? 0)) - EPSILON) {
+      if (!warnedAtCap.has(base)) {
+        warnedAtCap.add(base)
+        deps.log(`CLOSE AT CAP ${symbol} [${base}]: resting at ${restingAt}, the furthest the cap allows — still working`)
+      }
+      return
+    }
+    const accepted = await sendPrice(liveIds, price, base, 'close step')
+    if (accepted === 0) return
+    await deps.orders.updateOne(
+      { clientOrderId: base },
+      { $inc: { closeSteps: 1 }, $set: { chasedAt: now, lastChasePrice: price } },
+    )
+    await deps.journal.record({
+      clientOrderId: base,
+      phase: 'STATUS',
+      ok: true,
+      tag,
+      tradingsymbol: symbol,
+      ts: now,
+      mode,
+      detail: {
+        note: `close step ${step}: repriced to ${price}` + (book === null ? ' (no book — blind step)' : ` (${book.source} ${book.bid ?? '-'}/${book.ask ?? '-'})`),
+        closeStep: step,
+        price,
+        from: restingAt,
+        ...(book === null ? {} : { bid: book.bid, ask: book.ask, bookSource: book.source }),
+        modified: accepted,
+        live: liveIds.length,
+      },
+    })
+    deps.log(`CLOSE STEP ${symbol} [${base}]: ${step} — ${restingAt} -> ${price} on ${accepted}/${liveIds.length} order(s)`)
+  }
+
   /**
    * One PASSIVE document: join the touch, follow it, cross once at the end.
    *
@@ -642,7 +781,9 @@ export function createOrderChaser(deps: OrderChaserDeps, opts: ChaserOptions = {
     const crossedAt = Number(doc['pegCrossedAt'] ?? 0)
     if (Number.isFinite(crossedAt) && crossedAt > 0) {
       if (now - crossedAt <= chaseAfterMs) return
-      await exhaust(doc, now)
+      // A Delta exit is not handed back: it escalates until it fills.
+      if (isCloseWork(doc)) await escalateClose(doc, side, limitPrice, liveIds, now)
+      else await exhaust(doc, now)
       return
     }
 
@@ -658,6 +799,12 @@ export function createOrderChaser(deps: OrderChaserDeps, opts: ChaserOptions = {
       Number.isFinite(token) && token > 0 ? (deps.quotes?.touch(token) ?? null) : null
     const pastDeadline = now - Number(doc['placedAt'] ?? 0) >= chaseMaxMs
     if (touch === null) {
+      // A Delta EXIT past its deadline does not pause on a stale WS touch: the
+      // close worker reads the book from Delta REST and escalates.
+      if (pastDeadline && isCloseWork(doc)) {
+        await escalateClose(doc, side, limitPrice, liveIds, now)
+        return
+      }
       // Silent while there is still time to peg — a gap between ticks is
       // ordinary. Loud ONCE the deadline has come and gone, because a passive
       // order that can never cross is one a human has to know about.
@@ -805,7 +952,11 @@ export function createOrderChaser(deps: OrderChaserDeps, opts: ChaserOptions = {
     // A peg restates a passive intent at a price that moved and gets the short
     // peg dwell; a rung of the blind ladder is a decision to pay more and
     // keeps the full one. Same clock, same gate — only the constant differs.
-    if (now - lastPriceMoved <= (passive ? pegDwellMs : chaseAfterMs)) return
+    // A Delta exit past its normal schedule steps on its own, shorter clock.
+    const escalatedAt = Number(doc['closeEscalatedAt'] ?? 0)
+    const escalating = isCloseWork(doc) && Number.isFinite(escalatedAt) && escalatedAt > 0
+    const dwell = escalating ? (deps.closes?.stepMs ?? chaseAfterMs) : passive ? pegDwellMs : chaseAfterMs
+    if (now - lastPriceMoved <= dwell) return
 
     /**
      * ONLY a LIMIT with a known price and side can be chased. A MARKET doc has
@@ -863,6 +1014,12 @@ export function createOrderChaser(deps: OrderChaserDeps, opts: ChaserOptions = {
     const liveIds = await liveBrokerIds(brokerIds, createdAt > 0 ? createdAt : placedAt)
     if (liveIds.length === 0) return
 
+    // An exit already escalating keeps escalating, whichever mode it began in.
+    if (escalating) {
+      await escalateClose(doc, side, limitPrice, liveIds, now)
+      return
+    }
+
     /**
      * PASSIVE ORDERS LEAVE HERE. Everything above is shared — the same dwell,
      * the same cancel-wins, the same liveness, the same deploy gate — and
@@ -878,7 +1035,9 @@ export function createOrderChaser(deps: OrderChaserDeps, opts: ChaserOptions = {
 
     const attempts = Number(doc['chaseAttempts'] ?? 0)
     if (attempts >= maxAttempts) {
-      await exhaust(doc, now)
+      // A Delta exit is not handed back: it escalates until it fills.
+      if (isCloseWork(doc)) await escalateClose(doc, side, limitPrice, liveIds, now)
+      else await exhaust(doc, now)
       return
     }
 
