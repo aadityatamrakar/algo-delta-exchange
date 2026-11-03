@@ -76,6 +76,7 @@ import type {
 } from '@algomaker/desk-engine'
 import { ENGINE_DECISIONS_PATH, ENGINE_PROTECT_PATH, TRIGGERS } from '@algomaker/desk-engine'
 import type { OptionMaster } from '@algomaker/instruments'
+import { NSE, roundToStep, venueFromEnv, type VenueSpec } from '@algomaker/venue'
 import type { ApiDeps, Route, RouteCtx } from './kit.ts'
 /**
  * THE SUPERVISOR'S OWN STORE, IMPORTED ACROSS THE APP BOUNDARY.
@@ -145,8 +146,18 @@ export interface EngineDecisionRecord {
 
 const WORK_MODES: readonly WorkMode[] = ['passive', 'urgent']
 
-function isPositiveIntQty(v: unknown): v is number {
-  return isFiniteNumber(v) && Number.isInteger(v) && v > 0
+/**
+ * A quantity exactly on the venue's grid: NSE step 1 is a whole number of
+ * shares, Delta step 0.001 is whole contracts of BTC. EXACT, not within a
+ * tolerance: the supervisor puts every quantity on the grid before it posts
+ * (`wireQty`), so a float tail here is a client bug, not rounding to absorb.
+ */
+function isOnGrid(v: unknown, step: number): v is number {
+  return isFiniteNumber(v) && roundToStep(v, step) === v
+}
+
+function qtyRule(step: number): string {
+  return step === 1 ? 'integer' : `multiple of ${String(step)}`
 }
 
 /**
@@ -244,7 +255,7 @@ function optionalLeanId(raw: Record<string, unknown>, at: string): Validated<str
   return ok(v)
 }
 
-function validateWireAction(raw: unknown, i: number): Validated<WireAction> {
+function validateWireAction(raw: unknown, i: number, step: number): Validated<WireAction> {
   const at = `actions[${i}]`
   if (!isObject(raw)) return fail(`${at} is not an object`)
   if (!isNonEmptyString(raw['instrument'])) {
@@ -265,8 +276,8 @@ function validateWireAction(raw: unknown, i: number): Validated<WireAction> {
       if (raw['side'] !== 'Buy' && raw['side'] !== 'Sell') {
         return fail(`${at}.side must be 'Buy' or 'Sell', got ${JSON.stringify(raw['side'])}`)
       }
-      if (!isPositiveIntQty(raw['qty'])) {
-        return fail(`${at}.qty must be a positive integer CONTRACT quantity, not lots`)
+      if (!isOnGrid(raw['qty'], step) || !(raw['qty'] > 0)) {
+        return fail(`${at}.qty must be a positive ${qtyRule(step)} CONTRACT quantity, not lots`)
       }
       const lean = optionalLeanId(raw, at)
       if (!lean.ok) return fail(lean.error)
@@ -289,9 +300,9 @@ function validateWireAction(raw: unknown, i: number): Validated<WireAction> {
       // Zero IS legal and means "take it to flat" — the same absolute-quantity
       // rule the desk's own resize carries. Negative is not: a target quantity
       // has no side, and a sign here would silently flip a short into a long.
-      if (!isFiniteNumber(raw['targetQty']) || !Number.isInteger(raw['targetQty']) || raw['targetQty'] < 0) {
+      if (!isOnGrid(raw['targetQty'], step) || raw['targetQty'] < 0) {
         return fail(
-          `${at}.targetQty must be a non-negative integer — it is the ABSOLUTE new ` +
+          `${at}.targetQty must be a non-negative ${qtyRule(step)} — it is the ABSOLUTE new ` +
             `contract quantity, not a delta`,
         )
       }
@@ -362,7 +373,10 @@ export function validateProtectRequest(raw: unknown): Validated<ProtectRequest> 
  * boundary, and a malformed action does not fail loudly — it books a position
  * at the wrong size or against the wrong contract.
  */
-export function validateDecisionRequest(raw: unknown): Validated<DecisionRequest> {
+export function validateDecisionRequest(
+  raw: unknown,
+  venue: VenueSpec = NSE,
+): Validated<DecisionRequest> {
   if (!isObject(raw)) return fail('body must be a JSON object')
   if (!isNonEmptyString(raw['tag'])) return fail('tag is required')
   if (!isNonEmptyString(raw['symbol'])) return fail('symbol is required')
@@ -406,7 +420,7 @@ export function validateDecisionRequest(raw: unknown): Validated<DecisionRequest
 
   const actions: WireAction[] = []
   for (let i = 0; i < raw['actions'].length; i++) {
-    const v = validateWireAction(raw['actions'][i], i)
+    const v = validateWireAction(raw['actions'][i], i, venue.qtyStep)
     if (!v.ok) return fail(v.error)
     actions.push(v.value)
   }
@@ -962,6 +976,8 @@ async function workingContracts(
 
 export function engineRoutes(deps: EngineDeps): Route {
   const { service, master, store, db, now } = deps
+  // Once, at process start: the quantity grid every posted decision is held to.
+  const venue = venueFromEnv()
   ensureEngineIndex(deps)
   const audit = auditLog(deps)
   /** One `engine decision applied` line per replay storm per 10 minutes. */
@@ -997,7 +1013,7 @@ export function engineRoutes(deps: EngineDeps): Route {
       return true
     }
 
-    const parsed = validateDecisionRequest(await ctx.readJson())
+    const parsed = validateDecisionRequest(await ctx.readJson(), venue)
     if (!parsed.ok) {
       // 400 and NOTHING WRITTEN — not a `DecisionResponse` with a status,
       // because a refusal at the door is not a decision outcome and must not

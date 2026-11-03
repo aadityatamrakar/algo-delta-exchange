@@ -17,6 +17,7 @@
  */
 
 import { splitIntoTranches, type FreezeLimits } from '@algomaker/instruments'
+import { roundToStep } from '@algomaker/venue'
 // The desk's ONE definition of "this op only reduces exposure", shared rather
 // than restated: a second spelling of it here is a second thing to get wrong,
 // and the two would disagree about `roll` on the day one of them changed.
@@ -198,6 +199,19 @@ export function freezeUnknownReason(input: {
 }
 
 /**
+ * A quantity's whole lots, or null when it is not a positive whole number of
+ * them. TO FLOAT PRECISION, not `%`: `0.15 % 0.001` is 0.0009999999999999913,
+ * which refused every Delta order (lot 0.001 BTC). The tolerance is a
+ * billionth of a lot, so an NSE share off a lot (13126 of 2625) still refuses.
+ */
+export function wholeLotsOf(quantity: number, lotSize: number): number | null {
+  if (!Number.isFinite(quantity) || !(lotSize > 0)) return null
+  const lots = Math.round(quantity / lotSize)
+  if (!(lots > 0)) return null
+  return Math.abs(quantity - lots * lotSize) <= lotSize * 1e-9 ? lots : null
+}
+
+/**
  * Turn one desk order document into the broker intents it becomes.
  *
  * Pure. Splitting happens HERE rather than inside the adapter so the caller can
@@ -226,7 +240,7 @@ export function planOrder(input: PlanOrderInputs): PlannedOrder {
   if (contract.lotSize <= 0) {
     return refuse(`${doc.tradingsymbol} has no lot size`)
   }
-  if (doc.quantity % contract.lotSize !== 0) {
+  if (wholeLotsOf(doc.quantity, contract.lotSize) === null) {
     // Not a whole number of lots cannot have been traded, and rounding it here
     // would silently size the position differently from the desk's intent.
     return refuse(`quantity ${doc.quantity} is not a multiple of lot size ${contract.lotSize}`)
@@ -239,11 +253,11 @@ export function planOrder(input: PlanOrderInputs): PlannedOrder {
    * new road.
    */
   const nowQuantity = input.slice?.quantity ?? doc.quantity
-  if (!(nowQuantity > 0) || nowQuantity % contract.lotSize !== 0) {
+  const totalLots = wholeLotsOf(nowQuantity, contract.lotSize)
+  if (totalLots === null) {
     return refuse(`tranche quantity ${nowQuantity} is not a whole number of lots`)
   }
 
-  const totalLots = nowQuantity / contract.lotSize
   const { underlying, underlyingSource } = resolveUnderlying(doc, contract)
   const maxLots = freeze.maxLotsPerOrder(underlying, contract.lotSize)
   const tranches = splitIntoTranches(totalLots, maxLots)
@@ -275,7 +289,7 @@ export function planOrder(input: PlanOrderInputs): PlannedOrder {
     },
     side: doc.transaction_type,
     orderType: doc.order_type === 'LIMIT' ? 'LIMIT' : 'MARKET',
-    quantity: lots * contract.lotSize,
+    quantity: roundToStep(lots * contract.lotSize, contract.lotSize),
     lots,
     ...(doc.order_type === 'LIMIT' && doc.limitPrice !== undefined
       ? { limitPrice: doc.limitPrice }
@@ -291,7 +305,9 @@ export function planOrder(input: PlanOrderInputs): PlannedOrder {
     // maxLots === null means the freeze table has no row for this key, so
     // `splitIntoTranches` sent the whole thing as ONE order. Report it.
     freezeUnknown: maxLots === null,
-    expectedQty: doc.quantity,
+    // On the lot grid, so a float-noisy 0.15000000000000002 is not a total
+    // that fills summing to 0.15 can never reach. Identity on NSE.
+    expectedQty: roundToStep(doc.quantity, contract.lotSize),
     maxLotsPerOrder: maxLots,
   }
 }
@@ -333,8 +349,8 @@ export function planTranches(input: {
 }): readonly TranchePlanEntry[] | null {
   const { quantity, lotSize } = input
   if (!Number.isFinite(quantity) || quantity <= 0 || !(lotSize > 0)) return null
-  const totalLots = quantity / lotSize
-  if (!Number.isInteger(totalLots) || totalLots <= 0) return null
+  const totalLots = wholeLotsOf(quantity, lotSize)
+  if (totalLots === null) return null
 
   const sliceLots = input.workMode === 'urgent' ? input.freezeMaxLots : dialLots(input.trancheLots)
   // No dial, or a freeze limit nobody knows: send it the way it has always been
@@ -343,7 +359,7 @@ export function planTranches(input: {
   // hide the thing that actually needs fixing.
   if (sliceLots === null || sliceLots === undefined) return null
   if (totalLots <= sliceLots) return null
-  return splitIntoTranches(totalLots, sliceLots).map((lots) => ({ qty: lots * lotSize }))
+  return splitIntoTranches(totalLots, sliceLots).map((lots) => ({ qty: roundToStep(lots * lotSize, lotSize) }))
 }
 
 /**
