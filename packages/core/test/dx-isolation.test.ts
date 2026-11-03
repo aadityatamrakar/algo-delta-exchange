@@ -73,7 +73,7 @@ const PM2_VERB = '(?:start|stop|restart|reload|delete|logs|flush|describe|startO
 /** Each rule is run over the whole file, so a call split across lines (`app(\n  'desk-gateway',`) is still seen. */
 const RULES: readonly { readonly what: string; readonly re: RegExp }[] = [
   { what: 'a live desk port (8790-8799)', re: /(?::|['"`]|[=?|]\s*|\bport\s*[:=]?\s*)879\d(?!\d|\.\d)/gi },
-  { what: 'the live desk database (27017/algomaker)', re: /27017\/algomaker(?!_dx)/g },
+  { what: 'the live desk database (27017/<live db>)', re: /27017\/algomaker(?!_dx)/g },
   { what: 'the live desk database by name', re: /(?:getSiblingDB|\.db)\(\s*['"`]algomaker(?!_dx)[\w-]*['"`]/g },
   { what: "the live pm2 namespace 'desk'", re: /\bnamespace\s*:\s*['"`]desk['"`]/g },
   { what: 'the live pm2 namespace on a pm2 command line', re: new RegExp(`\\bpm2\\)?\\s+${PM2_VERB}\\s+(?:--?\\S+\\s+)*desk(?![-\\w.])`, 'gi') },
