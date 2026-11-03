@@ -91,6 +91,11 @@ export interface TickOpts {
   readonly pendingLots?: number
   /** false: decide but fill nothing (an order still working). */
   readonly fill?: boolean
+  /**
+   * The exchange REFUSES these wings of this tick's opens: the package is
+   * routed and finishes, the state goes on as routed, but no leg appears.
+   */
+  readonly refuse?: ReadonlyArray<OptType>
   readonly dials?: Dials
 }
 
@@ -177,6 +182,7 @@ export class Run {
     this.state = d.stateAfter
     for (const a of d.actions) {
       if (a.op === 'open') {
+        if (o.refuse?.includes(a.optType) === true) continue
         const row = inputs.chain.strikes.find((s) => s.strike === a.strike)
         const quote = a.optType === 'CE' ? row?.ce : row?.pe
         const px = this.fillMode === 'ltp' ? quote?.ltp : quote?.bid

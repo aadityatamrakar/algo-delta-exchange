@@ -516,6 +516,10 @@ export interface Dials {
   /** A reference price older than this is not traded on: no entry, and it is
    * not counted as a crossing. Stops still run. */
   readonly bs_ref_max_age_s: number;
+  /** A level whose entry the venue refused — nothing opened, or only one leg
+   * and that leg closed as a half straddle — is not sold again for this many
+   * seconds; after it, on its next crossing. 0 = off. */
+  readonly bs_level_cooldown_s: number;
   /** One-shot commands as COUNTERS: the dashboard PATCHes +1, and the engine
    * acts once when the dial exceeds the count it has already seen. Close book
    * closes every straddle and halts; Re-arm clears a halt. */
@@ -762,6 +766,7 @@ export const DEFAULT_DIALS: Dials = {
   bs_no_entry_before_expiry_min: 0, // off
   bs_flat_before_expiry_min: 0, // hold into settlement
   bs_ref_max_age_s: 10,
+  bs_level_cooldown_s: 300,
   bs_close_req: 0,
   bs_rearm_req: 0,
 };
@@ -1097,6 +1102,7 @@ export const DIAL_SECTIONS: ReadonlyArray<DialSection> = [
       'bs_no_entry_before_expiry_min',
       'bs_flat_before_expiry_min',
       'bs_ref_max_age_s',
+      'bs_level_cooldown_s',
       // The two book actions, as counters
       'bs_close_req',
       'bs_rearm_req',
@@ -1137,6 +1143,7 @@ const BS_RANGES: Partial<Record<BsKey, (v: number) => boolean>> = {
   bs_no_entry_before_expiry_min: nonNegative,
   bs_flat_before_expiry_min: nonNegative,
   bs_ref_max_age_s: (v) => v > 0,
+  bs_level_cooldown_s: nonNegative,
   bs_close_req: count,
   bs_rearm_req: count,
 };

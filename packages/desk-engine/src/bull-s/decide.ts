@@ -200,23 +200,42 @@ function arm(bs: BullSState, inputs: BullSInputs, dials: Dials, lastRef: number,
   };
 }
 
-function reconcile(groups: readonly BullSGroup[], inputs: BullSInputs): BullSGroup[] {
+/** An entry that never opened: what was held of it when the book settled. */
+interface FailedEntry {
+  readonly group: BullSGroup;
+  /** The one wing that filled, or '' when nothing did. */
+  readonly held: '' | OptType;
+}
+
+function reconcile(
+  groups: readonly BullSGroup[],
+  inputs: BullSInputs,
+): { groups: BullSGroup[]; failed: FailedEntry[] } {
   const { legs } = inputs;
   const settled = inputs.pendingLots === 0;
   const out: BullSGroup[] = [];
+  const failed: FailedEntry[] = [];
   for (const g of groups) {
     const ce = heldLeg(legs, g.strike, 'CE');
     const pe = heldLeg(legs, g.strike, 'PE');
+    // A sent entry that the settled book shows WHOLE has opened; one that
+    // shows nothing or one wing was refused (the venue's cap, a rejected
+    // leg) — the one fact the size step and the level cooldown turn on.
+    const both = ce !== undefined && pe !== undefined;
+    if (settled && !g.filled && !both) {
+      failed.push({ group: g, held: ce !== undefined ? 'CE' : pe !== undefined ? 'PE' : '' });
+    }
     const next: BullSGroup = {
       ...g,
       ceEntry: ce?.entry ?? g.ceEntry,
       peEntry: pe?.entry ?? g.peEntry,
       ceOpen: settled ? ce !== undefined : g.ceOpen,
       peOpen: settled ? pe !== undefined : g.peOpen,
+      filled: g.filled || (settled && both),
     };
     if (next.ceOpen || next.peOpen) out.push(next);
   }
-  if (!settled) return out;
+  if (!settled) return { groups: out, failed };
   // Adopt every engine short no straddle accounts for, one straddle per strike.
   const orphans = legs.filter(
     (l) =>
@@ -239,9 +258,12 @@ function reconcile(groups: readonly BullSGroup[], inputs: BullSInputs): BullSGro
       ceOpen: ce !== undefined,
       peOpen: pe !== undefined,
       breachSinceMs: 0,
+      // An adopted short was sold by this book at some point; only a whole
+      // straddle counts as one that opened.
+      filled: ce !== undefined && pe !== undefined,
     });
   }
-  return out;
+  return { groups: out, failed };
 }
 
 /** Buy back one straddle's held legs, PE then CE (rule 9). */
@@ -304,7 +326,46 @@ export function decideBullS(
   }
 
   // ── 2. reconcile with the book ───────────────────────────────────────────
-  bs = { ...bs, groups: reconcile(bs.groups, inputs) };
+  const rec = reconcile(bs.groups, inputs);
+  bs = { ...bs, groups: rec.groups, cooldowns: bs.cooldowns.filter((c) => c.untilMs > nowMs) };
+
+  // ── 2b. an entry the venue refused ──────────────────────────────────────
+  // The size stepped when the entry was sent; it steps only for a straddle
+  // that OPENED, so a refused one is undone to the size it was sold at. Its
+  // level cools down `bs_level_cooldown_s` (once — a half closed later is the
+  // same refusal), and the host's recorded reason is named and consumed.
+  for (const f of rec.failed) {
+    const cdS = dials.bs_level_cooldown_s;
+    const refusal = bs.entryRefusal;
+    const what =
+      f.held === ''
+        ? refusal !== '' ? refusal : 'nothing filled'
+        : `only the ${f.held} filled${refusal !== '' ? `; ${refusal}` : ''}`;
+    const cooling = bs.cooldowns.some((c) => sameStrike(c.strike, f.group.strike));
+    bs = {
+      ...bs,
+      size: f.group.lots,
+      entryRefusal: '',
+      cooldowns:
+        cdS > 0 && !cooling
+          ? [...bs.cooldowns, { strike: f.group.strike, untilMs: nowMs + cdS * 1_000, reason: what }]
+          : bs.cooldowns,
+    };
+    if (!cooling) {
+      notes.push(
+        `entry at ${fmt(f.group.strike)} was refused (${what}): size stays ${f.group.lots}` +
+          (cdS > 0 ? `, level cools down ${fmt(cdS)}s` : ''),
+      );
+    }
+  }
+  // Every level still cooling is said on EVERY decision until it clears, so
+  // the book's last-decision line names the refusal for as long as it holds —
+  // not only on the one pass that found it. (One just found is said above.)
+  const foundNow = new Set(rec.failed.map((f) => f.group.strike));
+  const coolNote = (c: { strike: number; untilMs: number; reason: string }): string =>
+    `level ${fmt(c.strike)} cooling down after a refused entry (${c.reason}) — ` +
+    `${Math.ceil((c.untilMs - nowMs) / 1_000)}s left`;
+  for (const c of bs.cooldowns) if (!foundNow.has(c.strike)) notes.push(coolNote(c));
 
   // ── 3. the commands — Re-arm first, so a Close in the same pass wins ─────
   if (dials.bs_rearm_req > bs.rearmReqSeen) {
@@ -493,6 +554,13 @@ export function decideBullS(
   if (bs.groups.some((g) => sameStrike(g.strike, level))) {
     return refuse(`${fmt(level)} already holds a straddle`);
   }
+  const cool = bs.cooldowns.find((c) => sameStrike(c.strike, level));
+  if (cool !== undefined) {
+    // Said once, as the reason this crossing was not sold.
+    const said = notes.indexOf(coolNote(cool));
+    if (said >= 0) notes.splice(said, 1);
+    return refuse(coolNote(cool));
+  }
   /**
    * UNLISTED IS A FACT, UNQUOTED IS A MOMENT. A level the chain does not list
    * at all is skipped and the crossing is spent (never substituted). A level it
@@ -535,6 +603,7 @@ export function decideBullS(
     ceOpen: true,
     peOpen: true,
     breachSinceMs: 0,
+    filled: false,
   };
   const next = nextSize(size, dials);
   const after = withBs(state, { ...bs, groups: [...bs.groups, group], size: next });

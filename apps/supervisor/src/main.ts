@@ -1127,6 +1127,11 @@ export class Supervisor {
         // consumes the mark and hands it out, and nothing else calls `next()`.
         marks: new MarkClock(this.#d.venue),
         onMark: (sample) => this.#onMark(runtime, sample),
+        // A BULL-S book's line is every pass's reason (the host only calls this
+        // for one), so a refused entry reaches the page within one report.
+        onDecision: (reason) => {
+          runtime.lastDecision = reason
+        },
         // The switch as the poll last resolved it. `#retune` replaces
         // `runtime.book` on every pass, so a PATCH on the strategy row lands
         // within 5 s — there is no nudge for one, the poll is the guarantee.

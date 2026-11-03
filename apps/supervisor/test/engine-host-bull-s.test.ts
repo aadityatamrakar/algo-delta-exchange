@@ -186,6 +186,8 @@ interface Harness {
   readonly ring: SpotRing
   readonly cancels: string[]
   readonly samples: MarkSample[]
+  /** Every pass's reason, as the page's last-decision line receives it. */
+  readonly reasons: string[]
   book: LegPosition[]
   dials: Dials
   chain: (asOf: number) => ChainSnap
@@ -209,6 +211,7 @@ function make(over: { book?: LegPosition[]; dials?: Dials; index?: number } = {}
     ring,
     cancels: [] as string[],
     samples: [] as MarkSample[],
+    reasons: [] as string[],
     book: over.book ?? [],
     dials: over.dials ?? dailyDials(),
     chain: (asOf: number) => chainOf(asOf),
@@ -240,6 +243,9 @@ function make(over: { book?: LegPosition[]; dials?: Dials; index?: number } = {}
     log,
     ring,
     spotAsOf: () => ring.latest()?.ms ?? 0,
+    onDecision: (reason: string): void => {
+      h.reasons.push(reason)
+    },
     onMark: (sample: MarkSample): void => {
       h.samples.push(sample)
     },
@@ -331,6 +337,7 @@ test('a restart with a half straddle (PE held, CE not) neither re-enters the lev
     ceOpen: false,
     peOpen: true,
     breachSinceMs: 0,
+    filled: false,
   }
   const h = make({ book: [legOf(76_600, 'PE', pe)] })
   await h.seed({
@@ -364,7 +371,7 @@ test('a restart with the CE still working keeps the half straddle and adopts not
       ...BS_EMPTY,
       groups: [{
         strike: 76_600, lots: 50, ceEntry: premium(76_600, 'CE') - 1, peEntry: pe,
-        openedMs: T0 - 60_000, ceOpen: true, peOpen: true, breachSinceMs: 0,
+        openedMs: T0 - 60_000, ceOpen: true, peOpen: true, breachSinceMs: 0, filled: false,
       }],
       size: 100,
       lastRef: INDEX,
@@ -465,4 +472,72 @@ test('3 Nov: a jump-2 book sells the nearest level of ITS grid on start, once qu
   h.advance(1_000)
   await h.host.evaluate()
   assert.deepEqual(opens(h.client.requests[0]).map((o) => o.instrument), ['P-BTC-76400-041126', 'C-BTC-76400-041126'])
+})
+
+// ── a refused entry (demo, 3 Nov: OI cap → only_reduce_only_orders_allowed) ──
+
+const OI_CAP = 'oi-cap: 76600 open interest at the venue cap'
+
+test('a refused entry: the size stays, the level cools, and the oi-cap reason reaches the book\'s last-decision line', async () => {
+  const h = make()
+  // Both orders refused by the gateway's whole-package OI cap: DONE, nothing filled.
+  h.client.queue((r) => ({
+    ...respond(r.decisionId, 'DONE', []),
+    skips: [
+      { instrument: 'P-BTC-76600-041126', reason: OI_CAP },
+      { instrument: 'C-BTC-76600-041126', reason: OI_CAP },
+    ],
+  }))
+  await h.host.evaluate()
+  assert.equal(h.client.requests[0]?.trigger, 'bs-entry')
+  assert.equal((await h.state()).ruleState.bs.entryRefusal, OI_CAP, 'the host recorded why')
+
+  h.advance(1_000)
+  await h.host.evaluate()
+  const bs = (await h.state()).ruleState.bs
+  assert.equal(bs.size, 50, 'the pyramid did not step on an entry that never opened')
+  assert.deepEqual(bs.cooldowns.map((c) => c.strike), [76_600])
+  assert.equal(bs.entryRefusal, '')
+  const line = h.reasons.at(-1) ?? ''
+  assert.match(line, /entry at 76600 was refused \(oi-cap: 76600 open interest at the venue cap\): size stays 50, level cools down 300s/)
+  // And it stays on the line while the level cools, not only on the pass that found it.
+  h.advance(30_000)
+  await h.host.evaluate()
+  assert.match(h.reasons.at(-1) ?? '', /level 76600 cooling down after a refused entry \(oi-cap: 76600 open interest at the venue cap\)/)
+  assert.equal(h.client.requests.length, 1, 'nothing re-sent at the level')
+})
+
+test('a half-filled entry (CE refused) is closed, the size stays, and the level cools', async () => {
+  const h = make()
+  h.client.queue((r) => ({
+    ...respond(r.decisionId, 'DONE', [{ instrument: 'P-BTC-76600-041126', side: 'Sell', qty: 0.05, price: 200 }]),
+    skips: [{ instrument: 'C-BTC-76600-041126', reason: 'only_reduce_only_orders_allowed' }],
+  }))
+  await h.host.evaluate()
+  h.book = [legOf(76_600, 'PE', 200)]
+  h.advance(1_000)
+  await h.host.evaluate()
+  const close = h.client.requests[1]
+  assert.equal(close?.trigger, 'bs-stop')
+  assert.deepEqual(close?.actions.map((a) => [a.op, a.instrument]), [['close', 'P-BTC-76600-041126']])
+  const bs = (await h.state()).ruleState.bs
+  assert.equal(bs.size, 50)
+  assert.match(bs.cooldowns[0]?.reason ?? '', /only the PE filled; only_reduce_only_orders_allowed/)
+  // Re-entering at a bigger size after the failed one was the live defect.
+  h.book = []
+  h.advance(1_000)
+  await h.host.evaluate()
+  assert.equal(h.client.requests.filter((r) => r.trigger === 'bs-entry').length, 1, 'no re-entry while it cools')
+})
+
+test('an entry that filled whole steps the size as before, and records no refusal', async () => {
+  const h = make()
+  await h.host.evaluate()
+  h.book = [legOf(76_600, 'PE', 200), legOf(76_600, 'CE', 210)]
+  h.advance(1_000)
+  await h.host.evaluate()
+  const bs = (await h.state()).ruleState.bs
+  assert.equal(bs.size, 100)
+  assert.equal(bs.groups[0]?.filled, true)
+  assert.deepEqual(bs.cooldowns, [])
 })

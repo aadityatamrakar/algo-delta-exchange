@@ -357,7 +357,7 @@ async function foldOne(
      * carries no `limitPrice` — so the first package of a paper session is a
      * live candidate for exactly this shape.
      */
-    await claimOrder(deps, decisionId, clientOrderId)
+    await claimOrder(deps, decisionId, clientOrderId, undefined, refusalOf(doc, 0, plannedQty))
     await settle(deps, decisionId, clientOrderId, now)
     await markFolded(deps, clientOrderId, now)
     return false
@@ -394,7 +394,13 @@ async function foldOne(
     ...(leanId === undefined ? {} : { leanId }),
     ...(fee === undefined ? {} : { fee }),
   }
-  const alreadyRecorded = !(await claimOrder(deps, decisionId, clientOrderId, booked))
+  const alreadyRecorded = !(await claimOrder(
+    deps,
+    decisionId,
+    clientOrderId,
+    booked,
+    refusalOf(doc, qty, plannedQty),
+  ))
 
   const outcome = await foldIntoBook(deps, {
     tag: str(decision['tag']),
@@ -504,15 +510,39 @@ async function claimOrder(
   decisionId: string,
   clientOrderId: string,
   fill?: Fill,
+  refused?: { readonly instrument: string; readonly reason: string },
 ): Promise<boolean> {
+  const push: Record<string, unknown> = {}
+  if (fill !== undefined) push['fills'] = fill
+  // WHY THE GATEWAY OR THE VENUE DID NOT TRADE IT, onto the decision's own
+  // `skips` — the list a replay of this decision answers the supervisor with,
+  // so the engine can name the refusal (`oi-cap: …`) on the book. Rides the
+  // same conditional claim, so it is written once.
+  if (refused !== undefined) push['skips'] = refused
   const res = await deps.store.collection(COLLECTIONS.decisions).updateOne(
     { decisionId, mode: 'paper', foldedOrders: { $ne: clientOrderId } },
     {
       $addToSet: { foldedOrders: clientOrderId },
-      ...(fill === undefined ? {} : { $push: { fills: fill } }),
+      ...(Object.keys(push).length === 0 ? {} : { $push: push }),
     },
   )
   return res.matchedCount !== 0
+}
+
+/**
+ * The gateway's stated reason an order traded less than it was asked, as a
+ * decision skip — or undefined when it traded in full or said nothing.
+ */
+export function refusalOf(
+  doc: Record<string, unknown>,
+  bookedQty: number,
+  plannedQty: number,
+): { instrument: string; reason: string } | undefined {
+  if (bookedQty >= plannedQty) return undefined
+  const reason = typeof doc['reason'] === 'string' ? doc['reason'].trim() : ''
+  if (reason === '') return undefined
+  const instrument = typeof doc['tradingsymbol'] === 'string' ? doc['tradingsymbol'] : ''
+  return { instrument, reason }
 }
 
 /**

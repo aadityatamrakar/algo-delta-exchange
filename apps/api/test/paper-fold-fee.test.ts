@@ -28,3 +28,12 @@ test('no fee anywhere is undefined, not zero — the NSE fill stays as it was', 
   assert.equal(foldedFee({ fee: 'x' }, 1, 1), undefined)
   assert.equal(foldedFee({ fee: -1 }, 1, 1), undefined)
 })
+
+test('a refused order\'s reason becomes a decision skip; a full fill or a silent one adds none', async () => {
+  const { refusalOf } = await import('../src/paper-fold.ts')
+  const doc = { tradingsymbol: 'C-BTC-77200-041126', state: 'REJECTED', reason: 'oi-cap: 77200 CE open interest at the cap' }
+  assert.deepEqual(refusalOf(doc, 0, 0.005), { instrument: 'C-BTC-77200-041126', reason: 'oi-cap: 77200 CE open interest at the cap' })
+  assert.deepEqual(refusalOf({ ...doc, state: 'PARTIAL' }, 0.002, 0.005)?.reason, 'oi-cap: 77200 CE open interest at the cap')
+  assert.equal(refusalOf(doc, 0.005, 0.005), undefined)
+  assert.equal(refusalOf({ tradingsymbol: 'x', state: 'REJECTED' }, 0, 0.005), undefined)
+})
