@@ -16,6 +16,7 @@
     "@algomaker/brokers": "1.0.0",
     "@algomaker/instruments": "1.0.0",
     "@algomaker/order-bus": "1.0.0",
+    "@algomaker/venue": "*",
     "ws": "^8.21.1"
   },
   "devDependencies": {

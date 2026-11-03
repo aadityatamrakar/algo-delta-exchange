@@ -91,7 +91,10 @@ export interface SettlementBooking {
   readonly price: number
   /** Total settlement fee + GST, USD. 0 when worthless. */
   readonly fee: number
-  /** The expiry instant — the moment Delta settled it. */
+  /**
+   * The expiry instant − 1 ms: the last moment of the settled day, so
+   * `DX.dayKey(ts) === expiry` (the instant itself belongs to the next day).
+   */
   readonly ts: number
   readonly expiry: string
   readonly strike: number
@@ -177,7 +180,10 @@ export function planDxSettlement(
         qty,
         price,
         fee,
-        ts: instant,
+        // ONE MILLISECOND BEFORE the instant: the DX day D is [D-1 12:00Z,
+        // D 12:00Z), so a close stamped AT 12:00:00.000 would land in the next
+        // day's report and day guard. This keeps the expiry's P&L on its day.
+        ts: instant - 1,
         expiry: first.expiry,
         strike: first.strike,
         type: first.type,

@@ -20,23 +20,8 @@ const clean = (x: number, decimals: number): number => {
   return Object.is(v, -0) ? 0 : v
 }
 
-/** Nearest multiple of `step`, float-clean. */
-export function roundToStep(x: number, step: number): number {
-  return clean(Math.round(x / step) * step, decimalsOf(step))
-}
-
-export function isOnStep(x: number, step: number): boolean {
-  if (!Number.isFinite(x)) return false
-  return Math.abs(x / step - Math.round(x / step)) < 1e-6
-}
-
-// TODO(T1): import from @algomaker/venue
-/** Integer contracts in `qty` at `step` per contract; RangeError off the step. */
-export function contractsOf(qty: number, step: number): number {
-  if (!isOnStep(qty, step)) throw new RangeError(`quantity ${qty} is not a multiple of the ${step} step`)
-  const n = Math.round(qty / step)
-  return Object.is(n, -0) ? 0 : n
-}
+// The step grid itself is the venue's (T1) — one rule for the whole desk.
+export { contractsOf, isOnStep, roundToStep } from '@algomaker/venue'
 
 /** Desk quantity of `contracts` contracts at `step`, float-clean. */
 export function qtyOfContracts(contracts: number, step: number): number {

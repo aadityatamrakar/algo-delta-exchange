@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { optionFee } from '@algomaker/dx'
+import { DX } from '@algomaker/venue'
 import {
   createDxSettlementJob,
   planDxSettlement,
@@ -46,13 +47,15 @@ test('after the instant each expired leg is closed at Delta\'s published price, 
   assert.equal(plan.waiting.length, 0)
   const ce = plan.book.find((b) => b.tradingsymbol === CE) as SettlementBooking
   const pe = plan.book.find((b) => b.tradingsymbol === PE) as SettlementBooking
-  // A short is closed by a BUY, at the settlement price, stamped at the instant.
+  // A short is closed by a Buy, at the settlement price, stamped 1 ms before
+  // the instant so it is booked on the expiry's own day.
   assert.deepEqual(
     { side: ce.side, qty: ce.qty, price: ce.price, ts: ce.ts, deskTag: ce.deskTag, productId: ce.productId },
-    { side: 'Buy', qty: 0.05, price: 412.3, ts: INSTANT, deskTag: 'ce1', productId: 501 },
+    { side: 'Buy', qty: 0.05, price: 412.3, ts: INSTANT - 1, deskTag: 'ce1', productId: 501 },
   )
   // Settlement fee at the taker rate, capped — on the index the price implies
   // (a CE settles at index − strike).
+  assert.equal(DX.dayKey(ce.ts), EXPIRY, 'the close is on the expiry day, not the next')
   assert.equal(ce.fee, optionFee({ contracts: 50, index: 76600 + 412.3, premium: 412.3 }).total)
   // Worthless: no settlement fee.
   assert.deepEqual({ price: pe.price, fee: pe.fee }, { price: 0, fee: 0 })
