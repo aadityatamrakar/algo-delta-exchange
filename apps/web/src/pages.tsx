@@ -67,6 +67,7 @@ import { useReauth } from './auth.tsx'
 import { ManualOrderDialog } from './manual-order.tsx'
 import { ProtectDialog, type ProtectTarget } from './protect.tsx'
 import { OpenLegs, PnlCards } from './pnl.tsx'
+import { MarksSourceNote } from './marks-source.tsx'
 import { PayoffPanel } from './payoff.tsx'
 import { StrategyReasonLine } from './strategies.tsx'
 
@@ -1007,6 +1008,14 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
         {pos !== null && asOf(posAt) !== undefined ? (
           <Text size="sm" color="secondary">{asOf(posAt)}</Text>
         ) : null}
+        {/*
+          WHICH EXCHANGE PRICED THIS BOOK — Delta's testnet for a demo-rail
+          paper book, production otherwise — and, beside it, the legs that
+          fell back to production because no demo quote has arrived. Never
+          silent: those figures are another exchange's. Nothing at all when
+          an older bridge sent neither field.
+        */}
+        {pos !== null ? <MarksSourceNote source={pos.marksSource} fallback={pos.marksFallback} /> : null}
         {/*
           THE VIEW TOGGLE, beside the name of the book it re-reads. "Shorts
           only" is the strategy's own view under `delta_shorts_only` — see the

@@ -24,6 +24,7 @@ import { Banner } from '@astryxdesign/core/Banner'
 import { Link } from '@astryxdesign/core/Link'
 import { Table, pixel, proportional } from '@astryxdesign/core/Table'
 import type { TableColumn } from '@astryxdesign/core/Table'
+import { MarksFallbackBadge } from './marks-source.tsx'
 import { inr, money, sign, signed, type DeskMode, type LegQuote, type PnlLeg, type PnlStrategy } from './api.ts'
 import { formatContract } from './contract.ts'
 import { inrSecond } from './format.ts'
@@ -159,6 +160,7 @@ function StrategyPnlCard(props: { row: PnlStrategy }): React.ReactElement {
           </span>
           <HStack gap={2} align="center" style={{ flexShrink: 0 }}>
             {r.complete ? null : <Badge variant="warning" label="partial" />}
+            <MarksFallbackBadge fallback={r.marksFallback} />
             <Money value={shown} size="sm" weight="bold" />
             <Text color="secondary">›</Text>
           </HStack>
