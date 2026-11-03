@@ -6,13 +6,14 @@
  * destroys a working credential while reporting success, and the next thing
  * anyone learns about it is that the gateway will not log in.
  *
- * The DX desk has ONE broker, Delta Exchange India. XTS is gone from the api
- * (it 404s the kind) and Zerodha is not this desk's, so neither gets a card
- * even when the list carries a row for it.
+ * The DX desk has TWO Delta cards: Delta Exchange India (live) and, below it,
+ * Delta Demo (testnet), where paper books on the Demo rail trade. XTS is gone
+ * from the api (it 404s the kind) and Zerodha is not this desk's, so neither
+ * gets a card even when the list carries a row for it.
  */
 import { expect, test, describe } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
-import { BrokersSection } from '../src/brokers.tsx'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { BrokersSection, DELTA_DEMO_BASE_URL } from '../src/brokers.tsx'
 import { installFetch, type SentRequest } from './http.tsx'
 
 const DELTA_ROW = {
@@ -33,6 +34,7 @@ const ZERODHA_ROW = {
 function mountBrokers(rows: unknown[] = [DELTA_ROW, ZERODHA_ROW]): SentRequest[] {
   const sent = installFetch(({ path, method }) => {
     if (path === '/v1/desk/brokers' && method === 'GET') return { body: { brokers: rows } }
+    if (path === '/v1/desk/brokers/delta-demo/test') return { body: { ok: true, verifiedAt: 1_700_000_100_000, note: 'testnet wallet ok' } }
     if (path === '/v1/desk/brokers/delta/test') return { body: { ok: true, verifiedAt: 1_700_000_100_000, note: 'signed wallet read ok' } }
     return { body: { ok: true, kind: 'delta' } }
   })
@@ -52,17 +54,26 @@ function type(label: string, value: string): void {
   })
 }
 
-async function openEditor(heading = 'Delta live'): Promise<void> {
+/** One card, by the broker it is for (the group's name is the kind's label, not the stored one). */
+const card = (name: 'Delta Exchange India' | 'Delta Demo (testnet)'): ReturnType<typeof within> =>
+  within(screen.getByRole('group', { name }))
+
+async function openEditor(
+  heading = 'Delta live',
+  name: 'Delta Exchange India' | 'Delta Demo (testnet)' = 'Delta Exchange India',
+): Promise<void> {
   await screen.findByText(heading)
-  act(() => { screen.getByRole('button', { name: 'Edit credentials' }).click() })
+  act(() => { card(name).getByRole('button', { name: 'Edit credentials' }).click() })
   await screen.findByLabelText('API key')
 }
 
 describe('the broker cards', () => {
-  test('one Delta card — no XTS, no Zerodha, even when the list has a zerodha row', async () => {
+  test('two Delta cards, live then demo — no XTS, no Zerodha, even when the list has a zerodha row', async () => {
     mountBrokers()
     await screen.findByText('Delta live')
-    expect(screen.getAllByRole('button', { name: 'Edit credentials' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Edit credentials' })).toHaveLength(2)
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label'))
+    expect(groups).toEqual(['Delta Exchange India', 'Delta Demo (testnet)'])
     expect(screen.queryByText(/XTS/)).toBe(null)
     expect(screen.queryByText(/Zerodha/)).toBe(null)
     // The base URL is on the card: it is where the gateway signs its requests to.
@@ -72,11 +83,48 @@ describe('the broker cards', () => {
   test('Test connection posts to the delta kind and shows the verdict', async () => {
     const sent = mountBrokers()
     await screen.findByText('Delta live')
-    act(() => { screen.getByRole('button', { name: 'Test connection' }).click() })
+    act(() => { card('Delta Exchange India').getByRole('button', { name: 'Test connection' }).click() })
     await waitFor(() =>
       expect(sent.some((r) => r.method === 'POST' && r.path === '/v1/desk/brokers/delta/test')).toBe(true))
+    expect(sent.some((r) => r.path === '/v1/desk/brokers/delta-demo/test')).toBe(false)
     expect(await screen.findByText('Login succeeded')).toBeTruthy()
     expect(sent.some((r) => r.path.includes('/xts') || r.path.includes('/zerodha'))).toBe(false)
+  })
+})
+
+describe('the Delta Demo (testnet) card', () => {
+  const DEMO_ROW = {
+    kind: 'delta-demo', label: 'Delta Demo (testnet)', meta: { baseUrl: DELTA_DEMO_BASE_URL },
+    configured: true, state: 'ok', lastVerifiedAt: null, lastError: null,
+  }
+
+  test('an unconfigured demo card is drawn anyway, and its form defaults to the testnet host', async () => {
+    const sent = mountBrokers([DELTA_ROW])
+    await openEditor('Delta Demo (testnet)', 'Delta Demo (testnet)')
+    expect(DELTA_DEMO_BASE_URL).toBe('https://cdn-ind.testnet.deltaex.org')
+    expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe(DELTA_DEMO_BASE_URL)
+    type('API key', 'demo-k')
+    type('API secret', 'demo-s')
+    act(() => { screen.getByRole('button', { name: 'Save credential' }).click() })
+    await waitFor(() => expect(puts(sent).length).toBe(1))
+    // The demo kind, never the live one: testnet keys must not land on the production row.
+    expect(puts(sent)[0]?.path).toBe('/v1/desk/brokers/delta-demo')
+    expect(puts(sent)[0]?.body).toEqual({
+      label: 'Delta Demo (testnet)',
+      meta: { baseUrl: DELTA_DEMO_BASE_URL },
+      secret: { apiKey: 'demo-k', apiSecret: 'demo-s' },
+    })
+  })
+
+  test('the demo card shows its stored testnet URL, and Test posts to the demo kind only', async () => {
+    const sent = mountBrokers([DELTA_ROW, DEMO_ROW])
+    await screen.findByText('Delta live')
+    expect(card('Delta Demo (testnet)').getByText(DELTA_DEMO_BASE_URL)).toBeTruthy()
+    act(() => { card('Delta Demo (testnet)').getByRole('button', { name: 'Test connection' }).click() })
+    await waitFor(() =>
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/v1/desk/brokers/delta-demo/test')).toBe(true))
+    expect(sent.some((r) => r.path === '/v1/desk/brokers/delta/test')).toBe(false)
+    expect(await card('Delta Demo (testnet)').findByText('Login succeeded')).toBeTruthy()
   })
 })
 

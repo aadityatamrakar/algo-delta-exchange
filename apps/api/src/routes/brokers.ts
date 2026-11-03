@@ -14,7 +14,7 @@
  * the dashboard that OUR service is broken when it is the credentials that are.
  */
 
-import { DxRest } from '@algomaker/dx'
+import { DX_DEMO_REST_URL, DxRest, assertRailHost } from '@algomaker/dx'
 import { zerodhaLogin } from '../../../marketdata/src/zerodha-login.ts'
 import { BrokerStore, isBrokerKind, requireMasterKey, type BrokerKind } from '../brokerstore.ts'
 import { auditLog } from '../audit.ts'
@@ -22,7 +22,12 @@ import { isObject, suffixOf, type ApiDeps, type Route, type RouteCtx } from './k
 
 const PREFIX = '/v1/desk/brokers'
 
-export function brokerRoutes(deps: ApiDeps): Route {
+export interface BrokerRouteOptions {
+  /** The credential test's transport. Tests route it to a local stub. */
+  readonly fetch?: typeof fetch
+}
+
+export function brokerRoutes(deps: ApiDeps, opts: BrokerRouteOptions = {}): Route {
   // Spec §7: fails at BOOT, not on the first request. `main.ts` calls this
   // factory before it listens, so a bad key stops the process instead of
   // producing an inexplicable broker error mid-session.
@@ -52,7 +57,7 @@ export function brokerRoutes(deps: ApiDeps): Route {
     const [kindRaw, action, ...extra] = rest.split('/')
     if (extra.length > 0) return false
     if (!isBrokerKind(kindRaw)) {
-      send(404, { error: `unknown broker "${String(kindRaw)}" — known brokers are delta and zerodha` })
+      send(404, { error: `unknown broker "${String(kindRaw)}" — known brokers are delta, delta-demo and zerodha` })
       return true
     }
     const kind: BrokerKind = kindRaw
@@ -127,8 +132,10 @@ export function brokerRoutes(deps: ApiDeps): Route {
       const row = await store.get(kind)
       const result =
         kind === 'delta'
-          ? await testDelta(read.secret, row.meta)
-          : await testZerodha(read.secret, row.meta)
+          ? await testDelta(read.secret, row.meta, 'live', opts.fetch)
+          : kind === 'delta-demo'
+            ? await testDelta(read.secret, row.meta, 'demo', opts.fetch)
+            : await testZerodha(read.secret, row.meta)
 
       // Recording the verdict is OUR job; failing to record it is our bug and a
       // 5xx. Failing to log in is the broker's answer and a 200.
@@ -170,26 +177,41 @@ function str(...values: unknown[]): string {
  * — the same client the order gateway trades through. Read-only: it can place
  * nothing, and unlike a session login it invalidates nothing.
  *
- * `baseUrl` comes from `meta` first and from the sealed blob second. It is
- * REQUIRED here rather than defaulted to the India host, so a misfiled row (or
- * a test) never reaches Delta by accident; the Brokers form fills it in.
+ * `baseUrl` comes from `meta` first and from the sealed blob second. For the
+ * real account it is REQUIRED rather than defaulted to the India host, so a
+ * misfiled row (or a test) never reaches Delta by accident; the Brokers form
+ * fills it in. For `delta-demo` it defaults to the testnet — the one host
+ * those credentials may go to.
+ *
+ * THE HOST IS CHECKED AGAINST THE RAIL before anything is signed: demo
+ * credentials only to testnet, production credentials never to testnet.
  */
 async function testDelta(
   secret: Record<string, unknown>,
   meta: Record<string, string | number | boolean>,
+  rail: 'live' | 'demo',
+  fetchImpl: typeof fetch | undefined,
 ): Promise<TestResult> {
-  const baseUrl = str(meta['baseUrl'], secret['baseUrl'])
+  const stored = str(meta['baseUrl'], secret['baseUrl'])
+  const baseUrl = stored === '' && rail === 'demo' ? DX_DEMO_REST_URL : stored
   const apiKey = str(secret['apiKey'])
   const apiSecret = str(secret['apiSecret'])
   if (baseUrl === '') {
     return { ok: false, error: 'meta.baseUrl is required to reach Delta (https://api.india.delta.exchange)' }
   }
   if (apiKey === '' || apiSecret === '') return { ok: false, error: 'secret.apiKey and secret.apiSecret are required' }
+  try {
+    assertRailHost(rail, baseUrl)
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+  const where = rail === 'demo' ? ' (testnet)' : ''
   const rest = new DxRest({
     baseUrl,
     apiKey,
     apiSecret,
     userAgent: 'algomaker-dx-api/1.0',
+    ...(fetchImpl === undefined ? {} : { fetch: fetchImpl }),
     // An operator is watching this one; a venue that has not answered in 10
     // seconds is the answer.
     timeoutMs: 10_000,
@@ -204,7 +226,10 @@ async function testDelta(
       .filter((x) => x !== '')
     return {
       ok: true,
-      note: seen.length === 0 ? 'signed wallet read ok (no balances reported)' : `signed wallet read ok — ${seen.join(', ')}`,
+      note:
+        seen.length === 0
+          ? `signed wallet read ok${where} (no balances reported)`
+          : `signed wallet read ok${where} — ${seen.join(', ')}`,
     }
   } catch (err) {
     return { ok: false, error: redact(err instanceof Error ? err.message : String(err), secret) }

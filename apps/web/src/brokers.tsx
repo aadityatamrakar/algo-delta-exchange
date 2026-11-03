@@ -33,15 +33,20 @@ import {
 import { usePoll } from './shell.tsx'
 
 /**
- * ONE BROKER, Delta Exchange India. The card is always drawn, even when the
- * API returns no row for it, because "Delta is not configured" is information
- * the operator came here for. Any other kind the list carries (the api still
- * knows `zerodha`) is not this desk's and gets no card.
+ * TWO CARDS, BOTH DELTA: the real exchange (`delta`, the live rail) and, below
+ * it, Delta's testnet (`delta-demo`), where a paper book switched to the Demo
+ * rail places its orders. Both are always drawn, even when the API returns no
+ * row for them, because "not configured" is information the operator came
+ * here for. Any other kind the list carries (the api still knows `zerodha`) is
+ * not this desk's and gets no card.
  */
-const KINDS: readonly BrokerKind[] = ['delta']
+const KINDS: readonly BrokerKind[] = ['delta', 'delta-demo']
 
 /** Where the api's credential test and the gateway sign their requests to. */
 export const DELTA_BASE_URL = 'https://api.india.delta.exchange'
+
+/** Delta's testnet REST — the demo rail's host. Never the production one. */
+export const DELTA_DEMO_BASE_URL = 'https://cdn-ind.testnet.deltaex.org'
 
 interface FieldSpec { key: string; label: string; hint?: string; default?: string }
 
@@ -65,6 +70,23 @@ const FIELDS: Record<BrokerKind, { label: string; secret: FieldSpec[]; meta: Fie
         label: 'Base URL',
         default: DELTA_BASE_URL,
         hint: 'Delta Exchange India REST. Change it only to point at a different Delta host.',
+      },
+    ],
+  },
+  'delta-demo': {
+    label: 'Delta Demo (testnet)',
+    secret: [
+      { key: 'apiKey', label: 'API key' },
+      { key: 'apiSecret', label: 'API secret' },
+    ],
+    meta: [
+      {
+        key: 'baseUrl',
+        label: 'Base URL',
+        default: DELTA_DEMO_BASE_URL,
+        hint:
+          "Delta's testnet REST. Orders from paper books set to the Demo rail go here, signed " +
+          'with these testnet keys — never the live ones.',
       },
     ],
   },
@@ -306,8 +328,8 @@ export function BrokersSection(): React.ReactElement {
         reading its logs.
       </Text>
 
-      {/* One card; the grid keeps it at a card's width rather than the page's. */}
-      <Grid columns={{ minWidth: 320, max: 2 }} gap={4}>
+      {/* One column: the demo card sits BELOW the real one, never beside it. */}
+      <Grid columns={{ minWidth: 320, max: 1 }} gap={4}>
         {KINDS.map((kind) => {
           const row: BrokerRow = byKind.get(kind) ?? {
             kind, label: FIELDS[kind].label, meta: {}, configured: false,
@@ -315,7 +337,10 @@ export function BrokersSection(): React.ReactElement {
           }
           const result = results[kind]
           return (
-            <Card key={kind}>
+            // A named group per card, so "the demo card's Test button" is one
+            // thing to a screen reader (and to a test), not the second of two.
+            <div key={kind} role="group" aria-label={FIELDS[kind].label}>
+            <Card>
               <VStack gap={3} padding={4}>
                 <HStack justify="between" align="center" wrap="wrap">
                   <Heading level={3}>{row.label === '' ? FIELDS[kind].label : row.label}</Heading>
@@ -381,6 +406,7 @@ export function BrokersSection(): React.ReactElement {
                 </HStack>
               </VStack>
             </Card>
+            </div>
           )
         })}
       </Grid>

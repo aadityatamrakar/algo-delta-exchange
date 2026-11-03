@@ -1750,3 +1750,68 @@ itMongo('close-leg refuses a NaN aggression too — finiteness is not implied by
     assert.equal(res.status, 400)
   })
 })
+
+// ------------------------------------------------- the paper rail (demo)
+
+test('dx_paper_rail: every row carries it; only an exact "demo" is demo', () => {
+  assert.equal(DEFAULT_BOOK.dx_paper_rail, 'sim')
+  const base = { tag: 'T', symbol: 'BTC', expiry: '2026-11-04', mode: 'paper', variant: 'v' }
+  assert.equal(bookFromDoc(base)?.dx_paper_rail, 'sim')
+  assert.equal(bookFromDoc({ ...base, dx_paper_rail: 'demo' })?.dx_paper_rail, 'demo')
+  for (const junk of ['Demo', 'DEMO', true, 1, 'live', '']) {
+    assert.equal(bookFromDoc({ ...base, dx_paper_rail: junk })?.dx_paper_rail, 'sim', String(junk))
+  }
+})
+
+itMongo('paper-rail: a paper book switches sim -> demo -> sim, recorded with who set it', async () => {
+  await post('/v1/desk/books/registry', CREATE_BODY)
+  const created = await get(`/v1/desk/books/registry/${CREATE_BODY.tag}?mode=paper`)
+  if (created.status === 200) assert.equal(created.body['dx_paper_rail'], 'sim')
+
+  const on = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'paper', rail: 'demo' })
+  assert.equal(on.status, 200, JSON.stringify(on.body))
+  assert.equal(on.body['dx_paper_rail'], 'demo')
+  const raw = await handle!.db.collection(COLLECTIONS.booksRegistry).findOne({ tag: CREATE_BODY.tag, mode: 'paper' })
+  assert.equal(raw?.['dx_paper_rail'], 'demo')
+  assert.equal(typeof raw?.['paperRailSetBy'], 'string')
+
+  const off = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'paper', rail: 'sim' })
+  assert.equal(off.status, 200)
+  assert.equal(off.body['dx_paper_rail'], 'sim')
+})
+
+itMongo('paper-rail: refused for live, for a bad rail, and for an unknown book', async () => {
+  await post('/v1/desk/books/registry', CREATE_BODY)
+  const live = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'live', rail: 'demo' })
+  assert.equal(live.status, 400)
+  assert.match(String(live.body['error']), /paper books only/)
+  const bad = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'paper', rail: 'testnet' })
+  assert.equal(bad.status, 400)
+  assert.match(String(bad.body['error']), /'sim' or 'demo'/)
+  const none = await post('/v1/desk/books/registry/NOPE/paper-rail', { mode: 'paper', rail: 'demo' })
+  assert.equal(none.status, 404)
+  assert.equal((await store.getBook(CREATE_BODY.tag, 'paper'))?.dx_paper_rail, 'sim')
+})
+
+itMongo('paper-rail: refused while the book holds legs or has a decision working — a close must go where the open went', async () => {
+  await post('/v1/desk/books/registry', CREATE_BODY)
+  await store.saveBook({ tag: CREATE_BODY.tag, symbol: 'BHEL', expiry: '2026-08-25', mode: 'paper' }, [LEG], NOW)
+  const held = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'paper', rail: 'demo' })
+  assert.equal(held.status, 409)
+  assert.match(String(held.body['error']), /BHEL26AUG430CE/)
+  assert.equal((await store.getBook(CREATE_BODY.tag, 'paper'))?.dx_paper_rail, 'sim')
+
+  await store.saveBook({ tag: CREATE_BODY.tag, symbol: 'BHEL', expiry: '2026-08-25', mode: 'paper' }, [], NOW)
+  const states = handle!.db.collection('desk-supervisor-state')
+  const key = `${CREATE_BODY.tag}:paper`
+  try {
+    await states.insertOne({ key, inFlight: `${CREATE_BODY.tag}:paper:7`, workingPackage: null })
+    const working = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'paper', rail: 'demo' })
+    assert.equal(working.status, 409)
+    assert.match(String(working.body['error']), /:paper:7/)
+  } finally {
+    await states.deleteMany({ key })
+  }
+  const flat = await post(`/v1/desk/books/registry/${CREATE_BODY.tag}/paper-rail`, { mode: 'paper', rail: 'demo' })
+  assert.equal(flat.status, 200, JSON.stringify(flat.body))
+})

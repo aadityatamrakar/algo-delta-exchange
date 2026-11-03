@@ -6,10 +6,11 @@
  * operator's most recent deliberate act; env is what the machine was started
  * with. Only this process reads the key; the feed holds none.
  */
-import { BrokerStore, requireMasterKey } from '../../api/src/brokerstore.ts'
+import { DX_DEMO_REST_URL, DX_DEMO_WS_URL, DX_PROD_REST_URL, DX_PROD_WS_URL, assertRailHost } from '@algomaker/dx'
+import { BrokerStore, requireMasterKey, type BrokerKind } from '../../api/src/brokerstore.ts'
 
-export const DX_DEFAULT_BASE_URL = 'https://api.india.delta.exchange'
-export const DX_DEFAULT_WS_URL = 'wss://socket.india.delta.exchange'
+export const DX_DEFAULT_BASE_URL = DX_PROD_REST_URL
+export const DX_DEFAULT_WS_URL = DX_PROD_WS_URL
 /** Delta's CDN refuses a request without one (403). */
 export const DX_USER_AGENT = 'algomaker-dx-gateway/1.0'
 
@@ -63,7 +64,63 @@ export async function loadDxConfig(
     apiSecret: apiSecret as string,
     source: seen.store && seen.env ? 'mixed' : seen.store ? 'broker-store' : 'env',
   }
+  // Production credentials never go to the testnet.
+  assertRailHost('live', cfg.baseUrl)
+  assertRailHost('live', cfg.wsUrl)
   logFn('Delta config resolved', { source: cfg.source, baseUrl: cfg.baseUrl, wsUrl: cfg.wsUrl })
+  return cfg
+}
+
+/**
+ * THE DEMO (TESTNET) RAIL's settings: `desk-brokers` kind `delta-demo`, then
+ * `DX_DEMO_*` env. Never the production `DX_*` names — a fallback onto them is
+ * exactly how a real key would reach a host it was never issued for.
+ *
+ * Both hosts must be testnet (`assertRailHost('demo')`, an allowlist), and a
+ * key equal to production's is refused: that key would be the real account.
+ */
+export async function loadDxDemoConfig(
+  read: () => Promise<{ meta: Record<string, unknown>; secret: Record<string, unknown> }>,
+  env: NodeJS.ProcessEnv,
+  logFn: (m: string, c?: Record<string, unknown>) => void,
+  opts: { readonly liveApiKey?: string } = {},
+): Promise<DxConfig> {
+  const { meta, secret } = await read()
+  const seen = { store: false, env: false }
+  const pick = (key: string, envName: string): string | undefined => {
+    const fromStore = firstString(secret[key], meta[key])
+    if (fromStore !== undefined) {
+      seen.store = true
+      return fromStore
+    }
+    const fromEnv = firstString(env[envName])
+    if (fromEnv !== undefined) seen.env = true
+    return fromEnv
+  }
+  const apiKey = pick('apiKey', 'DX_DEMO_API_KEY')
+  const apiSecret = pick('apiSecret', 'DX_DEMO_API_SECRET')
+  const missing = [
+    apiKey === undefined ? 'apiKey/DX_DEMO_API_KEY' : null,
+    apiSecret === undefined ? 'apiSecret/DX_DEMO_API_SECRET' : null,
+  ].filter((m): m is string => m !== null)
+  if (missing.length > 0) {
+    throw new Error(
+      `Delta demo is not configured: ${missing.join(', ')} — set them on the Brokers page (Delta Demo (testnet))`,
+    )
+  }
+  const cfg: DxConfig = {
+    baseUrl: (pick('baseUrl', 'DX_DEMO_BASE_URL') ?? DX_DEMO_REST_URL).replace(/\/$/, ''),
+    wsUrl: pick('wsUrl', 'DX_DEMO_WS_URL') ?? DX_DEMO_WS_URL,
+    apiKey: apiKey as string,
+    apiSecret: apiSecret as string,
+    source: seen.store && seen.env ? 'mixed' : seen.store ? 'broker-store' : 'env',
+  }
+  assertRailHost('demo', cfg.baseUrl)
+  assertRailHost('demo', cfg.wsUrl)
+  if (opts.liveApiKey !== undefined && opts.liveApiKey === cfg.apiKey) {
+    throw new Error('Delta demo carries the same API key as production — refusing to use a real key on the demo rail')
+  }
+  logFn('Delta demo config resolved', { source: cfg.source, baseUrl: cfg.baseUrl, wsUrl: cfg.wsUrl })
   return cfg
 }
 
@@ -77,13 +134,14 @@ export async function loadDxConfig(
 export async function readDeltaBrokerStore(
   db: { collection: (name: string) => unknown },
   logFn: (m: string, c?: Record<string, unknown>) => void,
+  kind: Extract<BrokerKind, 'delta' | 'delta-demo'> = 'delta',
 ): Promise<{ meta: Record<string, unknown>; secret: Record<string, unknown> }> {
   try {
     const store = new BrokerStore(db as never, requireMasterKey())
-    const row = await store.get('delta')
-    const read = await store.readSecret('delta')
+    const row = await store.get(kind)
+    const read = await store.readSecret(kind)
     if (read.kind === 'unreadable') {
-      logFn('BROKER STORE: the stored Delta credential will not decrypt — falling back to env', { reason: read.reason })
+      logFn(`BROKER STORE: the stored ${kind} credential will not decrypt — falling back to env`, { reason: read.reason })
       return { meta: row.meta, secret: {} }
     }
     return { meta: row.meta, secret: read.kind === 'ok' ? read.secret : {} }

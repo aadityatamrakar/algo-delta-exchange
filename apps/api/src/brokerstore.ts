@@ -27,13 +27,16 @@ export const BROKER_COLLECTION = 'desk-brokers'
 
 /** The brokers this desk can hold credentials for. Delta routes orders (the
  *  Delta desk, spec §5.4); Zerodha is market data only (spec D1) but still
- *  needs a verifiable login. XTS is gone from this desk. */
-export type BrokerKind = 'delta' | 'zerodha'
+ *  needs a verifiable login. `delta-demo` is Delta's India TESTNET account —
+ *  paper books set to the demo rail trade there; its key never goes to
+ *  production and production's never goes to testnet (`@algomaker/dx`
+ *  `assertRailHost`). XTS is gone from this desk. */
+export type BrokerKind = 'delta' | 'zerodha' | 'delta-demo'
 
-export const BROKER_KINDS: readonly BrokerKind[] = ['delta', 'zerodha']
+export const BROKER_KINDS: readonly BrokerKind[] = ['delta', 'zerodha', 'delta-demo']
 
 export function isBrokerKind(v: unknown): v is BrokerKind {
-  return v === 'delta' || v === 'zerodha'
+  return v === 'delta' || v === 'zerodha' || v === 'delta-demo'
 }
 
 /**
@@ -243,7 +246,9 @@ export class BrokerStore {
 }
 
 function defaultLabel(kind: BrokerKind): string {
-  return kind === 'delta' ? 'Delta Exchange India' : 'Zerodha (market data)'
+  if (kind === 'delta') return 'Delta Exchange India'
+  if (kind === 'delta-demo') return 'Delta Demo (testnet)'
+  return 'Zerodha (market data)'
 }
 
 /**

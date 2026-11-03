@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { positiveEnvMs } from '../src/main.ts'
-import { DX_DEFAULT_BASE_URL, DX_DEFAULT_WS_URL, loadDxConfig } from '../src/dx-config.ts'
+import { DX_DEMO_REST_URL, DX_DEMO_WS_URL } from '@algomaker/dx'
+import { DX_DEFAULT_BASE_URL, DX_DEFAULT_WS_URL, loadDxConfig, loadDxDemoConfig } from '../src/dx-config.ts'
 
 /**
  * The Delta credentials: the BROKER STORE (`desk-brokers` kind `delta`, typed
@@ -28,11 +29,11 @@ test('the broker store supplies the key and secret, and the India hosts are the 
 
 test('meta.baseUrl is used, and the store WINS over the environment', async () => {
   const cfg = await loadDxConfig(
-    store({ apiKey: 'K', apiSecret: 'S' }, { baseUrl: 'https://cdn-ind.testnet.deltaex.org' }),
+    store({ apiKey: 'K', apiSecret: 'S' }, { baseUrl: 'https://api-alt.india.delta.exchange' }),
     { DX_API_KEY: 'EK', DX_API_SECRET: 'ES', DX_BASE_URL: 'https://env.example.com' },
     quiet,
   )
-  assert.equal(cfg.baseUrl, 'https://cdn-ind.testnet.deltaex.org')
+  assert.equal(cfg.baseUrl, 'https://api-alt.india.delta.exchange')
   assert.equal(cfg.apiKey, 'K')
 })
 
@@ -91,4 +92,63 @@ test('zero and negative are refused — a 0ms interval is a busy loop', () => {
 test('a non-finite value falls back', () => {
   assert.equal(positiveEnvMs('DESK_SWEEP_MS', 5000, { DESK_SWEEP_MS: 'Infinity' }), 5000)
   assert.equal(positiveEnvMs('DESK_SWEEP_MS', 5000, { DESK_SWEEP_MS: 'NaN' }), 5000)
+})
+
+// ------------------------------------------------------------- the demo rail
+
+test('demo: the delta-demo row resolves onto the TESTNET by default', async () => {
+  const cfg = await loadDxDemoConfig(store({ apiKey: 'DK', apiSecret: 'DS' }), {}, quiet)
+  assert.equal(cfg.baseUrl, DX_DEMO_REST_URL)
+  assert.equal(cfg.wsUrl, DX_DEMO_WS_URL)
+  assert.equal(cfg.apiKey, 'DK')
+  assert.equal(cfg.source, 'broker-store')
+})
+
+test('demo: production env credentials are NEVER a fallback — only DX_DEMO_* are', async () => {
+  await assert.rejects(
+    () => loadDxDemoConfig(store(), { DX_API_KEY: 'PROD', DX_API_SECRET: 'PRODS' }, quiet),
+    /Delta demo is not configured/,
+  )
+  const cfg = await loadDxDemoConfig(store(), { DX_DEMO_API_KEY: 'EK', DX_DEMO_API_SECRET: 'ES' }, quiet)
+  assert.equal(cfg.apiKey, 'EK')
+  assert.equal(cfg.source, 'env')
+})
+
+test('demo credentials never reach the production host', async () => {
+  for (const meta of [
+    { baseUrl: 'https://api.india.delta.exchange' },
+    { wsUrl: 'wss://socket.india.delta.exchange' },
+    { baseUrl: 'http://127.0.0.1:9' },
+  ]) {
+    await assert.rejects(
+      () => loadDxDemoConfig(store({ apiKey: 'DK', apiSecret: 'DS' }, meta), {}, quiet),
+      /demo credentials may only be sent to the testnet/,
+      JSON.stringify(meta),
+    )
+  }
+  await assert.rejects(
+    () => loadDxDemoConfig(store({ apiKey: 'DK', apiSecret: 'DS' }), { DX_DEMO_BASE_URL: 'https://api.india.delta.exchange' }, quiet),
+    /testnet/,
+  )
+})
+
+test('production credentials never reach the testnet', async () => {
+  for (const meta of [{ baseUrl: DX_DEMO_REST_URL }, { wsUrl: DX_DEMO_WS_URL }]) {
+    await assert.rejects(
+      () => loadDxConfig(store({ apiKey: 'K', apiSecret: 'S' }, meta), {}, quiet),
+      /production credentials must never be sent to the testnet/,
+      JSON.stringify(meta),
+    )
+  }
+  await assert.rejects(
+    () => loadDxConfig(store({ apiKey: 'K', apiSecret: 'S' }), { DX_BASE_URL: DX_DEMO_REST_URL }, quiet),
+    /testnet/,
+  )
+})
+
+test('demo: the same key as production is refused — it would be the real account', async () => {
+  await assert.rejects(
+    () => loadDxDemoConfig(store({ apiKey: 'SAME', apiSecret: 'DS' }), {}, quiet, { liveApiKey: 'SAME' }),
+    /same API key as production/,
+  )
 })

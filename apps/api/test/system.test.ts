@@ -93,6 +93,7 @@ const book = (over: Partial<BookRow>): BookRow => ({
   dials: {},
   desired: 'running',
   actual: 'running',
+  dx_paper_rail: 'sim',
   lastMarkAt: NOW - 5_000,
   lastDecision: 'hold',
   createdAt: NOW - 86_400_000,

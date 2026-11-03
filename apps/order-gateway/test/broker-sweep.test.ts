@@ -108,6 +108,8 @@ function harness(opts: {
   fills?: BrokerSweepDeps['fills']
   /** A log sink to share with a caller-built `fills`. */
   logs?: string[]
+  /** The swept book's rail; absent is live. */
+  rail?: 'live' | 'paper'
 } = {}): Harness {
   const orders = new FakeOrders()
   for (const d of opts.docs ?? []) orders.docs.push(d)
@@ -125,6 +127,7 @@ function harness(opts: {
 
   const sweep = createBrokerSweep(
     {
+      ...(opts.rail === undefined ? {} : { rail: opts.rail }),
       adapter: {
         orderBook: async () => {
           brokerCalls.push('orderBook')
@@ -229,6 +232,13 @@ test('the sweep replays every row on the live rail', async () => {
   await h.run()
   assert.equal(h.handled.length, 2)
   assert.deepEqual(h.handleOpts, [{ rail: 'live' }, { rail: 'live' }])
+})
+
+test("the demo rail's sweep replays testnet's book as PAPER rows", async () => {
+  const h = harness({ rail: 'paper', book: [row()], docs: [orderDoc({ mode: 'paper', dx_paper_rail: 'demo' })] })
+  await h.run()
+  assert.deepEqual(h.handleOpts, [{ rail: 'paper' }])
+  assert.deepEqual(h.resolveOpts, [{ rail: 'paper', quiet: true }])
 })
 
 test('the sweep places, cancels and modifies NOTHING — it only reads', async () => {

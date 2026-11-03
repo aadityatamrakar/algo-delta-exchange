@@ -735,11 +735,12 @@ export interface LoginResult {
 // ---------------------------------------------------------------- brokers
 
 /**
- * The one broker this desk saves and tests: Delta Exchange India. The api 404s
- * `xts` (removed in T6); it still lists a `zerodha` row, which the dashboard
- * does not offer.
+ * The brokers this desk saves and tests: Delta Exchange India (`delta`, the
+ * live rail) and Delta's testnet (`delta-demo`, where a paper book set to the
+ * Demo rail sends its orders). The api 404s `xts` (removed in T6); it still
+ * lists a `zerodha` row, which the dashboard does not offer.
  */
-export type BrokerKind = 'delta'
+export type BrokerKind = 'delta' | 'delta-demo'
 
 /**
  * `unreadable` is NOT `absent`. "No XTS configured" and "XTS configured but the
@@ -1607,6 +1608,20 @@ export interface BookRow {
   lastDecision: string
   createdAt: number
   updatedAt: number
+  /**
+   * Where a PAPER book's orders go: the simulator (`sim`) or Delta's testnet
+   * (`demo`). Optional only because a desk that predates the demo rail does
+   * not send it — read it through `paperRailOf`, which says `sim` then.
+   */
+  dx_paper_rail?: PaperRail
+}
+
+/** A paper book's rail. Mirrors `dx_paper_rail` in `apps/api/src/books-registry.ts`. */
+export type PaperRail = 'sim' | 'demo'
+
+/** The rail a row names; anything but an exact `demo` is the simulator, as the gateway reads it. */
+export function paperRailOf(row: Pick<BookRow, 'dx_paper_rail'>): PaperRail {
+  return row.dx_paper_rail === 'demo' ? 'demo' : 'sim'
 }
 
 /**
@@ -2603,6 +2618,14 @@ export const api = {
         `/v1/desk/books/registry/${encodeURIComponent(tag)}/close-leg`,
         { mode, tradingsymbol, decisionId, style },
       ),
+    /**
+     * SWITCH A PAPER BOOK'S RAIL — the simulator or Delta's testnet. Takes
+     * effect on the book's next order. Refused (409) while the book holds legs
+     * or has a decision working: a close on the other rail would book a
+     * position that rail never held. Render the server's message.
+     */
+    setPaperRail: (tag: string, rail: PaperRail) =>
+      post<BookRow>(`/v1/desk/books/registry/${encodeURIComponent(tag)}/paper-rail`, { mode: 'paper', rail }),
     /** Sets `desired: 'running'`. `actual` follows once the supervisor next polls and reports in. */
     start: (tag: string, mode: DeskMode) =>
       post<BookRow>(`/v1/desk/books/registry/${encodeURIComponent(tag)}/start`, { mode }),

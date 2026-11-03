@@ -20,6 +20,7 @@ import {
   validateBookCreate,
   validateBookDialsPatch,
   validateDialsAgainstCatalogue,
+  isPaperRail,
   type BookRow,
   type DialValue,
 } from '../books-registry.ts'
@@ -551,6 +552,86 @@ export function booksRoutes(deps: BooksDeps): Route {
 
       // Settle a paper leg whose contract has expired — see `settle-expired.ts`.
       if (parts.length === 2 && parts[1] === 'settle-expired' && method === 'POST') return await handleSettleExpired(deps, ctx, tag)
+
+      /**
+       * `POST .../:tag/paper-rail` — `{ mode: 'paper', rail: 'sim' | 'demo' }`.
+       *
+       * WHERE THIS PAPER BOOK'S ORDERS GO: the gateway's simulator, or Delta's
+       * testnet through the `delta-demo` credentials. The gateway reads it per
+       * order, so it applies from the book's next order; an order already
+       * placed stays on the rail it was placed on.
+       *
+       * REFUSED WHILE THE BOOK HOLDS LEGS OR HAS A DECISION WORKING. A close
+       * must reach the exchange its open went to: a sim-opened leg closed on
+       * testnet is a reduce-only order against nothing, and a testnet leg
+       * closed on the simulator books the desk flat while testnet still
+       * holds it. Unknown (an unreadable desk-books document) is not flat.
+       *
+       * PAPER ONLY: a live order goes to Delta production or nowhere, and no
+       * row field can change that. No password — nothing on either rail can
+       * move real money.
+       */
+      if (parts.length === 2 && parts[1] === 'paper-rail' && method === 'POST') {
+        const body = bodyObject(await ctx.readJson())
+        const mode = requireMode(body)
+        if (mode === null) {
+          send(400, MODE_REQUIRED)
+          return true
+        }
+        if (mode !== 'paper') {
+          send(400, { error: 'the rail choice is for paper books only — a live order always goes to Delta production' })
+          return true
+        }
+        const rail = body['rail']
+        if (!isPaperRail(rail)) {
+          send(400, { error: "rail must be 'sim' or 'demo'" })
+          return true
+        }
+        const existing = await store.getBook(tag, 'paper')
+        if (existing === null) {
+          send(404, { error: `'${tag}' has no book registered in paper` })
+          return true
+        }
+        if (existing.dx_paper_rail !== rail) {
+          const held = heldOnFile(await store.bookDoc(tag, 'paper'))
+          if (held === null || held.length > 0) {
+            send(409, {
+              error:
+                held === null
+                  ? `'${tag}': its desk-books document cannot be read, so the desk cannot tell whether it holds ` +
+                    `legs — the rail was not changed`
+                  : `'${tag}' holds ${held.length} open leg(s) — ${held.join(', ')} — on the ` +
+                    `${existing.dx_paper_rail === 'demo' ? 'Delta testnet' : 'simulator'}; their closes must go ` +
+                    `there too. Flatten the book first, then switch the rail.`,
+              ...(held === null ? {} : { legs: held }),
+            })
+            return true
+          }
+          const working = await workingOnFile(deps.db, tag, 'paper')
+          if (working !== null) {
+            send(409, {
+              error:
+                `'${tag}': decision ${working} is still working on the ` +
+                `${existing.dx_paper_rail === 'demo' ? 'Delta testnet' : 'simulator'} — wait for it to finish, ` +
+                `then switch the rail.`,
+              decisionId: working,
+            })
+            return true
+          }
+        }
+        const row = await store.setPaperRail(tag, rail, now(), ctx.principal.name)
+        log('book paper rail set', { tag, rail, before: existing.dx_paper_rail, setBy: ctx.principal.name })
+        await audit.record({
+          principal: ctx.principal,
+          source: `${REGISTRY_PREFIX}/:tag/paper-rail`,
+          action: "set a paper book's rail",
+          tag,
+          mode: 'paper',
+          detail: { before: existing.dx_paper_rail, after: rail },
+        })
+        send(200, row)
+        return true
+      }
 
       if (parts.length === 2 && parts[1] === 'start' && method === 'POST') {
         const body = bodyObject(await ctx.readJson())

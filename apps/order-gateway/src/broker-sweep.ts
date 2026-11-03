@@ -99,6 +99,12 @@ export interface BrokerSweepDeps {
    */
   readonly ordersFilter?: Record<string, unknown>
   /**
+   * The rail of the book being swept: `live` (Delta production, the default)
+   * or `paper` (the demo rail's testnet book, whose orders are paper
+   * documents). The watcher refuses a row that resolves across rails.
+   */
+  readonly rail?: 'live' | 'paper'
+  /**
    * Optional, because `OrderJournal` already pushes every event it records to
    * desk-api. Wiring a notifier here as well double-pushes; it exists for a
    * host whose journal has none.
@@ -161,6 +167,7 @@ export function createBrokerSweep(
   const ambiguousTtlMs = opts.ambiguousTtlMs ?? DEFAULT_AMBIGUOUS_TTL_MS
   const workingAlertMs = opts.workingAlertMs ?? DEFAULT_WORKING_ALERT_MS
   const maxOrders = opts.maxOrders ?? DEFAULT_MAX_ORDERS
+  const sweepRail: 'live' | 'paper' = deps.rail ?? 'live'
   /** Foreign broker ids already complained about. One line each, per process. */
   const reportedForeign = new Set<string>()
   let running = false
@@ -253,7 +260,7 @@ export function createBrokerSweep(
          * became a `NOT adopted` line every 45 s once it aged past the
          * session window. The line below is the one that stays.
          */
-        if ((await deps.fills.resolve(update, { rail: 'live', quiet: true })) === null) {
+        if ((await deps.fills.resolve(update, { rail: sweepRail, quiet: true })) === null) {
           foreign++
           if (!reportedForeign.has(row.brokerOrderId)) {
             reportedForeign.add(row.brokerOrderId)
@@ -270,7 +277,7 @@ export function createBrokerSweep(
         // the live broker's book (main.ts wires it in xts mode only), and the
         // watcher must not resolve one of its rows to a paper document by an
         // id the simulator happened to reuse.
-        await deps.fills.handle(update, { rail: 'live' })
+        await deps.fills.handle(update, { rail: sweepRail })
       } catch (err) {
         // One unreadable row must not cost the rest of the book — the next row
         // may be the fill nobody has heard about.

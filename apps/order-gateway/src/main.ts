@@ -71,14 +71,15 @@ import { chaseDialsFromEnv, chaseDisabled, createOrderChaser } from './order-cha
 import { createQuoteMap, quoteMaxAgeFromEnv } from './quote-map.ts'
 import {
   brokerModeFromEnv,
-  chooseAdapter,
   deltaCommission,
   dxCapRefusal,
   dxCapsFromEnv,
   dxSimFee,
   liveRailEnabled,
+  stampedPaperRail,
 } from './dx-edge.ts'
-import { DX_USER_AGENT, loadDxConfig, readDeltaBrokerStore } from './dx-config.ts'
+import { DX_USER_AGENT, loadDxConfig, loadDxDemoConfig, readDeltaBrokerStore } from './dx-config.ts'
+import { DemoRail, createAdapterRouter } from './dx-demo.ts'
 import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
 import {
   countWorking,
@@ -396,7 +397,9 @@ export interface PlacerPorts {
    * WHICH BROKER THIS DOCUMENT GOES TO — asked PER ORDER, not wired once (D14).
    *
    * Delta only for an exact `mode: 'live'` document with `DESK_DX_LIVE=1`
-   * (`dx-edge.ts:chooseAdapter`); everything else is the SIMULATOR. That
+   * (`dx-edge.ts:chooseRail`); a PAPER document on a book set to the demo
+   * rail goes to Delta's testnet (`dx-demo.ts:createAdapterRouter`); everything
+   * else is the SIMULATOR. That
    * is the whole of what separates a paper order from a live one on this path:
    * same queue, same claim, same plan, same tranche cursor, same chaser, same
    * fill correlation — a rehearsal that skipped any of them would be rehearsing
@@ -407,7 +410,9 @@ export interface PlacerPorts {
    * `main()` where the document is no longer in hand. See `isPaperOrder` for
    * why the answer is fail-closed.
    */
-  readonly adapterFor: (doc: Record<string, unknown>) => Pick<BrokerAdapter, 'placeOrder'>
+  readonly adapterFor: (
+    doc: Record<string, unknown>,
+  ) => Pick<BrokerAdapter, 'placeOrder'> | Promise<Pick<BrokerAdapter, 'placeOrder'>>
   /** The instrument master's answer, already narrowed to what a plan needs. */
   readonly resolveContract: (tradingsymbol: string) => ResolvedContract | null
   readonly freeze: () => FreezeLimits
@@ -429,8 +434,12 @@ export interface PlacerPorts {
   readonly linkRefusal: () => string | null
   /** Gate 4 — how old a queued order that ADDS exposure may be. */
   readonly orderMaxAgeMs: number
-  /** Is anything going to answer an AMBIGUOUS tranche? See `partitionInterruptedTranches`. */
-  readonly sweepArmed: () => boolean
+  /**
+   * Is anything going to answer an AMBIGUOUS tranche of THIS document? See
+   * `partitionInterruptedTranches`. The live sweep answers live documents; the
+   * demo rail's sweep answers paper documents placed on testnet.
+   */
+  readonly sweepArmed: (doc: Record<string, unknown>) => boolean
   readonly now: () => number
   readonly log: (msg: string, ctx?: Record<string, unknown>) => void
 }
@@ -714,7 +723,12 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
      * gateway running in simulate mode.
      */
     const { brokerOrderIds, failedTrancheIds, ambiguousTrancheIds } =
-      partitionInterruptedTranches(trancheIds, states, ports.sweepArmed() && !isPaperOrder(doc))
+      partitionInterruptedTranches(
+        trancheIds,
+        states,
+        // A demo-rail paper order DOES have a broker book: testnet's.
+        ports.sweepArmed(doc) && (!isPaperOrder(doc) || stampedPaperRail(doc) === 'demo'),
+      )
 
     for (const id of failedTrancheIds) {
       /**
@@ -795,7 +809,7 @@ export function createOrderPlacer(ports: PlacerPorts): Placer {
     // The broker for THIS document — the simulator for a paper order, the real
     // adapter for everything else. Resolved once per placement so every tranche
     // of one order goes to the same place.
-    const adapter = ports.adapterFor(doc)
+    const adapter = await ports.adapterFor(doc)
     const { plan, tranches } = planFor(order, clientOrderId, doc)
 
     if (plan.rejected !== null) {
@@ -1471,6 +1485,15 @@ export async function main(): Promise<void> {
       return false
     }
   }
+  /** Is this broker order id a demo-rail (testnet) paper order? Asked only of paper ids. */
+  const isDemoBrokerOrder = async (brokerOrderId: string): Promise<boolean> => {
+    try {
+      const doc = await queue.getByBrokerOrderId(brokerOrderId)
+      return doc !== null && isPaperOrder(doc) && stampedPaperRail(doc) === 'demo'
+    } catch {
+      return false
+    }
+  }
 
   /**
    * Every journalled event is also pushed to `desk-api`, which fans it out to
@@ -1574,6 +1597,10 @@ export async function main(): Promise<void> {
   let dxRest: DxRest | null = null
   /** Delta's private socket (order updates). Null unless the live rail is on. */
   let privateSocket: DxPrivateSocket | null = null
+  /** The demo rail's private socket, on Delta's testnet. Null until that rail is built. */
+  let demoSocket: DxPrivateSocket | null = null
+  /** Production's key, so the demo rail can refuse to run on the same one. */
+  let liveApiKey: string | undefined
   /**
    * Arms the broker-book sweep, once the fill watcher it replays into exists.
    * A no-op in simulate mode — the simulator's book is our own invention.
@@ -1599,6 +1626,7 @@ export async function main(): Promise<void> {
       userAgent: DX_USER_AGENT,
     })
     dxRest = rest
+    liveApiKey = cfg.apiKey
     const live = new DxAdapter({ rest, log })
     dxAdapter = live
     adapter = live
@@ -1712,6 +1740,74 @@ export async function main(): Promise<void> {
   startBrokerSweep(fills)
 
   /**
+   * THE DEMO RAIL (Delta venue only) — a paper book whose registry row says
+   * `dx_paper_rail: 'demo'` is worked on Delta's India TESTNET with the
+   * `delta-demo` credentials instead of on the simulator (`dx-demo.ts`).
+   *
+   * Built lazily: on the first demo order, or by the boot attempt below. Its
+   * key goes to testnet hosts only (`loadDxDemoConfig`), and production's key
+   * is never a fallback. Built, it gets what the live rail has: a private
+   * socket feeding the same fill watcher, a dead-man switch (its own id), and
+   * a broker sweep over testnet's book for the demo documents — paper rows.
+   *
+   * Every component that assumes "paper = the simulator's memory" is scoped
+   * away from demo documents by their stamp (`notDemo` below).
+   */
+  let demoSweepArmed = false
+  const gatewayOrders = mongo.db.collection('desk-gateway-orders')
+  const demoRail: DemoRail | null = onDx
+    ? new DemoRail({
+        loadConfig: () =>
+          loadDxDemoConfig(
+            () => readDeltaBrokerStore(mongo.db as never, log, 'delta-demo'),
+            process.env,
+            log,
+            liveApiKey === undefined ? {} : { liveApiKey },
+          ),
+        now: () => Date.now(),
+        log,
+        onBuilt: ({ rest, cfg }) => {
+          const hb = createDxHeartbeat({ rest, log })
+          void hb.beat()
+          setInterval(() => void hb.beat(), DX_HEARTBEAT_MS).unref()
+          demoSocket = new DxPrivateSocket(cfg.wsUrl, {
+            apiKey: cfg.apiKey,
+            apiSecret: cfg.apiSecret,
+            onFrame: (f) => {
+              if (f.kind === 'other') demoRail?.onPrivateFrame(f.raw)
+            },
+            onState: (state) => log(`Delta DEMO private socket ${state}`),
+          })
+          demoSocket.subscribe('orders', ['all'])
+          if (demoRail === null) return
+          const demoSweep = createBrokerSweep(
+            {
+              adapter: demoRail,
+              rail: 'paper',
+              queue,
+              fills,
+              journal,
+              orders: gatewayOrders as never,
+              ordersFilter: { mode: { $ne: 'live' }, dx_paper_rail: 'demo' },
+              now: () => Date.now(),
+              log,
+            },
+            {
+              ambiguousTtlMs: positiveEnvMs('DESK_AMBIGUOUS_TTL_MS', DEFAULT_AMBIGUOUS_TTL_MS),
+              workingAlertMs: positiveEnvMs('DESK_WORKING_ALERT_MS', DEFAULT_WORKING_ALERT_MS),
+            },
+          )
+          setInterval(() => {
+            void demoSweep.run().catch((err: unknown) => log('demo broker sweep threw', { error: String(err) }))
+          }, positiveEnvMs('DESK_BROKER_SWEEP_MS', 45_000)).unref()
+          demoSweepArmed = true
+        },
+      })
+    : null
+  /** Merged into every simulator-scoped query: a demo document is not in the simulator's memory. */
+  const notDemo: Record<string, unknown> = demoRail === null ? {} : { dx_paper_rail: { $ne: 'demo' } }
+
+  /**
    * THE ORDER CHASER — the acting counterpart to the read-only broker sweep.
    *
    * The sweep tells somebody an order is resting (F-17); this reprices it at
@@ -1779,13 +1875,17 @@ export async function main(): Promise<void> {
   }
   if (chaseDisabled(process.env)) {
     log('order chaser DISABLED by DESK_CHASE_DISABLED — resting orders will only be alerted on')
-  } else if (adapter === paperAdapter) {
-    armChaser('simulate', adapter)
   } else {
-    // Each chaser reads exactly the documents its adapter holds: Delta the
-    // exact-live ones, the simulator everything else.
-    armChaser('live', adapter, { mode: 'live' })
-    armChaser('paper', paperAdapter, { mode: { $ne: 'live' } })
+    if (adapter === paperAdapter) {
+      armChaser('simulate', adapter, demoRail === null ? undefined : notDemo)
+    } else {
+      // Each chaser reads exactly the documents its adapter holds: Delta the
+      // exact-live ones, the simulator everything else but demo.
+      armChaser('live', adapter, { mode: 'live' })
+      armChaser('paper', paperAdapter, { mode: { $ne: 'live' }, ...notDemo })
+    }
+    // The demo rail's own: a testnet order id means nothing to the simulator.
+    if (demoRail !== null) armChaser('demo', demoRail, { mode: { $ne: 'live' }, dx_paper_rail: 'demo' })
   }
 
   /**
@@ -1815,6 +1915,23 @@ export async function main(): Promise<void> {
       for (const req of pending) {
         const id = String(req._id)
         if (!(await isPaperBrokerOrder(id))) continue
+        if (demoRail !== null && (await isDemoBrokerOrder(id))) {
+          // A demo order rests on Delta's testnet, not in the simulator.
+          let ok = false
+          let error = ''
+          try {
+            ok = await demoRail.cancelOrder(id)
+            if (!ok) error = 'the Delta testnet is not holding this order open — it has already filled or been cancelled'
+          } catch (err) {
+            error = err instanceof Error ? err.message : String(err)
+          }
+          await paperCancels.updateOne(
+            { _id: id as never },
+            { $set: { status: ok ? 'done' : 'failed', finishedAt: Date.now(), error } },
+          )
+          log(ok ? 'demo cancel done' : 'DEMO CANCEL FAILED', { brokerOrderId: id, detail: error })
+          continue
+        }
         const cancelled = await paperAdapter.cancelOrder(id)
         await paperCancels.updateOne(
           { _id: id as never },
@@ -1860,7 +1977,7 @@ export async function main(): Promise<void> {
       orders: mongo.db.collection('desk-gateway-orders') as never,
       // What the simulator holds: everything on a simulate box, the non-live
       // documents beside a live Delta adapter.
-      ordersFilter: adapter === paperAdapter ? {} : { mode: { $ne: 'live' } },
+      ordersFilter: adapter === paperAdapter ? { ...notDemo } : { mode: { $ne: 'live' }, ...notDemo },
       bootedAt: Date.now(),
       now: () => Date.now(),
       log,
@@ -1910,13 +2027,17 @@ export async function main(): Promise<void> {
    * never an invented one; the simulator's fills already carry theirs.
    */
   const withLiveFee = async (from: BrokerAdapter, update: PlacedOrder): Promise<PlacedOrder> => {
-    if (from !== dxAdapter || dxRest === null || update.fee !== undefined || !(update.filledQty > 0)) return update
-    const fee = await deltaCommission(dxRest, update.brokerOrderId)
+    if (update.fee !== undefined || !(update.filledQty > 0)) return update
+    // The demo rail's fills carry the TESTNET's reported commission, the same way.
+    const rest = from === dxAdapter ? dxRest : demoRail !== null && from === demoRail ? demoRail.rest : null
+    if (rest === null) return update
+    const fee = await deltaCommission(rest, update.brokerOrderId)
     return fee === null ? update : { ...update, fee }
   }
   const watchFills = (from: BrokerAdapter): void => {
+    // The demo rail emits PAPER rows, always: testnet is a rehearsal.
     const rail: 'live' | 'paper' | undefined =
-      adapter === paperAdapter ? undefined : from === paperAdapter ? 'paper' : 'live'
+      from === demoRail ? 'paper' : adapter === paperAdapter ? undefined : from === paperAdapter ? 'paper' : 'live'
     from.onOrderUpdate((update: PlacedOrder) => {
       // `handle` never rejects (it catches its own errors), but the `void` is
       // still guarded by the crash guard above: an unhandled rejection reaching
@@ -1930,6 +2051,12 @@ export async function main(): Promise<void> {
   }
   watchFills(adapter)
   if (adapter !== paperAdapter) watchFills(paperAdapter)
+  if (demoRail !== null) {
+    watchFills(demoRail)
+    // Up at boot when credentials are stored, so its socket and sweep cover
+    // demo orders left resting by a restart. Not configured is not an error.
+    void demoRail.ensure().catch(() => {})
+  }
 
   /**
    * The market-data fan-out: the QuoteMap the peg reads, and the simulator that
@@ -1963,8 +2090,23 @@ export async function main(): Promise<void> {
     fills,
     // Per document — Delta only for an exact `mode: 'live'` with the live
     // rail on; the simulator for everything else (`dx-edge.ts`).
-    adapterFor: (doc) =>
-      chooseAdapter<BrokerAdapter>(doc, process.env, { simulator: paperAdapter, delta: dxAdapter }),
+    adapterFor: createAdapterRouter<BrokerAdapter>({
+      env: process.env,
+      simulator: paperAdapter,
+      live: dxAdapter,
+      demo: demoRail,
+      bookRail: async (tag) => {
+        const row = await mongo.db.collection('desk-books-registry').findOne({ tag, mode: 'paper' })
+        return row?.['dx_paper_rail'] === 'demo' ? 'demo' : 'sim'
+      },
+      stamp: async (doc, rail) => {
+        const res = await gatewayOrders.updateOne(
+          { clientOrderId: String(doc['clientOrderId'] ?? '') },
+          { $set: { dx_paper_rail: rail } },
+        )
+        if (res.matchedCount !== 1) throw new Error(`order document ${String(doc['clientOrderId'])} not found to stamp`)
+      },
+    }),
     resolveContract: (tradingsymbol) => {
       const contract = master.resolveSymbol(tradingsymbol)
       if (contract === null || contract.instrumentToken === undefined) return null
@@ -1997,7 +2139,7 @@ export async function main(): Promise<void> {
     // are the gates; Delta's heartbeat is the dead-man switch.
     linkRefusal: () => null,
     orderMaxAgeMs,
-    sweepArmed: () => brokerSweepArmed,
+    sweepArmed: (doc) => (stampedPaperRail(doc) === 'demo' ? demoSweepArmed : brokerSweepArmed),
     now: () => Date.now(),
     log,
   })
@@ -2109,6 +2251,7 @@ export async function main(): Promise<void> {
     // Before Mongo, so a socket still reconnecting cannot hold the exit open
     // past the 10s backstop below.
     privateSocket?.close()
+    demoSocket?.close()
     void bus.close().then(() => mongo.close()).then(() => process.exit(0))
     setTimeout(() => process.exit(1), 10_000).unref()
   }

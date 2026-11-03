@@ -18,7 +18,7 @@ import assert from 'node:assert/strict'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { seal } from '@algomaker/secrets'
-import { signRequest } from '@algomaker/dx'
+import { DX_DEMO_REST_URL, DX_PROD_REST_URL, isDemoHost, signRequest } from '@algomaker/dx'
 import { connectMongo, type MongoHandle } from '../src/mongo.ts'
 import { createBridgeServer } from '../src/server.ts'
 import { bearerGate } from '../src/authgate.ts'
@@ -47,6 +47,18 @@ let available = false
 let dxReply: { status: number; body: unknown } = { status: 200, body: {} }
 /** Every request the stub saw, with whether its signature verified. */
 let dxSeen: { method: string; url: string; apiKey: string; signed: boolean; userAgent: string }[] = []
+/**
+ * Every URL the credential test fetched. A testnet URL is answered by the same
+ * local stub (rewritten onto it), so the demo test is a real signed request
+ * with no network; anything else goes where it says.
+ */
+let fetched: string[] = []
+const routedFetch: typeof fetch = (input, init) => {
+  const url = String(input instanceof Request ? input.url : input)
+  fetched.push(url)
+  if (isDemoHost(url)) return fetch(url.replace(DX_DEMO_REST_URL, brokerBase), init)
+  return fetch(input, init)
+}
 
 /**
  * ONLY THE CONNECT IS CAUGHT.
@@ -70,7 +82,7 @@ before(async () => {
     log: () => {},
     now: () => NOW,
   } as unknown as ApiDeps
-  server = createBridgeServer({ gate: bearerGate(TOKEN), routes: [brokerRoutes(apiDeps)] })
+  server = createBridgeServer({ gate: bearerGate(TOKEN), routes: [brokerRoutes(apiDeps, { fetch: routedFetch })] })
   await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r))
   base = `http://127.0.0.1:${(server!.address() as AddressInfo).port}`
 
@@ -109,6 +121,7 @@ beforeEach(async () => {
   // a broker response nobody in that test wrote.
   dxReply = { status: 200, body: {} }
   dxSeen = []
+  fetched = []
 })
 
 function itMongo(name: string, fn: () => Promise<void>): void {
@@ -158,7 +171,8 @@ itMongo('an unconfigured deployment lists every broker as absent', async () => {
   assert.equal(res.status, 200)
   const body = await assertNoSecret(res, 'GET empty')
   const brokers = body['brokers'] as Record<string, unknown>[]
-  assert.deepEqual(brokers.map((b) => b['kind']), ['delta', 'zerodha'])
+  assert.deepEqual(brokers.map((b) => b['kind']), ['delta', 'zerodha', 'delta-demo'])
+  assert.equal(brokers[2]?.['label'], 'Delta Demo (testnet)')
   for (const b of brokers) {
     assert.equal(b['state'], 'absent')
     assert.equal(b['configured'], false)
@@ -316,6 +330,53 @@ itMongo('a missing baseUrl is reported rather than attempted — the India host 
   const body = await assertNoSecret(await post('/v1/desk/brokers/delta/test'), 'POST test no baseUrl')
   assert.equal(body['ok'], false)
   assert.match(String(body['error']), /meta\.baseUrl is required/)
+  assert.equal(dxSeen.length, 0)
+})
+
+// ------------------------------------------------------------ delta-demo
+
+itMongo('delta-demo is stored sealed like delta and never returned', async () => {
+  await put('/v1/desk/brokers/delta-demo', { secret: SECRETS })
+  const list = await assertNoSecret(await get('/v1/desk/brokers'), 'GET demo stored')
+  const row = (list['brokers'] as Record<string, unknown>[]).find((b) => b['kind'] === 'delta-demo')
+  assert.equal(row?.['configured'], true)
+  assert.equal(row?.['state'], 'ok')
+  const doc = await handle!.db.collection(BROKER_COLLECTION).findOne({ kind: 'delta-demo' })
+  assert.equal(typeof doc?.['secret'], 'string')
+  assert.equal(JSON.stringify(doc).includes(SECRETS.apiSecret), false)
+})
+
+itMongo('delta-demo Test is a signed wallet read against the TESTNET by default', async () => {
+  dxReply = { status: 200, body: { success: true, result: [{ asset_symbol: 'USD', balance: '10000' }] } }
+  await put('/v1/desk/brokers/delta-demo', { secret: SECRETS })
+  const body = await assertNoSecret(await post('/v1/desk/brokers/delta-demo/test'), 'POST demo test')
+  assert.equal(body['ok'], true, JSON.stringify(body))
+  assert.match(String(body['note']), /testnet/)
+  assert.deepEqual(fetched, [`${DX_DEMO_REST_URL}/v2/wallet/balances`])
+  assert.equal(dxSeen[0]?.signed, true)
+  assert.equal(dxSeen[0]?.apiKey, SECRETS.apiKey)
+})
+
+itMongo('demo credentials are refused for the production host, before any request', async () => {
+  await put('/v1/desk/brokers/delta-demo', { meta: { baseUrl: DX_PROD_REST_URL }, secret: SECRETS })
+  const body = await assertNoSecret(await post('/v1/desk/brokers/delta-demo/test'), 'POST demo prod host')
+  assert.equal(body['ok'], false)
+  assert.match(String(body['error']), /demo credentials may only be sent to the testnet/)
+  assert.deepEqual(fetched, [])
+  // A local host is not testnet either: the demo rail is an allowlist.
+  await put('/v1/desk/brokers/delta-demo', { meta: { baseUrl: brokerBase } })
+  const local = await assertNoSecret(await post('/v1/desk/brokers/delta-demo/test'), 'POST demo local host')
+  assert.equal(local['ok'], false)
+  assert.deepEqual(fetched, [])
+  assert.equal(dxSeen.length, 0)
+})
+
+itMongo('production credentials are refused for the testnet host, before any request', async () => {
+  await put('/v1/desk/brokers/delta', { meta: { baseUrl: DX_DEMO_REST_URL }, secret: SECRETS })
+  const body = await assertNoSecret(await post('/v1/desk/brokers/delta/test'), 'POST delta testnet host')
+  assert.equal(body['ok'], false)
+  assert.match(String(body['error']), /production credentials must never be sent to the testnet/)
+  assert.deepEqual(fetched, [])
   assert.equal(dxSeen.length, 0)
 })
 
