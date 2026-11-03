@@ -37,6 +37,7 @@ import { recordSeries } from '../book-series.ts'
 import { handleSettleExpired } from '../settle-expired.ts'
 import { SUPERVISOR_STATE_COLLECTION, stateKey } from '../../../supervisor/src/state-store.ts'
 import type { Database } from '../store.ts'
+import { liveBudgetRefusal } from '../bull-s-live.ts'
 
 /**
  * The shared bag plus the password gate, exactly as `routes/desk.ts` takes it.
@@ -616,6 +617,12 @@ export function booksRoutes(deps: BooksDeps): Route {
         const existing = await store.getBook(tag, mode)
         if (existing === null) {
           send(404, { error: `'${tag}' has no book registered in ${mode}` })
+          return true
+        }
+        // A live BULL-S book does not start without a margin budget (`bull-s-live.ts`).
+        const noBudget = mode === 'live' ? liveBudgetRefusal(tag, existing.dials) : null
+        if (noBudget !== null) {
+          send(400, { error: noBudget })
           return true
         }
         const row = await store.setDesired(tag, mode, 'running', now())
@@ -1206,6 +1213,16 @@ export function booksRoutes(deps: BooksDeps): Route {
         if (!checked.ok) {
           send(400, { error: checked.error })
           return true
+        }
+        // A live BULL-S book is never left without a margin budget: a patch that
+        // would turn BULL-S on at 0, or take the budget to 0, is refused — set
+        // the budget in the same patch (`bull-s-live.ts`). Before the password.
+        if (mode === 'live') {
+          const noBudget = liveBudgetRefusal(tag, { ...existing.dials, ...checked.value })
+          if (noBudget !== null) {
+            send(400, { error: noBudget })
+            return true
+          }
         }
         /**
          * NO ENGINE SWITCH UNDER HELD LEGS (six-playbooks spec §3, F9).
