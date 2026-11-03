@@ -780,6 +780,12 @@ export interface TrancheAggregate {
   readonly allTerminal: boolean
   /** Tranches with no terminal status yet — the reason `allTerminal` is false. */
   readonly working: readonly string[]
+  /**
+   * What the order's fills cost (Delta: USD, fee + GST): the sum of each
+   * tranche's furthest row's cumulative `fee`. NULL when no chosen row
+   * carries one — unknown, never 0 (every NSE order).
+   */
+  readonly fee: number | null
 }
 
 /** The tranches one desk order was planned into, and how they ended. */
@@ -867,8 +873,10 @@ export function aggregateTranches(
   }
   const rejected = [...rejectedBy.values()]
 
+  let fee: number | null = null
   for (const f of best.values()) {
     filledQty += f.filledQty
+    if (typeof f.fee === 'number' && Number.isFinite(f.fee) && f.fee >= 0) fee = (fee ?? 0) + f.fee
     if (f.avgPrice !== null && f.filledQty > 0) {
       notional += f.avgPrice * f.filledQty
       pricedQty += f.filledQty
@@ -894,6 +902,7 @@ export function aggregateTranches(
     rejected,
     allTerminal: working.length === 0,
     working,
+    fee: fee === null ? null : Number(fee.toFixed(8)),
   }
 }
 
@@ -903,6 +912,8 @@ export interface OrderOutcome {
   readonly filledQty: number
   readonly avgPrice: number | null
   readonly reason?: string
+  /** The order's total fee, when its fills carried one (`TrancheAggregate.fee`). */
+  readonly fee?: number
 }
 
 /**
@@ -914,8 +925,9 @@ export interface OrderOutcome {
  * arrive.
  */
 export function decideOrderOutcome(agg: TrancheAggregate, expectedQty: number): OrderOutcome | null {
+  const fee = agg.fee === null ? {} : { fee: agg.fee }
   if (agg.complete) {
-    return { state: 'FILLED', filledQty: agg.filledQty, avgPrice: agg.avgPrice }
+    return { state: 'FILLED', filledQty: agg.filledQty, avgPrice: agg.avgPrice, ...fee }
   }
   if (!agg.allTerminal) return null
   const reason =
@@ -926,6 +938,6 @@ export function decideOrderOutcome(agg: TrancheAggregate, expectedQty: number): 
   // position when it has most of one, and flattening against that difference
   // opens a fresh position in the opposite direction.
   return agg.filledQty > 0
-    ? { state: 'PARTIAL', filledQty: agg.filledQty, avgPrice: agg.avgPrice, reason }
+    ? { state: 'PARTIAL', filledQty: agg.filledQty, avgPrice: agg.avgPrice, reason, ...fee }
     : { state: 'REJECTED', filledQty: 0, avgPrice: null, reason }
 }

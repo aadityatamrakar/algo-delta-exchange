@@ -49,3 +49,26 @@ test('a sum that drifts ABOVE is recorded clean (0.051 + 0.049 + 0.05 = 0.15)', 
 test('a tranche plan sums onto the step too', () => {
   assert.equal(trancheQtyThrough([{ qty: 0.7 }, { qty: 0.1 }], 1), 0.8)
 })
+
+test('the order\'s fee is the sum of each tranche\'s furthest row, and rides the outcome', () => {
+  // Fee is CUMULATIVE per tranche like filledQty: the PARTIAL row's 0.1 is
+  // superseded by the FILLED row's 0.2, never added to it.
+  const agg = aggregateTranches(
+    [
+      { ...row('c.1', 0.025), status: 'PARTIALLY_FILLED', fee: 0.1 },
+      { ...row('c.1', 0.05), fee: 0.2 },
+      { ...row('c.2', 0.05), fee: 0.21 },
+    ],
+    0.1,
+    { ids: ['c.1', 'c.2'], failed: [] },
+  )
+  assert.equal(agg.fee, 0.41)
+  assert.equal(decideOrderOutcome(agg, 0.1)?.fee, 0.41)
+})
+
+test('no tranche row carries a fee: the order has none — absent, not 0', () => {
+  const agg = aggregateTranches([row('c.1', 0.05)], 0.05, { ids: ['c.1'], failed: [] })
+  assert.equal(agg.fee, null)
+  const out = decideOrderOutcome(agg, 0.05)
+  assert.equal(out !== null && 'fee' in out, false)
+})

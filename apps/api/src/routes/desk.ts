@@ -7,7 +7,8 @@
  */
 
 import type { ApiDeps, Route, RouteCtx } from './kit.ts'
-import { isObject, istDate, limitOf, modeOf, suffixOf } from './kit.ts'
+import { isObject, limitOf, modeOf, suffixOf } from './kit.ts'
+import { venueDay } from '../venue.ts'
 import { aggressionPctError, validateDeclareRequest, validateSeedRequest } from '../validate.ts'
 import { heldFromFills } from '../held-position.ts'
 import {
@@ -30,7 +31,7 @@ import { guardStore } from '../day-guard.ts'
 import { AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, auditLog, ensureAuditIndex } from '../audit.ts'
 import { hostedTags, isHostedTag } from '../../../runner/src/catalogue.ts'
 import { HOSTED_STRATEGIES } from '../registry-seed.ts'
-import { buildChain } from '../chain.ts'
+import { buildChain, chainExpiries } from '../chain.ts'
 import { repairHoldLookup, type RepairHold } from '../repair-apply.ts'
 import type { PositionsResponse } from '../service.ts'
 import {
@@ -177,7 +178,7 @@ async function loadDayGuards(
 ): Promise<Map<string, DayGuardView>> {
   const out = new Map<string, DayGuardView>()
   try {
-    for (const record of await guardStore(deps.db).today(istDate(nowMs))) {
+    for (const record of await guardStore(deps.db).today(venueDay(nowMs, deps.venue))) {
       out.set(runtimeKey(record.tag, record.mode), {
         fired: true,
         trigger: record.trigger,
@@ -741,6 +742,20 @@ export function deskRoutes(deps: DeskDeps): Route {
        * `chain.ts` for why greeks are never served from here.
        */
       const chainFor = suffixOf(path, '/v1/desk/chain/')
+      /**
+       * `GET /v1/desk/chain/:symbol/expiries` — the listed option expiries, for
+       * the option chain page's tabs. Read off the master alone, so it answers
+       * on a dead feed too: a list of contracts is not a price.
+       */
+      if (chainFor !== null && chainFor.endsWith('/expiries')) {
+        const underlying = chainFor.slice(0, -'/expiries'.length)
+        if (underlying === '' || underlying.includes('/')) {
+          send(404, { error: 'no such route' })
+          return true
+        }
+        send(200, chainExpiries(master.current(), underlying))
+        return true
+      }
       if (chainFor !== null) {
         if (marks === undefined) {
           send(503, { error: 'quote cache unavailable' })

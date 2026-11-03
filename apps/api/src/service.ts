@@ -62,9 +62,9 @@ import { lookbackDaysOf, type LegQuote } from './pnl-jobs.ts'
 import type { ExitQuote, ExitSide } from './marks.ts'
 import { PnlStore, pnlKey } from './pnlstore.ts'
 import { paperFillEvent, routedCollection, withOrderContext, type OrderRail, railFor } from './rail.ts'
-// The SAME IST date `submit.ts` judges "expires today" with — a trading day is
-// an IST day, and the host's own zone is not (see `istDate`).
-import { istDate } from './routes/kit.ts'
+// The SAME venue day `submit.ts` judges "expires today" with — the IST date on
+// NSE, the settlement day on DX; never the host's own zone.
+import { venueDay } from './venue.ts'
 import { seedBook, type SeedRequest, type SeedResult } from './seed.ts'
 import {
   addsExposure,
@@ -824,7 +824,7 @@ export class BridgeService {
       req.via === 'engine' &&
       typeof req.action === 'string' &&
       (req.action.startsWith('dl-') || req.action === 'eod') &&
-      req.expiry === istDate(now)
+      req.expiry === venueDay(now)
     // Priced BEFORE routing, never after: the rail writes its document during
     // the loop below, so decorating the response would leave the real order
     // MARKET while the API reported LIMIT. See `priceFillsForRoute`.

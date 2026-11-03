@@ -39,6 +39,7 @@ import type { DeskMode } from './contract.ts'
 import { streamRoutes } from './routes/stream.ts'
 import { loadStoredInstruments } from '../../marketdata/src/sync-runner.ts'
 import type { ApiDeps } from './routes/kit.ts'
+import { API_VENUE } from './venue.ts'
 import { createAuthGate } from './authsvc.ts'
 import { healthRoutes } from './routes/health.ts'
 import { systemRoutes } from './routes/system.ts'
@@ -317,13 +318,33 @@ export async function main(): Promise<void> {
     bid?: number
     ask?: number
     depth?: { buy: { price: number; qty: number }[]; sell: { price: number; qty: number }[] }
+    // Delta's option fields (T5). NSE ticks carry none of them.
+    mark?: number
+    bidSize?: number
+    askSize?: number
+    iv?: number
+    delta?: number
+    gamma?: number
+    theta?: number
+    vega?: number
   }>('md.tick', (m) => {
-    marks.update(m.payload.token, m.payload.price, m.payload.ts, {
-      oi: m.payload.oi,
-      volume: m.payload.volume,
-      bid: m.payload.bid,
-      ask: m.payload.ask,
-      depth: m.payload.depth,
+    const p = m.payload
+    marks.update(p.token, p.price, p.ts, {
+      oi: p.oi,
+      volume: p.volume,
+      bid: p.bid,
+      ask: p.ask,
+      depth: p.depth,
+      option: {
+        mark: p.mark,
+        bidSize: p.bidSize,
+        askSize: p.askSize,
+        iv: p.iv,
+        delta: p.delta,
+        gamma: p.gamma,
+        theta: p.theta,
+        vega: p.vega,
+      },
     })
     /**
      * Re-mark and push, but ONLY for an instrument the desk actually holds —
@@ -691,6 +712,8 @@ export async function main(): Promise<void> {
     feedHealth,
     busConnected: () => bus.connected,
     stream,
+    // `DESK_VENUE`, read once (`venue.ts`). Every day-keyed site reads it here.
+    venue: API_VENUE,
     log,
     now: () => Date.now(),
   }

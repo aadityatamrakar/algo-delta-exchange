@@ -89,6 +89,7 @@ import { rollupDate } from './pnl-jobs.ts'
 import { PnlStore } from './pnlstore.ts'
 import { NON_TERMINAL_STATES } from './reconcile-live.ts'
 import { isObject, istDate, type ApiDeps, type RouteCtx } from './routes/kit.ts'
+import { isNse } from './venue.ts'
 import { COLLECTIONS } from './store.ts'
 
 /**
@@ -542,6 +543,22 @@ const REFUSED = 'NOTHING WAS SETTLED.'
  */
 export async function handleSettleExpired(deps: SettleDeps, ctx: RouteCtx, tag: string): Promise<boolean> {
   const { send } = ctx
+  /**
+   * ON DX THIS IS THE GATEWAY'S JOB, NOT THIS ROUTE'S. Delta settles every
+   * expiry itself at 12:00 UTC on the 30-minute TWAP of its index, and the
+   * gateway's settlement job books each expired leg — paper and live alike —
+   * at the price Delta publishes, alerting when it is late and never inventing
+   * one. Intrinsic against an underlying close is NSE's method, and a second
+   * booking of the same expiry here would close the leg twice.
+   */
+  if (!isNse(deps.venue)) {
+    send(409, {
+      error:
+        'Delta settles every expiry itself: the gateway books each expired leg at the settlement ' +
+        "price Delta publishes. Nothing is settled here on this venue.",
+    })
+    return true
+  }
   // Stated, never defaulted — the DELETE's rule (`requiredModeParam`).
   const raw = ctx.url.searchParams.get('mode')
   if (raw !== 'paper' && raw !== 'live') {

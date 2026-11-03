@@ -724,3 +724,23 @@ itMongo('a flat book answers 200 with nothing settled', async () => {
   assert.deepEqual(res.body['settled'], [])
   assert.equal(res.body['remaining'], 0)
 })
+
+test('DX: settle-expired refuses — Delta settles every expiry and the gateway books its price', async () => {
+  const { DX } = await import('@algomaker/venue')
+  const { handleSettleExpired } = await import('../src/settle-expired.ts')
+  const sent: { status: number; body: unknown }[] = []
+  const ctx = {
+    url: new URL('http://x/v1/desk/books/registry/T/settle-expired?mode=paper'),
+    send: (status: number, body: unknown) => {
+      sent.push({ status, body })
+    },
+    readJson: async () => {
+      throw new Error('the body must not be read')
+    },
+  }
+  const deps = { venue: DX } as unknown as Parameters<typeof handleSettleExpired>[0]
+  assert.equal(await handleSettleExpired(deps, ctx as unknown as Parameters<typeof handleSettleExpired>[1], 'T'), true)
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0]?.status, 409)
+  assert.match(String((sent[0]?.body as { error: string }).error), /Delta settles/)
+})

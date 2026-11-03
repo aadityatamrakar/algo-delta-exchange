@@ -26,7 +26,8 @@ import { buildPositions, type Costs, type Marks } from '@algomaker/pnl'
 import { fixedClock, isMarketOpen } from '@algomaker/core'
 import type { DeskMode } from './contract.ts'
 import type { ExitQuote, ExitSide, MarkBasis, QuoteCache } from './marks.ts'
-import { istDate, istDayRange, type ApiDeps } from './routes/kit.ts'
+import type { ApiDeps } from './routes/kit.ts'
+import { API_VENUE, isNse, minutesIntoVenueDay, previousVenueDay, venueDayRange, type VenueSpec } from './venue.ts'
 import { PnlStore, pnlKey, splitPnlKey, type FillLoad, type PnlSnapshot } from './pnlstore.ts'
 import {
   buildDailyReport,
@@ -44,6 +45,11 @@ import {
 } from './rollup.ts'
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The venue a bag of deps runs on: its own when stated, else the process's. */
+function venueOfDeps(deps: Pick<ApiDeps, 'venue'>): VenueSpec {
+  return deps.venue ?? API_VENUE
+}
 const MODES: readonly DeskMode[] = ['paper', 'live']
 
 /**
@@ -116,6 +122,11 @@ export interface PnlOptions {
   readonly rollupAfterIstMinutes?: number
   /** IST minute-of-day after which the nightly prune may run. */
   readonly pruneAfterIstMinutes?: number
+  /**
+   * DX only: minutes after the 12:00 UTC settlement before the day that just
+   * settled is rolled up (and the prune runs). See `DX_ROLLUP_AFTER_MIN`.
+   */
+  readonly dxRollupAfterMinutes?: number
   /** Days of missed rollups to repair at boot. */
   readonly repairDays?: number
 }
@@ -125,7 +136,12 @@ export interface PnlRow {
   readonly tag: string
   readonly label: string
   readonly mode: DeskMode
+  /** Booked today, NET of venue fees. */
   readonly realised: number
+  /** Booked today before fees; equal to `realised` where no fill carries one. */
+  readonly gross: number
+  /** Venue fees on today's fills (Delta: USD, GST included). */
+  readonly fees: number
   readonly unrealised: number | null
   readonly total: number | null
   /**
@@ -191,7 +207,9 @@ export function keepDaysOf(opts: PnlOptions): number {
  * exists at all.
  */
 function exitReadFor(deps: ApiDeps, cache: QuoteCache): (token: number, exit: ExitSide) => ExitQuote | null {
-  const sessionOpen = isMarketOpen(fixedClock(deps.now()))
+  const venue = venueOfDeps(deps)
+  // NSE keeps core's session clock exactly; a 24x7 venue is always live.
+  const sessionOpen = isNse(venue) ? isMarketOpen(fixedClock(deps.now())) : venue.isOpen(deps.now())
   return sessionOpen
     ? (token, exit) => cache.exitQuote(token, exit)
     : (token, exit) => cache.displayExitQuote(token, exit)
@@ -324,7 +342,8 @@ export async function livePnl(
   mode: DeskMode,
   nowMs: number,
 ): Promise<PnlSummary> {
-  const { from } = istDayRange(istDate(nowMs))
+  const venue = venueOfDeps(deps)
+  const { from } = venueDayRange(venue.dayKey(nowMs), venue)
   const load = await store.loadFills({
     from: from - lookbackDaysOf(opts) * DAY_MS,
     // Exclusive upper bound, so a fill stamped exactly now is still included.
@@ -458,6 +477,8 @@ export function pnlRowFor(input: {
     label: input.label,
     mode: input.mode,
     realised: pnl.realised,
+    gross: pnl.gross,
+    fees: pnl.fees,
     unrealised: complete ? pnl.unrealised : null,
     total: complete ? pnl.total : null,
     openLegs: pnl.openLegs,
@@ -564,14 +585,15 @@ export async function rollupDate(
   date: string,
   nowMs: number,
 ): Promise<DailyReport[]> {
-  const { from, to } = istDayRange(date)
+  const venue = venueOfDeps(deps)
+  const { from, to } = venueDayRange(date, venue)
   const load = await store.loadFills({
     from: from - lookbackDaysOf(opts) * DAY_MS,
     to,
     ...(opts.fillLimit === undefined ? {} : { limit: opts.fillLimit }),
   })
   const series = await store.seriesByKey(date)
-  const marksOf = date === istDate(nowMs) ? resolverOf(deps, opts) : () => ({})
+  const marksOf = date === venue.dayKey(nowMs) ? resolverOf(deps, opts) : () => ({})
 
   const keys = new Set<string>(series.keys())
   for (const [key, fills] of load.byKey) {
@@ -636,9 +658,11 @@ export async function repairRollups(
   nowMs: number,
 ): Promise<string[]> {
   const days = opts.repairDays ?? numberFromEnv('DESK_PNL_REPAIR_DAYS', 7)
+  const venue = venueOfDeps(deps)
   const repaired: string[] = []
+  let date = venue.dayKey(nowMs)
   for (let back = 1; back <= days; back++) {
-    const date = istDate(nowMs - back * DAY_MS)
+    date = previousVenueDay(date, venue)
     const have = await store.rolledUpKeys(date)
     const reports = await rollupDate(deps, store, opts, date, nowMs)
     let wrote = 0
@@ -674,7 +698,7 @@ export async function runPrune(
   const candidates = await store.pruneCandidates(input.nowMs, input.keepDays)
   const activity = []
   for (const date of candidates) {
-    const { from, to } = istDayRange(date)
+    const { from, to } = store.dayRange(date)
     const [snapshots, snapKeys, rolled, traded] = await Promise.all([
       store.countSnapshots(date),
       store.snapshotKeys(date),
@@ -715,10 +739,16 @@ export async function runPrune(
  * at.
  */
 export function startPnlJobs(deps: ApiDeps, opts: PnlOptions = {}): () => void {
-  const store = new PnlStore(deps.db)
-  const intervalMs = opts.snapshotIntervalMs ?? numberFromEnv('DESK_PNL_SNAPSHOT_MS', 15_000)
+  const venue = venueOfDeps(deps)
+  const store = new PnlStore(deps.db, venue)
+  // A 24x7 venue snapshots around the clock, so at a slower default cadence:
+  // one a minute is 1,440 points a day per book, about what NSE's 15 s over a
+  // six-hour session writes.
+  const intervalMs =
+    opts.snapshotIntervalMs ?? numberFromEnv('DESK_PNL_SNAPSHOT_MS', isNse(venue) ? 15_000 : 60_000)
   const rollupAfter = opts.rollupAfterIstMinutes ?? 15 * 60 + 40
   const pruneAfter = opts.pruneAfterIstMinutes ?? 60 + 30
+  const dxRollupAfter = opts.dxRollupAfterMinutes ?? DX_ROLLUP_AFTER_MIN
   const keepDays = keepDaysOf(opts)
 
   let stopped = false
@@ -738,7 +768,7 @@ export function startPnlJobs(deps: ApiDeps, opts: PnlOptions = {}): () => void {
     if (stopped || snapshotting) return
     const now = deps.now()
     // The TICK is gated on market hours, never the job's existence. See header.
-    if (!inTradingSession(now)) return
+    if (!inTradingSession(now, venue)) return
     snapshotting = true
     void snapshotOnce(deps, store, opts, now)
       .catch((err: unknown) => fail('snapshot', err))
@@ -751,19 +781,16 @@ export function startPnlJobs(deps: ApiDeps, opts: PnlOptions = {}): () => void {
   const daily = setInterval(() => {
     if (stopped || housekeeping) return
     const now = deps.now()
-    const today = istDate(now)
-    const minutes = istMinutesOfDay(now)
-    const needsRollup = minutes >= rollupAfter && rolledUpFor !== today
-    // The prune's own day: it runs after midnight, so it is "yesterday's"
-    // housekeeping and is tracked against the calendar day it runs on.
-    const needsPrune = minutes >= pruneAfter && prunedFor !== today
+    const plan = dailyPlan(venue, now, { rollupAfter, pruneAfter, dxRollupAfter, rolledUpFor, prunedFor })
+    const { today } = plan
+    const { needsRollup, needsPrune } = plan
     if (!needsRollup && !needsPrune) return
     housekeeping = true
     void (async () => {
       if (needsRollup) {
-        const reports = await writeRollups(deps, store, opts, today, now)
-        rolledUpFor = today
-        deps.log('daily P&L rollup written', { date: today, strategies: reports.length })
+        const reports = await writeRollups(deps, store, opts, plan.rollupDate, now)
+        rolledUpFor = plan.rollupDate
+        deps.log('daily P&L rollup written', { date: plan.rollupDate, strategies: reports.length })
       }
       if (needsPrune) {
         const result = await runPrune(store, { nowMs: now, keepDays, dryRun: false })
@@ -801,6 +828,66 @@ export function startPnlJobs(deps: ApiDeps, opts: PnlOptions = {}): () => void {
     clearInterval(snapshot)
     clearInterval(daily)
     clearTimeout(boot)
+  }
+}
+
+/**
+ * DX: the day just settled is rolled up 35 minutes after 12:00 UTC. Delta
+ * publishes the settlement price shortly after the instant; the gateway books
+ * each expired leg at it as soon as it exists and alerts at +30 min when it
+ * does not. Writing after that point is what puts the day's expiries in its
+ * report. The boot repair only fills a MISSING day, so this scheduled write is
+ * the one that counts.
+ */
+export const DX_ROLLUP_AFTER_MIN = 35
+
+export interface DailyPlan {
+  /** The venue day `now` belongs to — what the prune is tracked against. */
+  readonly today: string
+  /** The day a rollup now would write. NSE: today; DX: the day that last settled. */
+  readonly rollupDate: string
+  readonly needsRollup: boolean
+  readonly needsPrune: boolean
+}
+
+/**
+ * Which housekeeping is due now. Pure, so the two clocks are tested directly.
+ *
+ * NSE is unchanged: the IST day's rollup after 15:40 IST, the prune after
+ * 01:30 IST. DX has no close: the day that settled at the last 12:00 UTC is
+ * rolled up `dxRollupAfter` minutes later, and the prune follows it in the
+ * same pass.
+ */
+export function dailyPlan(
+  venue: VenueSpec,
+  now: number,
+  s: {
+    rollupAfter: number
+    pruneAfter: number
+    dxRollupAfter: number
+    rolledUpFor: string
+    prunedFor: string
+  },
+): DailyPlan {
+  const today = venue.dayKey(now)
+  if (isNse(venue)) {
+    const minutes = istMinutesOfDay(now)
+    return {
+      today,
+      rollupDate: today,
+      needsRollup: minutes >= s.rollupAfter && s.rolledUpFor !== today,
+      // The prune's own day: it runs after midnight, so it is "yesterday's"
+      // housekeeping and is tracked against the calendar day it runs on.
+      needsPrune: minutes >= s.pruneAfter && s.prunedFor !== today,
+    }
+  }
+  const settled = previousVenueDay(today, venue)
+  const due = minutesIntoVenueDay(now, venue) >= s.dxRollupAfter
+  return {
+    today,
+    rollupDate: settled,
+    needsRollup: due && s.rolledUpFor !== settled,
+    needsPrune: due && s.prunedFor !== today,
   }
 }
 

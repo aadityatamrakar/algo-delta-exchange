@@ -65,6 +65,44 @@ export interface Mark {
   readonly stale: boolean
 }
 
+/**
+ * THE OPTION FIELDS A DELTA TICK CARRIES and an NSE tick never does: the
+ * exchange's own mark, the touch sizes, mark IV and its greeks. Stored
+ * verbatim for DISPLAY (the option chain page). Every field optional and
+ * finite-only: a field the tick did not carry is absent, never 0.
+ */
+export interface OptionTickFields {
+  readonly mark?: number | undefined
+  readonly bidSize?: number | undefined
+  readonly askSize?: number | undefined
+  readonly iv?: number | undefined
+  readonly delta?: number | undefined
+  readonly gamma?: number | undefined
+  readonly theta?: number | undefined
+  readonly vega?: number | undefined
+}
+
+export type OptionQuoteFields = {
+  -readonly [K in keyof OptionTickFields]?: number
+}
+
+const OPTION_FIELDS = ['mark', 'bidSize', 'askSize', 'iv', 'delta', 'gamma', 'theta', 'vega'] as const
+
+/** The finite fields of a tick's option block, or undefined when none is. */
+function optionFieldsOf(raw: OptionTickFields | undefined): OptionQuoteFields | undefined {
+  if (raw === undefined) return undefined
+  const out: OptionQuoteFields = {}
+  let any = false
+  for (const k of OPTION_FIELDS) {
+    const v = raw[k]
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      out[k] = v
+      any = true
+    }
+  }
+  return any ? out : undefined
+}
+
 export interface Quote {
   readonly price: number
   readonly oi: number | null
@@ -82,6 +120,8 @@ export interface Quote {
    * the feed — see `chain.ts`'s `DepthBook` for the shape a client gets.
    */
   readonly depth?: DepthBook
+  /** Delta's option fields, when the tick carried any. Absent on NSE. */
+  readonly option?: OptionQuoteFields
   /** Epoch ms of the tick this came from. */
   readonly asOf: number
   readonly ageMs: number
@@ -147,6 +187,11 @@ function exitPick(
   return { price: (bid + ask) / 2, basis: 'mid' }
 }
 
+/** `exactOptionalPropertyTypes`: spread the block only when there is one. */
+function withOption(o: OptionQuoteFields | undefined): { option?: OptionQuoteFields } {
+  return o === undefined ? {} : { option: o }
+}
+
 export class QuoteCache implements MarkSource {
   readonly #byToken = new Map<
     number,
@@ -164,6 +209,7 @@ export class QuoteCache implements MarkSource {
        */
       book: { bid: number; ask: number; ts: number } | null
       depth?: DepthBook
+      option?: OptionQuoteFields
     }
   >()
   readonly #spotByUnderlying = new Map<string, { price: number; ts: number }>()
@@ -204,6 +250,7 @@ export class QuoteCache implements MarkSource {
       bid?: number | undefined
       ask?: number | undefined
       depth?: DepthBook | undefined
+      option?: OptionTickFields | undefined
     },
   ): void {
     // Reject implausible prices at ingest rather than downstream. A zero or
@@ -227,6 +274,7 @@ export class QuoteCache implements MarkSource {
       ask: bothSides ? ask : null,
       book: bothSides ? { bid: bid as number, ask: ask as number, ts: at } : (prev?.book ?? null),
       ...(extra?.depth === undefined ? {} : { depth: extra.depth }),
+      ...withOption(optionFieldsOf(extra?.option)),
     })
     // Feed liveness is driven by ARRIVAL, not by the exchange timestamp on the
     // packet, so a broker replaying old timestamps cannot look alive.
@@ -364,6 +412,7 @@ export class QuoteCache implements MarkSource {
         bid: e.bid,
         ask: e.ask,
         ...(e.depth === undefined ? {} : { depth: e.depth }),
+        ...withOption(e.option),
         asOf: e.ts,
         ageMs,
         stale: ageMs > this.#staleAfterMs,
@@ -381,6 +430,18 @@ export class QuoteCache implements MarkSource {
       ageMs: this.#now() - s.ts,
       stale: true,
     }
+  }
+
+  /**
+   * The underlying's price off `md.spot`, with when it was true — for an
+   * underlying whose index has no instrument row to quote (Delta's BTC index,
+   * `.DEXBTUSD`). `display` reads past the spot feed's liveness gate, as
+   * `displaySpot` does; without it a dead spot feed answers null.
+   */
+  spotQuote(underlying: string, display = false): { price: number; asOf: number } | null {
+    if (!display && !this.spotAlive()) return null
+    const e = this.#spotByUnderlying.get(underlying)
+    return e === undefined ? null : { price: e.price, asOf: e.ts }
   }
 
   displaySpot(underlying: string, token: number | null): number | null {
@@ -465,6 +526,7 @@ export class QuoteCache implements MarkSource {
       bid: e.bid,
       ask: e.ask,
       ...(e.depth === undefined ? {} : { depth: e.depth }),
+      ...withOption(e.option),
       asOf: e.ts,
       ageMs,
       stale: ageMs > this.#staleAfterMs,

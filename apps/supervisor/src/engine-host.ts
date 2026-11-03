@@ -168,6 +168,7 @@ import {
   SESSION_OPEN_MIN,
   corridor,
   decide,
+  decideBullS,
   decideDeltaLean,
   decidePlaybook,
   isTradingDay,
@@ -179,6 +180,7 @@ import {
 } from '@algomaker/desk-engine'
 import { roundToStep, venueFromEnv, type VenueSpec } from '@algomaker/venue'
 import type {
+  BullSInputs,
   ChainSnap,
   DecisionRequest,
   DecisionResponse,
@@ -629,6 +631,29 @@ export const DL_EXIT_TRIGGERS: ReadonlySet<Trigger> = new Set<Trigger>([
   'dl-exit',
 ])
 
+/**
+ * THE BULL-S BOOK'S EXITS — the triggers that cancel a working entry to get
+ * out, exactly as `DL_EXIT_TRIGGERS` cancel a working add.
+ *
+ * A straddle's own stop, the book's target and loss cap, the operator's Close
+ * book, and the expiry flat. Each is emitted only after `decideBullS` has
+ * already confirmed it (the stop holds `bs_stop_confirm_s` on its own clock),
+ * so a working entry that sat in front of it would leave a stop that fired
+ * unrouted while the entry kept filling. `bs-expiry` is the engine's own hold
+ * at the instant and carries no orders; it is here so that, should it ever
+ * carry one, it outranks an entry too. `bs-entry` and `bs-rearm` are not exits.
+ *
+ * EXPORTED for the test that pins the set.
+ */
+export const BS_EXIT_TRIGGERS: ReadonlySet<Trigger> = new Set<Trigger>([
+  'bs-stop',
+  'bs-target',
+  'bs-loss',
+  'bs-flat',
+  'bs-close',
+  'bs-expiry',
+])
+
 const IST_OFFSET_MS = 330 * 60_000
 const DAY_MS = 86_400_000
 
@@ -752,9 +777,29 @@ export function tradingMinutesToExpiry(
 export class MarkClock {
   #date = ''
   #mark = -1
+  readonly #venue: VenueSpec | null
+
+  /**
+   * `venue` absent or NSE is the session grid above, exactly. A 24x7 venue
+   * (DX) marks every `MARK_STEP_MIN` around the clock, counted from the start
+   * of its settlement day (12:00 UTC): NSE's clamp to 09:15-15:30 would freeze
+   * the mark at 15:30 IST and a Delta book would journal nothing all night.
+   */
+  constructor(venue?: VenueSpec) {
+    this.#venue = venue === undefined || venue.id === 'nse' ? null : venue
+  }
 
   /** ADVANCES the clock: `isNewMark` is true for the first call in each mark. */
   next(nowMs: number): MarkContext {
+    if (this.#venue !== null) {
+      const day = this.#venue.dayKey(nowMs)
+      const dayStart = Date.parse(`${day}T00:00:00.000Z`) - 12 * 60 * 60_000
+      const index = Math.max(0, Math.floor((nowMs - dayStart) / (MARK_STEP_MIN * 60_000)))
+      const isNew = day !== this.#date || index !== this.#mark
+      this.#date = day
+      this.#mark = index
+      return { isNewMark: isNew, markIndexToday: index }
+    }
     const date = istDateOf(nowMs)
     const mark = markOf(istMinuteOf(nowMs))
     const isNewMark = date !== this.#date || mark !== this.#mark
@@ -1202,8 +1247,8 @@ export class EngineHost {
 
   constructor(deps: EngineHostDeps) {
     this.#d = deps
-    this.#marks = deps.marks ?? new MarkClock()
     this.#venue = deps.venue ?? venueFromEnv()
+    this.#marks = deps.marks ?? new MarkClock(this.#venue)
   }
 
   /** The decision this book is waiting on — the 1 s poll loop's gate. */
@@ -1418,7 +1463,17 @@ export class EngineHost {
     }
 
     const guard = GUARD_TRIGGERS.has(decision.trigger)
-    if (!guard) {
+    /**
+     * A BULL-S BOOK IS NEVER DAMPED. `decideBullS` owns its own timing: a stop
+     * has held `bs_stop_confirm_s` before it is emitted, and an entry is the
+     * crossing it saw ONCE — its `markState` spends that crossing, so a pass
+     * damped by `confirm_ms` would persist the crossing as seen and the entry
+     * would never be proposed again. `cooldown_s` would likewise sit a stop
+     * behind the entry it is protecting. One package at a time still holds
+     * (`pendingLots` blocks a new entry inside the engine).
+     */
+    const undamped = guard || dials.bs_enabled
+    if (!undamped) {
       if (!this.#damped(decision, state, inputs, dials, nowMs)) {
         // DAMPED, NOT IGNORED. The actions did not happen; the MARK did, and
         // the counters that moved with it — the lock's streak and its
@@ -1625,8 +1680,8 @@ export class EngineHost {
     // urgent after 60 s, spec §4.5), it is taken back as the escalation it is.
     const exiting =
       decision.action !== 'hold' &&
-      dials.delta_lean_enabled &&
-      DL_EXIT_TRIGGERS.has(decision.trigger) &&
+      ((dials.delta_lean_enabled && DL_EXIT_TRIGGERS.has(decision.trigger)) ||
+        (dials.bs_enabled && BS_EXIT_TRIGGERS.has(decision.trigger))) &&
       !alreadyWorking(state.workingPackage, decision.trigger, decision.urgency)
     if (exiting) {
       await this.#preempt(
@@ -1887,6 +1942,9 @@ export class EngineHost {
     markCtx: MarkContext,
   ): EngineDecision {
     const state = book.ruleState
+    // THE BULL-S PATH, first: `bs_enabled` names its own engine, whatever the
+    // other two dials say (`ENGINE_SWITCH_DIALS` keeps them exclusive).
+    if (dials.bs_enabled) return decideBullS(this.#bullSInputs(inputs), dials, state, markCtx)
     if (!dials.delta_lean_enabled) return decide(inputs, dials, state, markCtx)
 
     const ring = this.#d.ring
@@ -1946,6 +2004,40 @@ export class EngineHost {
       )
     }
     return decideDeltaLean(dl, dials, state, markCtx)
+  }
+
+  /**
+   * WHAT `decideBullS` NEEDS BEYOND AN `EngineInputs` (spec §6): the reference
+   * the grid is crossed on, its own stamp, and the minutes to the venue's
+   * expiry instant.
+   *
+   *   DX   the `.DEXBTUSD` index — the newest sample on this symbol's
+   *        `md.spot` ring, at ITS OWN stamp. Never the chain's forward: a
+   *        steadied or carried level is not the price the book crosses on.
+   *   NSE  the future (the parity suite's reference): the chain's forward at
+   *        the chain's `asOf`.
+   *
+   * `null` / `0` when there is no reading. The engine reads both as stale: no
+   * entry and no crossing until a fresh price arrives, then it re-baselines.
+   */
+  #bullSInputs(inputs: EngineInputs): BullSInputs {
+    let ref: number | null = null
+    let refAsOf = 0
+    if (this.#venue.id === 'nse') {
+      const spot = inputs.chain.spot
+      if (Number.isFinite(spot) && spot > 0) {
+        ref = spot
+        refAsOf = inputs.chain.asOf
+      }
+    } else {
+      const latest = this.#d.ring?.latest() ?? null
+      if (latest !== null && Number.isFinite(latest.spot) && latest.spot > 0) {
+        ref = latest.spot
+        refAsOf = latest.ms
+      }
+    }
+    const minutesToExpiry = (this.#venue.expiryInstantMs(inputs.chain.expiry) - inputs.nowMs) / 60_000
+    return { ...inputs, ref, refAsOf, minutesToExpiry }
   }
 
   // ------------------------------------------------------ the order budget
@@ -2956,6 +3048,14 @@ export class EngineHost {
        */
       let rcStack = current.ruleState.rcStack
       for (const fill of outcome.fills) {
+        /**
+         * THE VENUE'S FEE IS BANKED AGAINST THE BOOK on every fill, open or
+         * close (Delta charges both sides), so `cumRealized` — and the
+         * target, loss cap and day guard that read it through `totalPnl` — is
+         * NET. Absent on NSE, where the desk reports gross.
+         */
+        const fee = typeof fill.fee === 'number' && Number.isFinite(fill.fee) && fill.fee > 0 ? fill.fee : 0
+        if (basis.has(fill.instrument)) banked -= fee
         const b = basis.get(fill.instrument)
         if (b === undefined) {
           log.warn('a fill this package cannot attribute — not folded', {

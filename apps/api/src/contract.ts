@@ -310,6 +310,13 @@ export interface Fill {
   readonly price: number
   readonly ts: number
   /**
+   * WHAT THE VENUE CHARGED FOR THIS FILL, in the book currency (Delta: USD,
+   * GST included). ABSENT IS ZERO — every NSE fill, reported gross. Realised
+   * P&L is net of it (`rollup.ts:computeWindowPnl`). Spread conditionally, so
+   * an NSE document never grows the key.
+   */
+  readonly fee?: number
+  /**
    * WHICH DELTA-LEAN BET THIS ORDER BELONGS TO — `OpenAction.leanId`, carried
    * onto the order so the PAPER rail can put it back on the leg (plan 10A).
    *

@@ -78,7 +78,7 @@ import { deriveUnderlying } from '../../order-gateway/src/gateway.ts'
 import type { JournalEntry } from './livebook.ts'
 import { marketableLimit, type MarketableConfig } from './marketable.ts'
 import { railFor, type OrderRail, type PaperFillEmit } from './rail.ts'
-import { istDate } from './routes/kit.ts'
+import { venueDay, type VenueSpec } from './venue.ts'
 import type { MasterProvider } from './service.ts'
 import { gateStrategy, UnknownStrategy, type StrategyRow } from './strategies.ts'
 /**
@@ -446,6 +446,12 @@ export interface SubmitDeps {
    * every test) behaves exactly as it did. See GATE 6 in `submit`.
    */
   readonly risk?: RiskGatePort
+  /**
+   * Whose day "expires today" is judged on. Absent is the process venue. NSE:
+   * the IST date. DX: the settlement day — the 24 hours up to the contract's
+   * 12:00 UTC expiry instant, and not one millisecond after it.
+   */
+  readonly venue?: VenueSpec
   now(): number
   readonly log: Log
   /**
@@ -718,7 +724,7 @@ export class SubmitService {
     // dump, and an order that stated its own type never needs it.
     const expiresToday =
       marketableCfg !== undefined &&
-      this.#d.master.current().expiryOf(instrument.tradingsymbol) === istDate(now)
+      this.#d.master.current().expiryOf(instrument.tradingsymbol) === venueDay(now, this.#d.venue)
     const marketablePrice =
       marketableCfg === undefined
         ? null

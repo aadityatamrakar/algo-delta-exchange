@@ -168,6 +168,10 @@ function readFill(raw: unknown): WireFill | null {
     qty,
     price,
     ...(raw['resting'] === true ? { resting: true } : {}),
+    // A fee that is not a finite positive number is no fee — never NaN in the bank.
+    ...(typeof raw['fee'] === 'number' && Number.isFinite(raw['fee']) && raw['fee'] > 0
+      ? { fee: raw['fee'] }
+      : {}),
   }
 }
 

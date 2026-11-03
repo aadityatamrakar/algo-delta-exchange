@@ -18,6 +18,7 @@ import type { DeskStore } from '../store.ts'
 import type { BridgeService, MasterProvider, RiskGatePort } from '../service.ts'
 import type { QuoteCache } from '../marks.ts'
 import type { LiveBookPort } from '../livebook.ts'
+import type { VenueSpec } from '@algomaker/venue'
 
 export type Log = (msg: string, ctx?: Record<string, unknown>) => void
 
@@ -120,6 +121,12 @@ export interface ApiDeps {
    * `DESK_RISK_*` variable is set, and every test builds this bag without one.
    */
   readonly risk?: RiskGatePort
+  /**
+   * The venue this bridge trades on. ABSENT IS THE PROCESS VENUE
+   * (`DESK_VENUE`, read once in `venue.ts`), which is NSE when unset — every
+   * upstream test builds this bag without one.
+   */
+  readonly venue?: VenueSpec
   readonly log: Log
   now(): number
 }

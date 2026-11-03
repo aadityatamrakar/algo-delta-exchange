@@ -15,12 +15,13 @@
  */
 
 import type { ApiDeps, Route, RouteCtx } from './kit.ts'
-import { istDate, istDayRange, limitOf, modeOf } from './kit.ts'
+import { limitOf, modeOf } from './kit.ts'
+import { venueDay, venueDayRange } from '../venue.ts'
 import { PnlStore } from '../pnlstore.ts'
 import { pnlFor, type PnlOptions } from '../pnl-jobs.ts'
 
 export function pnlRoutes(deps: ApiDeps, opts: PnlOptions = {}): Route {
-  const store = new PnlStore(deps.db)
+  const store = new PnlStore(deps.db, deps.venue)
 
   return async (ctx: RouteCtx): Promise<boolean> => {
     const { path, method, url, send } = ctx
@@ -50,7 +51,7 @@ export function pnlRoutes(deps: ApiDeps, opts: PnlOptions = {}): Route {
         return true
       }
       const mode = modeOf(url)
-      const today = istDayRange(istDate(deps.now()))
+      const today = venueDayRange(venueDay(deps.now(), deps.venue), deps.venue)
       const from = epochParam(url, 'from') ?? today.from
       const to = epochParam(url, 'to') ?? today.to
       if (to <= from) {

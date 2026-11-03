@@ -13,7 +13,8 @@
  */
 
 import type { ApiDeps, Route, RouteCtx } from './kit.ts'
-import { isIsoDate, istDate, limitOf, modeOf } from './kit.ts'
+import { isIsoDate, limitOf, modeOf } from './kit.ts'
+import { venueDay } from '../venue.ts'
 import { PnlStore, pnlKey } from '../pnlstore.ts'
 import { keepDaysOf, rollupDate, runPrune, type PnlOptions } from '../pnl-jobs.ts'
 import type { DailyReport } from '../rollup.ts'
@@ -24,13 +25,13 @@ import { listSeriesRows, summariseSeries, tagsFor } from '../book-series.ts'
 type RowSource = 'rollup' | 'computed'
 
 export function reportRoutes(deps: ApiDeps, opts: PnlOptions = {}): Route {
-  const store = new PnlStore(deps.db)
+  const store = new PnlStore(deps.db, deps.venue)
 
   return async (ctx: RouteCtx): Promise<boolean> => {
     const { path, method, url, send, log } = ctx
 
     if (path === '/v1/desk/reports' && method === 'GET') {
-      const date = url.searchParams.get('date') ?? istDate(deps.now())
+      const date = url.searchParams.get('date') ?? venueDay(deps.now(), deps.venue)
       if (!isIsoDate(date)) {
         send(400, { error: `date must be an IST calendar day as YYYY-MM-DD, got '${date}'` })
         return true
@@ -101,7 +102,7 @@ export function reportRoutes(deps: ApiDeps, opts: PnlOptions = {}): Route {
     }
 
     if (path === '/v1/desk/reports/orders' && method === 'GET') {
-      const date = url.searchParams.get('date') ?? istDate(deps.now())
+      const date = url.searchParams.get('date') ?? venueDay(deps.now(), deps.venue)
       if (!isIsoDate(date)) {
         send(400, { error: `date must be an IST calendar day as YYYY-MM-DD, got '${date}'` })
         return true
@@ -180,8 +181,8 @@ export function reportRoutes(deps: ApiDeps, opts: PnlOptions = {}): Route {
         })
         return true
       }
-      const to = url.searchParams.get('to') ?? istDate(deps.now())
-      const from = url.searchParams.get('from') ?? istDate(deps.now() - 90 * 24 * 60 * 60 * 1000)
+      const to = url.searchParams.get('to') ?? venueDay(deps.now(), deps.venue)
+      const from = url.searchParams.get('from') ?? venueDay(deps.now() - 90 * 24 * 60 * 60 * 1000, deps.venue)
       if (!isIsoDate(from) || !isIsoDate(to)) {
         send(400, { error: `from and to must be IST calendar days as YYYY-MM-DD` })
         return true

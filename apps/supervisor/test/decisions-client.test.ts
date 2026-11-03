@@ -214,3 +214,21 @@ test('the arrays come back as arrays, whatever the body said', async () => {
   assert.deepEqual(out.routeErrors, [])
   assert.equal(out.replayed, true)
 })
+
+test('a fill\'s venue fee is read back; a fee that is not a finite positive number is dropped', async () => {
+  const f = fakeFetch(() =>
+    json(200, {
+      ...DONE,
+      fills: [
+        { instrument: 'P-BTC-76600-041126', side: 'Sell', qty: 0.05, price: 200, fee: 0.4 },
+        { instrument: 'C-BTC-76600-041126', side: 'Sell', qty: 0.05, price: 210, fee: 'x' },
+        { instrument: 'C-BTC-76800-041126', side: 'Sell', qty: 0.05, price: 150 },
+      ],
+    }),
+  )
+  const out = await clientWith(f.fetch).submit(REQ)
+  assert.ok(out !== 'INDETERMINATE')
+  assert.equal(out.fills[0]?.fee, 0.4)
+  assert.equal(out.fills[1] !== undefined && 'fee' in out.fills[1], false)
+  assert.equal(out.fills[2] !== undefined && 'fee' in out.fills[2], false)
+})

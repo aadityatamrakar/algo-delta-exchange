@@ -60,7 +60,8 @@
 
 import { buildPositions, type Marks, type Position } from '@algomaker/pnl'
 import type { DeskMode } from './contract.ts'
-import { istDate, istDayRange, type ApiDeps, type Log } from './routes/kit.ts'
+import type { ApiDeps, Log } from './routes/kit.ts'
+import { API_VENUE, venueDayRange } from './venue.ts'
 import { pnlKey, splitPnlKey, toStampedFill, describeBadFill, isCorrectedNoop, type FillLoad, type PnlStore } from './pnlstore.ts'
 import {
   lookbackDaysOf,
@@ -590,9 +591,10 @@ export class LiveBook implements LiveBookPort {
 
   // ------------------------------------------------------------- internals
 
-  /** Start of the current IST trading day: where `carried` stops and `during` begins. */
+  /** Start of the current VENUE day (IST date on NSE, settlement day on DX): where `carried` stops and `during` begins. */
   #boundary(nowMs: number): number {
-    return istDayRange(istDate(nowMs)).from
+    const venue = this.#deps.venue ?? API_VENUE
+    return venueDayRange(venue.dayKey(nowMs), venue).from
   }
 
   /**

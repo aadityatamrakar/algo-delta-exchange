@@ -385,3 +385,81 @@ test('the session gate opens at 09:15 IST and closes at the 15:40 F&O close, wee
   assert.equal(inTradingSession(at('2026-07-25', 11, 0)), false)
   assert.equal(inTradingSession(at('2026-07-26', 11, 0)), false)
 })
+
+// ------------------------------------------------------------ fees (Delta)
+
+const feeFill = (
+  tradingsymbol: string,
+  side: 'Buy' | 'Sell',
+  qty: number,
+  price: number,
+  ts: number,
+  fee: number,
+): StampedFill => ({ tradingsymbol, side, qty, price, ts, fee })
+
+test('realised is NET of the fees on the window fills; gross and fees are reported beside it', () => {
+  // Sell 0.05 BTC of a call at 212, buy it back at 150: gross 3.1 USD.
+  const fills = [
+    feeFill('C-BTC-76600-041126', 'Sell', 0.05, 212, T(1), 0.4378),
+    feeFill('C-BTC-76600-041126', 'Buy', 0.05, 150, T(2), 0.3098),
+  ]
+  const pnl = computeWindowPnl(windowOf(fills), {})
+  assert.equal(Number(pnl.gross.toFixed(6)), 3.1)
+  assert.equal(Number(pnl.fees.toFixed(6)), 0.7476)
+  assert.equal(Number(pnl.realised.toFixed(6)), Number((3.1 - 0.7476).toFixed(6)))
+  // The leg nets the same fees, so summing legs still reproduces the card.
+  const leg = pnl.legs[0]
+  assert.equal(Number(leg?.fees.toFixed(6)), 0.7476)
+  assert.equal(Number(leg?.realised.toFixed(6)), Number(pnl.realised.toFixed(6)))
+})
+
+test('an open leg still pays its entry fee in the window it opened', () => {
+  const fills = [feeFill('P-BTC-76600-041126', 'Sell', 0.05, 200, T(1), 0.4)]
+  const pnl = computeWindowPnl(windowOf(fills), { 'P-BTC-76600-041126': 190 })
+  assert.equal(pnl.gross, 0)
+  assert.equal(pnl.fees, 0.4)
+  assert.equal(pnl.realised, -0.4)
+  assert.equal(Number(pnl.total?.toFixed(6)), Number((0.5 - 0.4).toFixed(6)))
+})
+
+test('a carried fill\'s fee was the earlier day\'s cost, not today\'s', () => {
+  const fills = [
+    feeFill('P-BTC-76600-041126', 'Sell', 0.05, 200, YESTERDAY, 0.4),
+    feeFill('P-BTC-76600-041126', 'Buy', 0.05, 180, T(5), 0.35),
+  ]
+  const pnl = computeWindowPnl(windowOf(fills), {})
+  assert.equal(pnl.fees, 0.35)
+  assert.equal(Number(pnl.realised.toFixed(6)), Number((1 - 0.35).toFixed(6)))
+})
+
+test('fills with no fee are gross exactly as before: fees 0, gross === realised', () => {
+  const fills = [
+    fill('NIFTY26JUL25000CE', 'Sell', 75, 120, T(1)),
+    fill('NIFTY26JUL25000CE', 'Buy', 75, 100, T(2)),
+  ]
+  const pnl = computeWindowPnl(windowOf(fills), {})
+  assert.equal(pnl.fees, 0)
+  assert.equal(pnl.gross, pnl.realised)
+  assert.equal(pnl.realised, 1500)
+})
+
+test('the daily report carries gross, fees and net realised', () => {
+  const fills = [
+    feeFill('C-BTC-76600-041126', 'Sell', 0.05, 212, T(1), 0.4),
+    feeFill('C-BTC-76600-041126', 'Buy', 0.05, 150, T(2), 0.3),
+  ]
+  const r = buildDailyReport({
+    date: DAY, tag: 'BTC', mode: 'paper', window: windowOf(fills), marks: {}, series: [], writtenAt: 1,
+  })
+  assert.equal(Number(r.gross.toFixed(6)), 3.1)
+  assert.equal(Number(r.fees.toFixed(6)), 0.7)
+  assert.equal(Number(r.realised.toFixed(6)), 2.4)
+})
+
+test('DX: the snapshot session is open around the clock, weekends included', async () => {
+  const { DX, NSE } = await import('@algomaker/venue')
+  const sunday3am = Date.parse('2026-11-08T03:00:00.000Z')
+  assert.equal(inTradingSession(sunday3am, DX), true)
+  assert.equal(inTradingSession(sunday3am, NSE), false)
+  assert.equal(inTradingSession(sunday3am), false, 'absent is NSE (DESK_VENUE unset)')
+})

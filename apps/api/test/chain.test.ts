@@ -148,3 +148,113 @@ test('display mode prices a dead-feed chain off the last marks, feedAlive still 
   assert.equal(chain.rows.find((r) => r.strike === 415)?.PE?.price, 3.15)
   assert.equal(chain.rows.find((r) => r.strike === 420)?.CE?.ageMs, 2 * 60 * 60 * 1000)
 })
+
+// ------------------------------------------------------- DX: the option fields
+
+const DX_EXPIRY = '2026-11-04'
+
+function dxMaster(): OptionMaster {
+  const rows: InstrumentRow[] = []
+  for (const [i, strike] of [76400, 76600, 76800].entries()) {
+    for (const type of ['CE', 'PE'] as const) {
+      rows.push({
+        instrument_token: 90000 + i * 2 + (type === 'CE' ? 0 : 1),
+        tradingsymbol: `${type === 'CE' ? 'C' : 'P'}-BTC-${strike}-041126`,
+        name: 'BTC',
+        expiry: DX_EXPIRY,
+        strike,
+        tick_size: 0.1,
+        lot_size: 0.001,
+        instrument_type: type,
+        segment: 'DX-OPT',
+        exchange: 'DELTA',
+      })
+    }
+  }
+  return new OptionMaster(rows)
+}
+
+test('DX: a chain quote carries the option fields the Delta tick brought — mark, sizes, IV, OI, greeks', () => {
+  const m = dxMaster()
+  const marks = new QuoteCache({ now: () => 1_000_000 })
+  const ce = m.resolve('BTC', DX_EXPIRY, 76600, 'CE')!.instrumentToken!
+  marks.update(ce, 212, 999_000, {
+    oi: 1530,
+    bid: 210.5,
+    ask: 213.5,
+    option: {
+      mark: 212.2,
+      bidSize: 120,
+      askSize: 80,
+      iv: 0.412,
+      delta: 0.51,
+      gamma: 0.00012,
+      theta: -95.1,
+      vega: 21.3,
+    },
+  })
+  marks.updateSpot('BTC', 76592, 999_500)
+  const chain = buildChain({ master: m, marks, now: () => 1_000_000 }, 'BTC', DX_EXPIRY)
+  const row = chain.rows.find((r) => r.strike === 76600)
+  assert.equal(row?.CE?.bid, 210.5)
+  assert.equal(row?.CE?.ask, 213.5)
+  assert.equal(row?.CE?.oi, 1530)
+  assert.equal(row?.CE?.mark, 212.2)
+  assert.equal(row?.CE?.bidSize, 120)
+  assert.equal(row?.CE?.askSize, 80)
+  assert.equal(row?.CE?.iv, 0.412)
+  assert.equal(row?.CE?.delta, 0.51)
+  assert.equal(row?.CE?.gamma, 0.00012)
+  assert.equal(row?.CE?.theta, -95.1)
+  assert.equal(row?.CE?.vega, 21.3)
+  assert.equal(row?.PE, null)
+  // BTC has no index instrument row; its price arrives on `md.spot`.
+  assert.equal(chain.spot, 76592)
+  assert.equal(chain.spotAsOf, 999_500)
+  assert.equal(chain.lotSize, 0.001)
+  assert.equal(chain.step, 200)
+})
+
+test('an NSE tick carries none of the option fields, and the quote grows none of the keys', () => {
+  const m = master()
+  const marks = new QuoteCache({ now: () => 1_000_000 })
+  marks.update(m.resolve('BHEL', EXPIRY, 420, 'CE')!.instrumentToken!, 15.4, 999_000, { bid: 15.3, ask: 15.5 })
+  const q = buildChain({ master: m, marks, now: () => 1_000_000 }, 'BHEL', EXPIRY).rows.find((r) => r.strike === 420)?.CE
+  for (const k of ['mark', 'bidSize', 'askSize', 'iv', 'delta', 'gamma', 'theta', 'vega']) {
+    assert.equal(q !== null && q !== undefined && k in q, false, k)
+  }
+})
+
+test('a non-finite option field is dropped, never served as a number', () => {
+  const m = dxMaster()
+  const marks = new QuoteCache({ now: () => 1_000_000 })
+  const ce = m.resolve('BTC', DX_EXPIRY, 76600, 'CE')!.instrumentToken!
+  marks.update(ce, 212, 999_000, { option: { mark: Number.NaN, iv: 0.4 } })
+  const q = buildChain({ master: m, marks, now: () => 1_000_000 }, 'BTC', DX_EXPIRY).rows.find((r) => r.strike === 76600)?.CE
+  assert.equal(q?.iv, 0.4)
+  assert.equal(q !== null && q !== undefined && 'mark' in q, false)
+})
+
+test('the listed expiries for an underlying, ascending', async () => {
+  const { chainExpiries } = await import('../src/chain.ts')
+  const rows: InstrumentRow[] = []
+  for (const expiry of ['2026-11-27', '2026-11-04', '2026-11-06']) {
+    rows.push({
+      instrument_token: rows.length + 1,
+      tradingsymbol: `C-BTC-76600-${expiry}`,
+      name: 'BTC',
+      expiry,
+      strike: 76600,
+      tick_size: 0.1,
+      lot_size: 0.001,
+      instrument_type: 'CE',
+      segment: 'DX-OPT',
+      exchange: 'DELTA',
+    })
+  }
+  assert.deepEqual(chainExpiries(new OptionMaster(rows), 'BTC'), {
+    underlying: 'BTC',
+    expiries: ['2026-11-04', '2026-11-06', '2026-11-27'],
+  })
+  assert.deepEqual(chainExpiries(new OptionMaster(rows), 'ETH'), { underlying: 'ETH', expiries: [] })
+})
