@@ -211,7 +211,7 @@ describe('expiry classes', () => {
 describe('the option chain page', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  test('renders both sides with dashes where a field is absent, and marks ATM', async () => {
+  test('renders both sides with a muted dot where a field is absent, and marks ATM', async () => {
     const sent = installFetch(({ path, url }) => {
       if (path === '/v1/desk/chain/BTC/expiries') {
         return { body: { expiries: ['2026-11-04', '2026-11-06', '2026-11-27'] } }
@@ -234,20 +234,20 @@ describe('the option chain page', () => {
       return { body: {} }
     })
     render(<ChainPage />)
-    await screen.findByText('76,200')
+    const strike = await screen.findByRole('rowheader', { name: '76,200' })
     // The first expiry is asked for by default.
     expect(sent.some((r) => r.path === '/v1/desk/chain/BTC' && r.url.includes('expiry=2026-11-04'))).toBe(true)
-    // Present fields render; IV as a percentage.
-    expect(screen.getByText('910.5')).toBeTruthy()
-    expect(screen.getByText('41.2%')).toBeTruthy()
-    // The index price is on the page.
-    expect(screen.getByText(/76,290/)).toBeTruthy()
+    // Present fields render; IV as a percentage (in the row and as the ATM IV).
+    expect(screen.getByText('910.50')).toBeTruthy()
+    expect(screen.getAllByText('41.2%').length).toBeGreaterThan(0)
+    // The index price is on the page (the header and the spot line).
+    expect(screen.getAllByText(/76,290/).length).toBeGreaterThan(0)
     // The ATM row is marked.
-    const atm = screen.getByText('76,200').closest('tr')
-    expect(atm?.getAttribute('data-atm')).toBe('true')
-    // The PE side carries no mark/IV/delta/OI: dashes, not zeros.
-    expect(screen.getAllByText('—').length).toBeGreaterThan(4)
-    // Expiry tabs, grouped.
+    expect(strike.closest('tr')?.getAttribute('data-atm')).toBe('true')
+    // The PE side carries no mark/IV/delta/OI: muted dots, not zeros.
+    expect(screen.getAllByLabelText('no quote').length).toBeGreaterThan(4)
+    expect(screen.queryByText('—')).toBe(null)
+    // Expiry pills, grouped.
     expect(screen.getByText(/Daily/)).toBeTruthy()
     expect(screen.getByText(/Weekly/)).toBeTruthy()
     expect(screen.getByText(/Monthly/)).toBeTruthy()
