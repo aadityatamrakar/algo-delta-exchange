@@ -92,6 +92,7 @@
  * a decider is how a book goes quiet for a session and nobody finds out, and the
  * supervisor (Task 14) is the layer with somewhere to log it.
  */
+import type { VenueSpec } from '@algomaker/venue';
 import { corridor, type Corridor } from './corridor.ts';
 import { guardTier, type MarkContext } from './guards.ts';
 import { isFutureLeg, sellLotSize } from './ladder.ts';
@@ -219,6 +220,39 @@ export function shedTrigger(reason: string, actions: ReadonlyArray<EngineAction>
 }
 
 /**
+ * THE SESSION GATE AND EXPIRY SETTLE OF A NON-NSE VENUE — `null` = trade on.
+ *
+ * Delta's options trade 24x7 and expire at 12:00:00 UTC, settled by the
+ * exchange on its own price. So there is no 09:20 start, no 15:30 end and no
+ * pre-expiry flatten: a short held into expiry is cash-settled, and the
+ * gateway books it at Delta's settlement price. From the instant on, the
+ * contract no longer trades, and ANY order would be filled (on paper) at a
+ * quote that is no longer a market — an invented close. So at and after the
+ * instant the engine holds with no actions, whatever the book holds.
+ *
+ * An expiry the venue cannot place in time also holds: the alternative is
+ * steering a book whose tenor is unknown.
+ */
+function venueGate(inputs: EngineInputs, venue: VenueSpec, state: RuleState): EngineDecision | null {
+  let instant: number;
+  try {
+    instant = venue.expiryInstantMs(inputs.chain.expiry);
+  } catch {
+    return hold(`expiry '${inputs.chain.expiry}' is not a date this venue can place — holding`, state);
+  }
+  if (inputs.nowMs >= instant) {
+    return hold(
+      `expiry ${inputs.chain.expiry} settled at ${new Date(instant).toISOString().slice(11, 16)} UTC — ` +
+        'no orders on a settled contract; ' +
+        `${inputs.legs.length} leg(s) are booked at the exchange's settlement price`,
+      state,
+    );
+  }
+  if (!venue.isOpen(inputs.nowMs)) return hold(`the ${venue.id} market is closed`, state);
+  return null;
+}
+
+/**
  * One decision pass over one tick.
  *
  * `markCtx` is what makes the mark-counted dials honest on a tick-driven engine:
@@ -241,41 +275,48 @@ export function decide(
     : inputs;
   const { legs, minuteOfDay, dateIst, dte } = opts;
 
-  // ── 0. expiry settle ─────────────────────────────────────────────────────
-  // 15:30, not the 15:40 F&O close: the settle is a flatten and must route
-  // while the contracts still trade (`DECISIONS_END_MIN`, session.ts).
-  if (dte === 0 && minuteOfDay >= DECISIONS_END_MIN && legs.length > 0) {
-    return {
-      action: 'flatten',
-      trigger: 'expiry',
-      reason:
-        `expiry settle: the last mark of expiry day — closing all ${legs.length} leg(s) ` +
-        'while the contracts still exist',
-      actions: legs.map((l): EngineAction => ({ op: 'close', instrument: l.instrument })),
-      stateAfter: state,
-      // Nothing has counted yet — the settle is checked before every tier.
-      markState: state,
-      // A guard trigger: `'urgent'`, which is what the host's own
-      // `GUARD_TRIGGERS` lookup answered for `'expiry'` before the field
-      // existed. Unchanged, on purpose.
-      urgency: 'urgent',
-      // An urgency exit crosses whatever the book is; it is never quoted.
-      makerQuote: false,
-      creditCommit: null,
-    };
-  }
+  // ── 0–1. a 24x7 venue's clock (DX) ───────────────────────────────────────
+  // Absent venue is NSE and takes steps 0 and 1 below, unchanged.
+  if (opts.venue !== undefined && opts.venue.id !== 'nse') {
+    const closed = venueGate(opts, opts.venue, state);
+    if (closed !== null) return closed;
+  } else {
+    // ── 0. expiry settle ─────────────────────────────────────────────────────
+    // 15:30, not the 15:40 F&O close: the settle is a flatten and must route
+    // while the contracts still trade (`DECISIONS_END_MIN`, session.ts).
+    if (dte === 0 && minuteOfDay >= DECISIONS_END_MIN && legs.length > 0) {
+      return {
+        action: 'flatten',
+        trigger: 'expiry',
+        reason:
+          `expiry settle: the last mark of expiry day — closing all ${legs.length} leg(s) ` +
+          'while the contracts still exist',
+        actions: legs.map((l): EngineAction => ({ op: 'close', instrument: l.instrument })),
+        stateAfter: state,
+        // Nothing has counted yet — the settle is checked before every tier.
+        markState: state,
+        // A guard trigger: `'urgent'`, which is what the host's own
+        // `GUARD_TRIGGERS` lookup answered for `'expiry'` before the field
+        // existed. Unchanged, on purpose.
+        urgency: 'urgent',
+        // An urgency exit crosses whatever the book is; it is never quoted.
+        makerQuote: false,
+        creditCommit: null,
+      };
+    }
 
-  // ── 1. session gate ──────────────────────────────────────────────────────
-  if (!isTradingDay(dateIst)) return hold(`${dateIst} is not an NSE trading day`, state);
-  if (minuteOfDay < RULES_START_MIN) {
-    return hold(
-      `session open: ${clock(minuteOfDay)} mark skipped — the rules start at 09:20, the ` +
-        '09:15 option prints move too much to act on',
-      state,
-    );
-  }
-  if (minuteOfDay > DECISIONS_END_MIN) {
-    return hold(`${clock(minuteOfDay)} is past 15:30, where the desk's decisions end (F&O trades to 15:40)`, state);
+    // ── 1. session gate ──────────────────────────────────────────────────────
+    if (!isTradingDay(dateIst)) return hold(`${dateIst} is not an NSE trading day`, state);
+    if (minuteOfDay < RULES_START_MIN) {
+      return hold(
+        `session open: ${clock(minuteOfDay)} mark skipped — the rules start at 09:20, the ` +
+          '09:15 option prints move too much to act on',
+        state,
+      );
+    }
+    if (minuteOfDay > DECISIONS_END_MIN) {
+      return hold(`${clock(minuteOfDay)} is past 15:30, where the desk's decisions end (F&O trades to 15:40)`, state);
+    }
   }
 
   // ── 2. repair hold ───────────────────────────────────────────────────────

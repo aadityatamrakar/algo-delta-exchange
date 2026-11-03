@@ -23,6 +23,7 @@
     "@algomaker/bus": "1.0.0",
     "@algomaker/pnl": "1.0.0",
     "@algomaker/secrets": "1.0.0",
+    "@algomaker/venue": "*",
     "mongodb": "3.7.3"
   }
 }

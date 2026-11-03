@@ -294,6 +294,12 @@ export interface BookGreeksOptions {
   readonly dividendYield?: number
   /** Fallback vol when IV cannot be solved. Omit to EXCLUDE such legs instead. */
   readonly fallbackVol?: number
+  /**
+   * The moment a leg's `expiry` date stops trading, in epoch ms. Omit for the
+   * NSE 15:40 IST close (`yearsToExpiry`); Delta passes its 12:00 UTC
+   * settlement (`@algomaker/venue`'s `expiryInstantMs`).
+   */
+  readonly expiryInstantMs?: (expiry: string) => number
 }
 
 /**
@@ -323,7 +329,10 @@ export function bookGreeks(
   let netVolga = 0
 
   for (const leg of legs) {
-    const t = yearsToExpiry(leg.expiry, nowMs)
+    const t =
+      opts.expiryInstantMs === undefined
+        ? yearsToExpiry(leg.expiry, nowMs)
+        : yearsToExpiryAt(nowMs, opts.expiryInstantMs(leg.expiry))
     const base = {
       spot: leg.spot,
       strike: leg.strike,
@@ -431,4 +440,15 @@ export function yearsToExpiry(expiry: string, nowMs: number): number {
   // 15:40 IST == 10:10 UTC on the expiry date.
   const closeMs = Date.UTC(y, m - 1, d, 15, 40) - IST_OFFSET_MS
   return Math.max(0, (closeMs - nowMs) / MS_PER_YEAR)
+}
+
+/**
+ * Years of calendar time from `nowMs` to an expiry INSTANT. Never negative; 0
+ * for a non-finite input. The venue-neutral form of `yearsToExpiry`: Delta's
+ * options expire at 12:00 UTC every day of the week, so the caller supplies
+ * the instant and nothing here knows a session.
+ */
+export function yearsToExpiryAt(nowMs: number, expiryInstantMs: number): number {
+  const t = (expiryInstantMs - nowMs) / MS_PER_YEAR
+  return Number.isFinite(t) ? Math.max(0, t) : 0
 }

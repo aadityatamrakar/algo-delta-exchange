@@ -5,7 +5,9 @@
  *
  * Pure: milliseconds in, values out. No clock, no IO.
  */
-import { isTradingDay } from '@algomaker/desk-engine';
+// The leaf module, not '.': desk-engine's engine imports this package, and
+// '.' would make the two a load-order cycle.
+import { isTradingDay } from '@algomaker/desk-engine/session';
 
 export type VenueId = 'nse' | 'dx';
 
