@@ -81,6 +81,15 @@ import {
 import { DX_USER_AGENT, loadDxConfig, readDeltaBrokerStore } from './dx-config.ts'
 import { createDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
 import {
+  BROKER_SNAPSHOT_COLLECTION,
+  createDeltaPositionsSnapshot,
+  createGatewayHeartbeat,
+  DELTA_SNAPSHOT_MS,
+  GATEWAY_HEARTBEAT_COLLECTION,
+  GATEWAY_HEARTBEAT_MS,
+  hostOf,
+} from './gateway-heartbeat.ts'
+import {
   countWorking,
   createDxSettlementJob,
   DX_SETTLEMENT_POLL_MS,
@@ -1585,6 +1594,10 @@ export async function main(): Promise<void> {
    */
   let brokerSweepArmed = false
 
+  /** Delta's dead-man switch and REST host, for the Status heartbeat. Null in simulate mode. */
+  let dxDeadman: { readonly healthy: boolean } | null = null
+  let dxHost: string | null = null
+
   if (brokerMode === 'delta' && !liveRail) {
     log('BROKER MODE: delta, but DESK_DX_LIVE is not 1 — EVERY order is simulated; no Delta session is opened')
   }
@@ -1612,6 +1625,20 @@ export async function main(): Promise<void> {
     void heartbeat.beat()
     const hbTimer = setInterval(() => void heartbeat.beat(), DX_HEARTBEAT_MS)
     hbTimer.unref()
+    dxDeadman = heartbeat
+    dxHost = hostOf(cfg.baseUrl)
+
+    /** Delta's positions for Status' Positions truth (`gateway-heartbeat.ts`). */
+    const positionsSnapshot = createDeltaPositionsSnapshot({
+      positions: () => live.positions(),
+      collection: mongo.db.collection(BROKER_SNAPSHOT_COLLECTION) as never,
+      now: () => Date.now(),
+      host: dxHost,
+      log,
+    })
+    void positionsSnapshot.take()
+    const snapTimer = setInterval(() => void positionsSnapshot.take(), DELTA_SNAPSHOT_MS)
+    snapTimer.unref()
 
     /** Order updates as they happen; the broker sweep below is the fallback. */
     privateSocket = new DxPrivateSocket(cfg.wsUrl, {
@@ -1685,6 +1712,25 @@ export async function main(): Promise<void> {
       log('broker sweep armed — fills, ambiguous placements and resting orders reconcile from the Delta book')
     }
   }
+
+  /**
+   * PROOF OF LIFE for Status, in every broker mode — see `gateway-heartbeat.ts`.
+   * The bridge reads the gateway as ok/stale from this row's age.
+   */
+  const gatewayHeartbeat = createGatewayHeartbeat({
+    collection: mongo.db.collection(GATEWAY_HEARTBEAT_COLLECTION) as never,
+    events: mongo.db.collection(ORDER_EVENTS_COLLECTION) as never,
+    now: () => Date.now(),
+    startedAt: Date.now(),
+    pid: process.pid,
+    broker: liveRail ? 'delta' : 'simulate',
+    host: dxHost,
+    deltaHeartbeatOk: () => (dxDeadman === null ? null : dxDeadman.healthy),
+    log,
+  })
+  void gatewayHeartbeat.beat()
+  const gatewayBeatTimer = setInterval(() => void gatewayHeartbeat.beat(), GATEWAY_HEARTBEAT_MS)
+  gatewayBeatTimer.unref()
 
   // --- fills: correlate broker updates back to our intents ----------------
   // All of the logic is in `FillWatcher`, deliberately. As a closure here it was

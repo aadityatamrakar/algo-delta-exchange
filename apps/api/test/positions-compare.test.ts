@@ -40,7 +40,9 @@ import {
   compareCardSummary,
   comparePositions,
   createPositionsComparer,
+  dxNoSnapshotReason,
   readLiveLedgers,
+  SIMULATOR_NO_COMPARE,
   type BookPositions,
   type LedgerPositions,
   type PositionsComparePorts,
@@ -998,4 +1000,50 @@ test('another path is not this module’s', async () => {
   const h = routeHarness()
   const res = await call(h.route, '/v1/desk/pnl')
   assert.equal(res.handled, false)
+})
+
+// ------------------------------------------------------------ Delta (DX)
+
+test('a Delta snapshot joins on the product symbol, which is the desk\'s own spelling', () => {
+  const r = compare({
+    snapshot: {
+      asOf: NOW - 5_000,
+      ok: true,
+      symbolSpace: 'desk',
+      positions: [
+        { tradingsymbol: 'C-BTC-80000-041126', netQty: -0.05, avgPrice: 120 },
+        { tradingsymbol: 'P-BTC-70000-041126', netQty: 0.02, avgPrice: 40 },
+      ],
+      emptyDiagnostic: { positions: 'array(2)' },
+    },
+    books: [book('BTC-ZERO', [{ symbol: 'C-BTC-80000-041126', qty: -0.05 }])],
+    // No token lookup is consulted for a desk-spelled snapshot.
+    symbolForToken: () => {
+      throw new Error('a desk-spelled snapshot must not join by token')
+    },
+  })
+  assert.equal(r.comparable, true, r.reason)
+  assert.deepEqual(r.divergent, [])
+  assert.equal(r.symbols[0]?.broker, -0.05)
+  assert.deepEqual(r.unattributable, [{ symbol: 'P-BTC-70000-041126', broker: 0.02 }])
+})
+
+test('a failed Delta read is incomplete, never an empty book', () => {
+  const r = compare({
+    snapshot: { asOf: NOW - 5_000, ok: false, error: 'Delta /v2/positions failed: 401', symbolSpace: 'desk', positions: null },
+    books: [book('BTC-ZERO', [{ symbol: 'C-BTC-80000-041126', qty: -0.05 }])],
+  })
+  assert.equal(r.comparable, false)
+  assert.match(r.reason, /INCOMPLETE \(Delta \/v2\/positions failed: 401\)/)
+})
+
+test('with no snapshot, the reason says why in plain words', () => {
+  assert.equal(dxNoSnapshotReason({ broker: 'simulate' }), SIMULATOR_NO_COMPARE)
+  assert.equal(SIMULATOR_NO_COMPARE, 'paper on the simulator: no exchange to compare against')
+  assert.match(dxNoSnapshotReason({ broker: 'delta' }), /no Delta positions snapshot yet/)
+  assert.match(dxNoSnapshotReason(null), /no gateway heartbeat/)
+  const r = compare({ snapshot: null, noSnapshotReason: SIMULATOR_NO_COMPARE })
+  assert.equal(r.comparable, false)
+  assert.equal(r.reason, SIMULATOR_NO_COMPARE)
+  assert.doesNotMatch(compare({ snapshot: null }).reason, /XTS/)
 })

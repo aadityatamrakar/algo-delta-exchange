@@ -72,6 +72,19 @@ import { ORDER_EVENTS_COLLECTION } from '../../../order-gateway/src/journal.ts'
 import type { ApiDeps, Route, RouteCtx } from './kit.ts'
 import type { DeskMode } from '../contract.ts'
 import { readBrokerLinkDoc, type BrokerLinkState } from '../safety.ts'
+import { API_VENUE } from '../venue.ts'
+import {
+  GATEWAY_HEARTBEAT_COLLECTION,
+  GATEWAY_HEARTBEAT_ID,
+  GATEWAY_HEARTBEAT_MS,
+} from '../../../order-gateway/src/gateway-heartbeat.ts'
+import { SUPERVISOR_LEASE_COLLECTION } from '../../../supervisor/src/lease.ts'
+
+/** The key the one TS supervisor claims its lease under (`supervisor/src/main.ts`). */
+const SUPERVISOR_LEASE_KEY = 'desk-supervisor'
+/** Its lease TTL; every heartbeat (10s) pushes `expiresAt` to now + this. */
+const SUPERVISOR_LEASE_TTL_MS = 30_000
+const SUPERVISOR_LEASE_BEAT_MS = 10_000
 
 /**
  * Written every 30s by the XTS gateway this desk was cloned from. THIS DESK'S
@@ -323,7 +336,19 @@ function marketdata(deps: ApiDeps, nowMs: number): SystemComponent {
   const staleTokens = typeof payload['staleTokens'] === 'number' ? payload['staleTokens'] : 0
   const oldestAgeMs = typeof payload['oldestAgeMs'] === 'number' ? payload['oldestAgeMs'] : 0
   const showStale = session && staleTokens > 0
+  const onDx = (deps.venue ?? API_VENUE).id === 'dx'
+  /** The BTC index (`.DEXBTUSD`, off `md.spot`) and how old it is — DX only. */
+  const index = onDx ? deps.marks?.spotQuote('BTC', true) ?? null : null
+  const indexAgeMs = index === null ? null : Math.max(0, nowMs - index.asOf)
   const parts = [
+    ...(onDx
+      ? [
+          'Delta public feed',
+          index === null
+            ? 'BTC index NOT RECEIVED'
+            : `BTC index ${index.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}, ${humanAge(indexAgeMs ?? 0)} old`,
+        ]
+      : []),
     `${up} of ${sockets.length} sockets connected`,
     `${tokens} tokens`,
     // A stale instrument master raises no error anywhere — contracts simply
@@ -352,6 +377,7 @@ function marketdata(deps: ApiDeps, nowMs: number): SystemComponent {
         instrumentsStale,
         sessionOpen: session,
         ...(showStale ? { staleTokens, oldestAgeMs } : {}),
+        ...(onDx ? { btcIndex: index?.price ?? null, btcIndexAgeMs: indexAgeMs } : {}),
       },
     },
     nowMs,
@@ -378,6 +404,12 @@ function marketdata(deps: ApiDeps, nowMs: number): SystemComponent {
  * no trace either, and silence there is not evidence of anything.
  */
 async function gateway(deps: ApiDeps, nowMs: number): Promise<SystemComponent> {
+  const onDx = (deps.venue ?? API_VENUE).id === 'dx'
+  const heartbeat = (await deps.db
+    .collection(GATEWAY_HEARTBEAT_COLLECTION)
+    .findOne({ _id: GATEWAY_HEARTBEAT_ID })) as Record<string, unknown> | null
+  if (heartbeat !== null || onDx) return gatewayFromHeartbeat(deps, nowMs, heartbeat)
+
   const snap = (await deps.db
     .collection(BROKER_SNAPSHOT_COLLECTION)
     .findOne({ _id: 'xts' })) as Record<string, unknown> | null
@@ -481,6 +513,87 @@ async function gateway(deps: ApiDeps, nowMs: number): Promise<SystemComponent> {
         brokerError,
         brokerSessionAt: sessionAt,
         snapshot: true,
+        brokerLink: link,
+      },
+    },
+    nowMs,
+  )
+}
+
+/**
+ * 3b. The order gateway from its OWN HEARTBEAT (`order-gateway/src/
+ * gateway-heartbeat.ts`), written every 15s in every broker mode — the DX
+ * desk's only liveness signal for this process. ok/stale by the row's age; the
+ * broker mode, the Delta dead-man switch and the last order event are the
+ * detail, and never move the state.
+ */
+async function gatewayFromHeartbeat(
+  deps: ApiDeps,
+  nowMs: number,
+  hb: Record<string, unknown> | null,
+): Promise<SystemComponent> {
+  const pending = await deps.db
+    .collection(GATEWAY_ORDERS_COLLECTION)
+    .countDocuments({ state: 'PENDING' })
+  let link: BrokerLinkState = readBrokerLinkDoc(null)
+  try {
+    link = readBrokerLinkDoc(
+      await deps.db.collection(SAFETY_COLLECTION).findOne({ _id: 'broker-link' as never }),
+    )
+  } catch {
+    // Unreadable reads as the default.
+  }
+  const linkText = brokerLinkText(link, nowMs)
+  const every = GATEWAY_HEARTBEAT_MS
+  const okWithin = GATEWAY_HEARTBEAT_MS * 4
+  if (hb === null) {
+    return component(
+      {
+        id: 'dx-gateway',
+        name: 'Order gateway',
+        detail:
+          (linkText === null ? '' : `${linkText} · `) +
+          'no gateway heartbeat — dx-gateway is not running, or is on a build older than the ' +
+          `heartbeat (it writes one every ${every / 1000}s) · ${pending} orders pending`,
+        lastSeenMs: null,
+        expectedEveryMs: every,
+        okWithinMs: okWithin,
+        extra: { pendingOrders: pending, heartbeat: false, brokerLink: link },
+      },
+      nowMs,
+    )
+  }
+  const at = typeof hb['at'] === 'number' && hb['at'] > 0 ? hb['at'] : null
+  const broker = hb['broker'] === 'delta' ? 'delta' : 'simulate'
+  const host = typeof hb['host'] === 'string' && hb['host'] !== '' ? hb['host'] : null
+  const lastOrderAt = typeof hb['lastOrderAt'] === 'number' && hb['lastOrderAt'] > 0 ? hb['lastOrderAt'] : null
+  const deadman = hb['deltaHeartbeatOk']
+  const parts = [
+    ...(linkText === null ? [] : [linkText]),
+    broker === 'delta'
+      ? `live orders route to Delta${host === null ? '' : ` (${host})`}`
+      : 'simulator — every order is paper, none reaches Delta',
+    ...(broker === 'delta' && deadman === false
+      ? ['Delta dead-man heartbeat FAILING — Delta will cancel open orders if it does not recover']
+      : []),
+    lastOrderAt === null ? 'no order event journalled' : `last order event ${humanAge(nowMs - lastOrderAt)} ago`,
+    `${pending} orders pending`,
+  ]
+  return component(
+    {
+      id: 'dx-gateway',
+      name: 'Order gateway',
+      detail: parts.join(' · '),
+      lastSeenMs: at,
+      expectedEveryMs: every,
+      okWithinMs: okWithin,
+      extra: {
+        pendingOrders: pending,
+        heartbeat: true,
+        broker,
+        host,
+        lastOrderAt,
+        deltaHeartbeatOk: typeof deadman === 'boolean' ? deadman : null,
         brokerLink: link,
       },
     },
@@ -632,6 +745,70 @@ async function supervisor(
 }
 
 /**
+ * 5b. THE ONE TS SUPERVISOR, from its lease (DX). One `dx-supervisor` process
+ * steers both rails; it renews `desk-supervisor-lease` every 10s, pushing
+ * `expiresAt` to now + 30s. So the lease is the heartbeat: ok while it has not
+ * expired, stale once it has (no process is steering). The book counts per
+ * rail are the detail.
+ */
+async function supervisorLease(
+  deps: ApiDeps,
+  nowMs: number,
+  extraFields: Record<string, unknown>,
+): Promise<SystemComponent> {
+  const lease = (await deps.db
+    .collection(SUPERVISOR_LEASE_COLLECTION)
+    .findOne({ key: SUPERVISOR_LEASE_KEY })) as Record<string, unknown> | null
+  const paper = await deps.store.listBooks('paper')
+  const live = await deps.store.listBooks('live')
+  const running = (rows: readonly { actual: string }[]): number => rows.filter((r) => r.actual === 'running').length
+  const books =
+    `${paper.length} paper books (${running(paper)} running) · ` +
+    `${live.length} live books (${running(live)} running)`
+  const extra = {
+    paperBooks: paper.length,
+    liveBooks: live.length,
+    paperRunning: running(paper),
+    liveRunning: running(live),
+    ...extraFields,
+  }
+  const expiresAt = typeof lease?.['expiresAt'] === 'number' ? lease['expiresAt'] : null
+  if (lease === null || expiresAt === null) {
+    return component(
+      {
+        id: 'dx-supervisor',
+        name: 'Supervisor',
+        detail: `no supervisor lease — dx-supervisor has not run against this database · ${books}`,
+        lastSeenMs: null,
+        expectedEveryMs: SUPERVISOR_LEASE_BEAT_MS,
+        okWithinMs: SUPERVISOR_LEASE_TTL_MS,
+        extra: { lease: false, ...extra },
+      },
+      nowMs,
+    )
+  }
+  const owner = typeof lease['owner'] === 'string' && lease['owner'] !== '' ? lease['owner'] : 'an unnamed owner'
+  const fresh = expiresAt >= nowMs
+  return component(
+    {
+      id: 'dx-supervisor',
+      name: 'Supervisor',
+      detail:
+        (fresh
+          ? `steering both rails as ${owner}`
+          : `lease EXPIRED ${humanAge(nowMs - expiresAt)} ago (last held by ${owner}) — no supervisor is steering`) +
+        ` · ${books}`,
+      // The last renewal: expiresAt − ttl. ok exactly while the lease is unexpired.
+      lastSeenMs: expiresAt - SUPERVISOR_LEASE_TTL_MS,
+      expectedEveryMs: SUPERVISOR_LEASE_BEAT_MS,
+      okWithinMs: SUPERVISOR_LEASE_TTL_MS,
+      extra: { lease: true, owner, expiresAt, ...extra },
+    },
+    nowMs,
+  )
+}
+
+/**
  * 6. The positions comparison — broker vs `desk-books` vs runner ledgers.
  *
  * A COMPONENT LIKE ANY OTHER IN ITS AGE, AND THE ONE EXCEPTION IN ITS CONTENT.
@@ -756,8 +933,12 @@ export async function buildSystemReport(
     }
   }
 
+  const onDx = (deps.venue ?? API_VENUE).id === 'dx'
   await collect('dx-gateway', 'Order gateway', CADENCE.gateway.every, () => gateway(deps, nowMs))
-  await collect('dx-runner', 'Strategy runner', CADENCE.runner.every, () => runner(deps, nowMs))
+  // dx-runner is not run on the Delta desk (`scripts/dx-start.sh`), so it gets no card there.
+  if (!onDx) {
+    await collect('dx-runner', 'Strategy runner', CADENCE.runner.every, () => runner(deps, nowMs))
+  }
 
   /**
    * The variant catalogue's recency is GENUINELY UNKNOWABLE, and is reported
@@ -780,10 +961,16 @@ export async function buildSystemReport(
     deps.log('system report: variant catalogue unreadable', { error: errorText(err) })
   }
 
-  await collect('dx-supervisor', 'Supervisor (paper)', CADENCE.supervisor.every, () =>
-    supervisor(deps.store, 'paper', nowMs, { variantCount, variantsUpdatedAt: null }))
-  await collect('dx-supervisor-live', 'Supervisor (live)', CADENCE.supervisor.every, () =>
-    supervisor(deps.store, 'live', nowMs, {}))
+  if (onDx) {
+    // ONE supervisor process steers both rails on this desk: one card, from its lease.
+    await collect('dx-supervisor', 'Supervisor', SUPERVISOR_LEASE_BEAT_MS, () =>
+      supervisorLease(deps, nowMs, { variantCount, variantsUpdatedAt: null }))
+  } else {
+    await collect('dx-supervisor', 'Supervisor (paper)', CADENCE.supervisor.every, () =>
+      supervisor(deps.store, 'paper', nowMs, { variantCount, variantsUpdatedAt: null }))
+    await collect('dx-supervisor-live', 'Supervisor (live)', CADENCE.supervisor.every, () =>
+      supervisor(deps.store, 'live', nowMs, {}))
+  }
   await collect('positions-truth', 'Positions truth', DEFAULT_COMPARE_MS, () =>
     positionsTruth(deps, nowMs))
   await collect('mongo', 'MongoDB', null, () => mongo(deps, nowMs))

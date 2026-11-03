@@ -76,6 +76,12 @@ import type { ApiDeps } from './routes/kit.ts'
 import { istDate } from './routes/kit.ts'
 import { istMinutesOfDay } from './rollup.ts'
 import { COLLECTIONS } from './store.ts'
+import { API_VENUE } from './venue.ts'
+import {
+  DELTA_SNAPSHOT_ID,
+  GATEWAY_HEARTBEAT_COLLECTION,
+  GATEWAY_HEARTBEAT_ID,
+} from '../../order-gateway/src/gateway-heartbeat.ts'
 /**
  * THE RUNNER'S OWN NAMES FOR ITS OWN STATE, imported rather than restated —
  * exactly as `routes/runner.ts` does, and for the reason the changeset that
@@ -228,6 +234,11 @@ export interface PositionsComparePorts {
   log(msg: string, ctx?: Record<string, unknown>): void
   /** The gateway's broker snapshot document, or null when it writes none. */
   snapshot(): Promise<Record<string, unknown> | null>
+  /**
+   * WHY there is no snapshot, in the operator's words — asked only when
+   * `snapshot()` answered null. Absent: the generic sentence.
+   */
+  noSnapshotReason?(): Promise<string>
   /** Every LIVE `desk-books` document. */
   books(): Promise<readonly BookPositions[]>
   /** Every `runner:positions` ledger on the LIVE rail. */
@@ -457,7 +468,12 @@ export interface CompareInput {
    * would let one forgetful call site reintroduce it silently.
    */
   readonly symbolForToken: (exchangeToken: number) => string | null
+  /** The `reason` when `snapshot` is null. Absent: the generic sentence. */
+  readonly noSnapshotReason?: string
 }
+
+/** Paper on the simulator: there is no exchange position to compare with. */
+export const SIMULATOR_NO_COMPARE = 'paper on the simulator: no exchange to compare against'
 
 /**
  * The whole judgement, as one pure function.
@@ -512,8 +528,8 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
   let reason = ''
   if (snapshot === null) {
     reason =
-      'no broker snapshot — this desk\'s gateway publishes none (simulate or delta), ' +
-      'so there is nothing to compare against'
+      input.noSnapshotReason ??
+      'no broker snapshot — the order gateway publishes none, so there is nothing to compare against'
   } else if (snapshot['ok'] !== true) {
     const err = typeof snapshot['error'] === 'string' && snapshot['error'] !== ''
       ? snapshot['error']
@@ -539,6 +555,13 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
           'empty array, and only the first is a comparison'
       }
     } else {
+      /**
+       * DELTA SPELLS CONTRACTS THE WAY THE DESK DOES. Its product symbol
+       * (`C-BTC-80000-041126`) is the desk's tradingsymbol, so a snapshot that
+       * says `symbolSpace: 'desk'` joins on it directly; every other snapshot
+       * joins through the exchange token, never by name.
+       */
+      const deskSpelled = snapshot['symbolSpace'] === 'desk'
       for (const row of rows) {
         const brokerSymbol = brokerSymbolOf(row)
         const qty = brokerNetQty(row)
@@ -562,8 +585,10 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
          * of the other sixteen would be the crying-wolf failure inverted —
          * every genuine divergence on the desk hidden behind one stuck leg.
          */
-        const exchangeToken = brokerExchangeToken(row)
-        const symbol = exchangeToken === null ? null : symbolForToken(exchangeToken)
+        const exchangeToken = deskSpelled ? null : brokerExchangeToken(row)
+        const symbol = deskSpelled
+          ? (brokerSymbol === '' ? null : brokerSymbol)
+          : exchangeToken === null ? null : symbolForToken(exchangeToken)
         // Summed: XTS answers per product type, and NRML + MIS on one contract
         // is two rows and one position. That holds for a row we could not name
         // as much as for one we could, so both maps sum.
@@ -780,6 +805,10 @@ class Comparer implements PositionsComparer {
        * the same trade `routes/system.ts` makes and for the same reason.
        */
       const snapshot = await this.#d.snapshot()
+      const noSnapshotReason =
+        snapshot === null && this.#d.noSnapshotReason !== undefined
+          ? await this.#d.noSnapshotReason()
+          : undefined
       const books = await this.#d.books()
       const ledgers = await this.#d.ledgers()
       const report = comparePositions({
@@ -790,6 +819,7 @@ class Comparer implements PositionsComparer {
         intervalMs: this.#intervalMs,
         maxBrokerAgeMs: this.#maxBrokerAgeMs,
         symbolForToken: (token) => this.#d.symbolForToken(token),
+        ...(noSnapshotReason === undefined ? {} : { noSnapshotReason }),
       })
       this.#last = report
       await this.#d.save(report)
@@ -970,13 +1000,24 @@ export function createPositionsComparer(
 
 /** The real collections behind `PositionsComparePorts`. */
 export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
+  const onDx = (deps.venue ?? API_VENUE).id === 'dx'
   return {
     now: () => deps.now(),
     log: deps.log,
+    /** On DX, Delta's `/v2/positions` as the gateway last read it (`gateway-heartbeat.ts`). */
     snapshot: async () =>
       (await deps.db
         .collection(BROKER_SNAPSHOT_COLLECTION)
-        .findOne({ _id: BROKER_SNAPSHOT_ID })) as Record<string, unknown> | null,
+        .findOne({ _id: onDx ? DELTA_SNAPSHOT_ID : BROKER_SNAPSHOT_ID })) as Record<string, unknown> | null,
+    noSnapshotReason: async () => {
+      if (!onDx) {
+        return 'no broker snapshot — the order gateway publishes none, so there is nothing to compare against'
+      }
+      const hb = (await deps.db
+        .collection(GATEWAY_HEARTBEAT_COLLECTION)
+        .findOne({ _id: GATEWAY_HEARTBEAT_ID })) as Record<string, unknown> | null
+      return dxNoSnapshotReason(hb)
+    },
     books: async () => {
       // LIVE ONLY. Paper legs never reach a broker.
       const docs = await deps.store.allBooks('live')
@@ -1036,6 +1077,20 @@ export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
       ? {}
       : { notify: (mode: 'live', event: Record<string, unknown>): void => deps.stream?.publish(mode, event) }),
   }
+}
+
+/**
+ * Why a DX desk has no Delta positions snapshot, from the gateway's heartbeat.
+ * Exported for the tests.
+ */
+export function dxNoSnapshotReason(heartbeat: Record<string, unknown> | null): string {
+  if (heartbeat === null) {
+    return 'no gateway heartbeat, so no Delta positions snapshot — the order gateway may not be running'
+  }
+  if (heartbeat['broker'] === 'delta') {
+    return 'no Delta positions snapshot yet — the gateway writes one every 30s on the live rail'
+  }
+  return SIMULATOR_NO_COMPARE
 }
 
 /**
