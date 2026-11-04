@@ -334,7 +334,12 @@ async function foldOne(
       filledQty: 0,
       avgPrice: null,
       status: state,
-      error: `paper order finished ${state} with nothing traded — no leg was booked`,
+      // The gateway's own refusal (`margin: …`, `oi-cap: …`, Delta's code)
+      // when it recorded one: "INVALID" alone does not say WHY nothing traded.
+      error:
+        str(doc['reason']) === ''
+          ? `paper order finished ${state} with nothing traded — no leg was booked`
+          : `${str(doc['reason'])} (paper order finished ${state}, nothing traded, no leg booked)`,
       detail: { source: 'paper-fold', mode: 'paper', decisionId, deskTag: str(planned['deskTag']) },
     })
     /**

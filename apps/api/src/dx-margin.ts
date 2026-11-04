@@ -169,6 +169,8 @@ export function bookMarginEstimate(input: {
   /** The listed strike nearest the index, with its two tokens; null when none. */
   readonly atm: { readonly strike: number; readonly ceToken: number; readonly peToken: number } | null
   readonly lotSize: number
+  /** The book's account margin mode; null = unknown, priced as isolated. */
+  readonly marginMode?: 'isolated' | 'portfolio' | null
 }): BookMarginEstimate {
   const { dials, index } = input
   const shorts = input.legs.filter((l) => Number.isFinite(l.qty) && l.qty < 0)
@@ -183,7 +185,7 @@ export function bookMarginEstimate(input: {
     if (lev === null) missingNow.push(`${sym}: no leverage`)
     if (mark === null) missingNow.push(`${sym}: no mark`)
     if (index === null || mark === null || lev === null) continue
-    now += shortOptionMargin({ mark, qty: Math.abs(l.qty), index, leverage: lev })
+    now += shortOptionMargin({ mark, qty: Math.abs(l.qty), index, leverage: lev, mode: input.marginMode ?? null })
   }
   const current = {
     usd: missingNow.length === 0 ? r2(now) : null,
@@ -224,6 +226,7 @@ export function bookMarginEstimate(input: {
           peMark: peMark as number,
           ceLeverage: ceLev as number,
           peLeverage: peLev as number,
+          mode: input.marginMode ?? null,
         })
       : null
   return {
@@ -304,6 +307,13 @@ export async function handleBookMarginEstimates(deps: ApiDeps, ctx: RouteCtx): P
     if (Number.isFinite(lev) && lev > 0) leverage.set(Number(d['instrument_token']), lev)
   }
 
+  // Each account's margin mode, as the gateway read it off `/v2/profile`.
+  const modes = new Map<string, 'isolated' | 'portfolio'>()
+  for (const d of (await deps.db.collection(BROKER_MARGIN_COLLECTION).find({}).toArray()) as Record<string, unknown>[]) {
+    const mm = d['marginMode']
+    if (mm === 'portfolio' || mm === 'isolated') modes.set(String(d['_id']), mm)
+  }
+
   ctx.send(200, {
     asOf: deps.now(),
     index,
@@ -318,6 +328,7 @@ export async function handleBookMarginEstimates(deps: ApiDeps, ctx: RouteCtx): P
         leverageOf: (t) => leverage.get(t) ?? null,
         atm: p.atm,
         lotSize: p.lotSize,
+        marginMode: modes.get(p.row.mode === 'live' ? 'delta' : 'delta-demo') ?? null,
       }),
     ),
   })

@@ -65,7 +65,7 @@ import type {
 } from '../types.ts';
 import { bsCrossedLevel, bsNearestLevel } from './grid.ts';
 import type { BullSGroup, BullSHaltReason, BullSState } from './state.ts';
-import { bsFirstSize, bsNextSize, leverageAt, quoteMark, shortOptionMargin, type StrikeLeverage } from './margin.ts';
+import { bsFirstSize, bsNextSize, bsSizeAfter, bsSizeKey, leverageAt, quoteMark, shortOptionMargin, type MarginMode, type StrikeLeverage } from './margin.ts';
 
 /**
  * What BULL-S needs beyond an ordinary `EngineInputs`. All three REQUIRED: an
@@ -88,6 +88,11 @@ export interface BullSInputs extends EngineInputs {
    * A wing the master states none for is null; [] on a venue with none.
    */
   readonly leverage: ReadonlyArray<StrikeLeverage>;
+  /**
+   * The account's margin mode (`margin.ts`), for the same estimate. Absent or
+   * null = unknown, priced as ISOLATED — the larger figure.
+   */
+  readonly marginMode?: MarginMode | null;
 }
 
 /**
@@ -200,6 +205,7 @@ function arm(bs: BullSState, inputs: BullSInputs, dials: Dials, lastRef: number,
   return {
     ...bs,
     size: firstSize(dials),
+    sizedBy: bsSizeKey(dials),
     lastRef,
     lastRefMs,
     halted: false,
@@ -376,6 +382,28 @@ export function decideBullS(
     `level ${fmt(c.strike)} cooling down after a refused entry (${c.reason}) — ` +
     `${Math.ceil((c.untilMs - nowMs) / 1_000)}s left`;
   for (const c of bs.cooldowns) if (!foundNow.has(c.strike)) notes.push(coolNote(c));
+
+  // ── 2c. the lot dials retuned ───────────────────────────────────────────
+  // The next size was stepped under the OLD start/step/cap; carried as-is it
+  // would keep the old pyramid (a book retuned from 20-lot steps to 10 would
+  // still sell 45 next). Re-derived from the new dials for the straddles held:
+  // start, then one step per held straddle, never past the cap.
+  const sizeKey = bsSizeKey(dials);
+  if (bs.size > 0 && bs.sizedBy !== sizeKey) {
+    if (bs.sizedBy === '') {
+      bs = { ...bs, sizedBy: sizeKey };
+    } else {
+      const was = bs.size;
+      const size = bsSizeAfter(bs.groups.length, dials);
+      bs = { ...bs, size, sizedBy: sizeKey };
+      if (size !== was) {
+        notes.push(
+          `lot dials retuned to start/step/cap ${sizeKey}: next size ${was} → ${size} ` +
+            `for the ${bs.groups.length} straddle(s) held`,
+        );
+      }
+    }
+  }
 
   // ── 3. the commands — Re-arm first, so a Close in the same pass wins ─────
   if (dials.bs_rearm_req > bs.rearmReqSeen) {
@@ -756,6 +784,7 @@ function marginWithEntry(
   peQ: Quote,
 ): { usd: number; held: number; entry: number } | { missing: string } {
   const index = inputs.ref as number;
+  const mode = inputs.marginMode ?? null;
   let held = 0;
   for (const l of inputs.legs) {
     if (l.kind === 'future' || l.side !== 'Sell' || !(l.lots > 0)) continue;
@@ -763,7 +792,7 @@ function marginWithEntry(
     const lev = leverageAt(inputs.leverage, l.strike, l.optType);
     if (lev === null) return { missing: `no leverage for the ${fmt(l.strike)} ${l.optType}` };
     if (mark === null) return { missing: `no mark for the held ${fmt(l.strike)} ${l.optType}` };
-    held += shortOptionMargin({ mark, qty: l.lots * l.lotSize, index, leverage: lev });
+    held += shortOptionMargin({ mark, qty: l.lots * l.lotSize, index, leverage: lev, mode });
   }
   let entry = 0;
   const qty = size * inputs.chain.lotSize;
@@ -772,7 +801,7 @@ function marginWithEntry(
     if (lev === null) return { missing: `no leverage for the ${fmt(level)} ${opt}` };
     const mark = quoteMark(q);
     if (mark === null) return { missing: `no mark for the ${fmt(level)} ${opt}` };
-    entry += shortOptionMargin({ mark, qty, index, leverage: lev });
+    entry += shortOptionMargin({ mark, qty, index, leverage: lev, mode });
   }
   return { usd: held + entry, held, entry };
 }

@@ -92,3 +92,25 @@ test('the live rail is written as _id delta', async () => {
   await live.take()
   assert.deepEqual(ids, ['delta'])
 })
+
+test('the row carries the account margin mode off /v2/profile; a failed or odd profile read is null, never a guess', async () => {
+  const sets: Record<string, unknown>[] = []
+  let profile: () => Promise<{ margin_mode?: unknown }> = async () => ({ margin_mode: 'portfolio' })
+  const snap = createDeltaMarginSnapshot({
+    id: 'delta-demo',
+    walletBalances: async () => [USD],
+    profile: () => profile(),
+    collection: { updateOne: async (_f: Record<string, unknown>, u: Record<string, unknown>) => void sets.push(u['$set'] as Record<string, unknown>) },
+    now: () => 1,
+    host: 'cdn-ind.testnet.deltaex.org',
+    log: () => {},
+  })
+  await snap.take()
+  profile = async () => {
+    throw new Error('GET /v2/profile: 500')
+  }
+  await snap.take()
+  profile = async () => ({ margin_mode: 'cross' })
+  await snap.take()
+  assert.deepEqual(sets.map((s) => [s['ok'], s['marginMode']]), [[true, 'portfolio'], [true, null], [true, null]])
+})

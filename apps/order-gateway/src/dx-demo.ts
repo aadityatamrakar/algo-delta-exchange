@@ -41,7 +41,8 @@ import { orderMode } from './journal.ts'
 
 /** What the demo rail needs of a REST client (a fake in tests). */
 export type DemoRest = DxTradingClient &
-  Pick<DxRest, 'products' | 'fills' | 'heartbeat' | 'product' | 'ticker' | 'walletBalances'>
+  Pick<DxRest, 'products' | 'fills' | 'heartbeat' | 'product' | 'ticker' | 'walletBalances'> &
+  Partial<Pick<DxRest, 'profile'>>
 
 export interface DemoRailDeps {
   /** The demo settings; throws when demo is not configured (`loadDxDemoConfig`). */

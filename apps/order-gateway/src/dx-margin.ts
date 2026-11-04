@@ -11,6 +11,10 @@
  * A FAILED READ IS RECORDED AS FAILED: `ok: false`, the error, and every
  * figure null. Never zeros — a zero balance is a claim, a failed read is not.
  *
+ * `marginMode` is the account's `/v2/profile` `margin_mode` ('isolated' |
+ * 'portfolio'), read beside the wallet; null when that read fails or names
+ * neither. The margin gate prices a short by it (`bull-s/margin.ts`).
+ *
  * `used` is balance − available: whatever the account has blocked, which is
  * the same figure in isolated margin (position + order margin) and portfolio
  * margin. `utilizedPct` is used / balance × 100, null on a zero balance.
@@ -78,6 +82,8 @@ const NO_FIGURES = {
 export function createDeltaMarginSnapshot(deps: {
   readonly id: 'delta' | 'delta-demo'
   readonly walletBalances: () => Promise<readonly { readonly asset_symbol?: unknown; readonly [k: string]: unknown }[]>
+  /** The account profile (`/v2/profile`), for its `margin_mode`. Absent = not read. */
+  readonly profile?: () => Promise<{ readonly margin_mode?: unknown }>
   readonly collection: {
     updateOne(filter: Record<string, unknown>, update: Record<string, unknown>, options?: Record<string, unknown>): Promise<unknown>
   }
@@ -99,9 +105,18 @@ export function createDeltaMarginSnapshot(deps: {
         } catch (err) {
           m = { ok: false, error: `${venue} /v2/wallet/balances failed: ${errorText(err)}` }
         }
+        let marginMode: 'isolated' | 'portfolio' | null = null
+        if (m.ok && deps.profile !== undefined) {
+          try {
+            const mm = (await deps.profile()).margin_mode
+            marginMode = mm === 'portfolio' || mm === 'isolated' ? mm : null
+          } catch (err) {
+            deps.log('Delta profile read failed (margin mode unknown, priced as isolated)', { id: deps.id, error: errorText(err) })
+          }
+        }
         const set = m.ok
-          ? { asOf: deps.now(), rail, host: deps.host, error: '', ...m }
-          : { asOf: deps.now(), rail, host: deps.host, ok: false, error: m.error, ...NO_FIGURES }
+          ? { asOf: deps.now(), rail, host: deps.host, error: '', ...m, marginMode }
+          : { asOf: deps.now(), rail, host: deps.host, ok: false, error: m.error, ...NO_FIGURES, marginMode: null }
         await deps.collection.updateOne({ _id: deps.id }, { $set: set }, { upsert: true })
       } catch (err) {
         deps.log('Delta margin snapshot write failed', { id: deps.id, error: errorText(err) })

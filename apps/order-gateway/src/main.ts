@@ -1823,6 +1823,7 @@ export async function main(): Promise<void> {
     const liveMargin = createDeltaMarginSnapshot({
       id: 'delta',
       walletBalances: () => rest.walletBalances(),
+      profile: () => rest.profile(),
       collection: mongo.db.collection(BROKER_MARGIN_COLLECTION) as never,
       now: () => Date.now(),
       host: dxHost,
@@ -2025,6 +2026,8 @@ export async function main(): Promise<void> {
           const demoMargin = createDeltaMarginSnapshot({
             id: 'delta-demo',
             walletBalances: () => rest.walletBalances(),
+            // Called as a method, so the client keeps its `this`.
+            profile: async () => (await rest.profile?.()) ?? {},
             collection: mongo.db.collection(BROKER_MARGIN_COLLECTION) as never,
             now: () => Date.now(),
             host: hostOf(cfg.baseUrl),
@@ -2461,6 +2464,12 @@ export async function main(): Promise<void> {
           if (rest === null) return null
           const m = marginFromBalances(await rest.walletBalances())
           return m.ok ? m.available : null
+        },
+        marginMode: async (rail) => {
+          const id = rail === 'live' ? 'delta' : 'delta-demo'
+          const row = await mongo.db.collection(BROKER_MARGIN_COLLECTION).findOne({ _id: id as never })
+          const mm = (row as { marginMode?: unknown } | null)?.marginMode
+          return mm === 'portfolio' || mm === 'isolated' ? mm : null
         },
         // Live refuses an opening package it cannot fund-check; demo lets Delta decide.
         failClosed: (rail) => rail === 'live',

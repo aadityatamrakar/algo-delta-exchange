@@ -123,6 +123,7 @@ test('EMPTY_RULE_STATE spells out every zero-value', () => {
       rearmReqSeen: 0,
       cooldowns: [],
       entryRefusal: '',
+      sizedBy: '',
     },
   })
   assert.equal(SUPERVISOR_NUDGE_PORT_DEFAULT, 8893)

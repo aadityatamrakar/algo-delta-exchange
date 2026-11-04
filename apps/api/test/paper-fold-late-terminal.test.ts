@@ -62,7 +62,7 @@ after(async () => {
 
 beforeEach(async () => {
   if (!available) return
-  for (const c of [COLLECTIONS.decisions, COLLECTIONS.gatewayOrders, COLLECTIONS.books]) {
+  for (const c of [COLLECTIONS.decisions, COLLECTIONS.gatewayOrders, COLLECTIONS.books, COLLECTIONS.orderEvents]) {
     await handle!.db.collection(c).deleteMany({})
   }
 })
@@ -182,4 +182,20 @@ itMongo('history stays history: an order created AND resolved long ago is still 
   assert.equal((await folder().run()).scanned, 0)
   const decision = await handle!.db.collection(COLLECTIONS.decisions).findOne({ decisionId: DECISION })
   assert.equal(decision?.['status'], 'WORKING')
+})
+
+itMongo('a nothing-traded order names the gateway refusal in its event, not just the state', async () => {
+  await seed()
+  const reason = 'margin: est initial margin $229.14 > available $120.54 on demo; the whole opening package is refused, no leg sent'
+  await handle!.db.collection(COLLECTIONS.gatewayOrders).updateOne({ clientOrderId: `${DECISION}#4` }, { $set: { state: 'INVALID', reason } })
+  await folder().run()
+  const ev = await handle!.db.collection(COLLECTIONS.orderEvents).findOne({ clientOrderId: `${DECISION}#4`, ok: false })
+  assert.equal(ev?.['error'], `${reason} (paper order finished INVALID, nothing traded, no leg booked)`)
+})
+
+itMongo('without a recorded reason the event keeps the plain wording', async () => {
+  await seed()
+  await folder().run()
+  const ev = await handle!.db.collection(COLLECTIONS.orderEvents).findOne({ clientOrderId: `${DECISION}#4`, ok: false })
+  assert.equal(ev?.['error'], 'paper order finished REJECTED with nothing traded — no leg was booked')
 })

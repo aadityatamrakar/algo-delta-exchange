@@ -23,12 +23,13 @@ const MID: BullSState = {
   rearmReqSeen: 1,
   cooldowns: [{ strike: 79_800, untilMs: 9_000, reason: 'oi-cap: open interest at the cap' }],
   entryRefusal: '',
+  sizedBy: '',
 }
 
 test('BS_EMPTY spells out every zero-value, and a fresh RuleState carries it last', () => {
   assert.deepEqual(BS_EMPTY, {
     groups: [], size: 0, lastRef: 0, lastRefMs: 0, halted: false, haltReason: '',
-    armedAtMs: 0, pnlBaseline: 0, closeReqSeen: 0, rearmReqSeen: 0, cooldowns: [], entryRefusal: '',
+    armedAtMs: 0, pnlBaseline: 0, closeReqSeen: 0, rearmReqSeen: 0, cooldowns: [], entryRefusal: '', sizedBy: '',
   })
   assert.equal(EMPTY_RULE_STATE.bs, BS_EMPTY)
   assert.equal(Object.keys(EMPTY_RULE_STATE).at(-1), 'bs')

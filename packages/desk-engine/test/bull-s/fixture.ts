@@ -99,6 +99,8 @@ export interface TickOpts {
   readonly dials?: Dials
   /** Every strike's leverage, both wings (default 100); null = the master has none. */
   readonly leverage?: number | null
+  /** The account's margin mode; absent = unknown (priced as isolated). */
+  readonly marginMode?: 'isolated' | 'portfolio' | null
 }
 
 export interface Flat {
@@ -175,6 +177,7 @@ export class Run {
         const lev = o.leverage === undefined ? 100 : o.leverage
         return { strike: r.strike, ce: lev, pe: lev }
       }),
+      ...(o.marginMode === undefined ? {} : { marginMode: o.marginMode }),
     }
   }
 

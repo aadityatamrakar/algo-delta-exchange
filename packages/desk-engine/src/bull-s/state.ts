@@ -85,6 +85,13 @@ export interface BullSState {
    * '' = none. Consumed by the pass that finds the entry failed.
    */
   readonly entryRefusal: string;
+  /**
+   * The lot dials `size` was stepped under (`bs_lots_start/step/cap`, see
+   * `bsSizeKey`). When the operator retunes them the next size is re-derived
+   * from the NEW dials for the straddles already held. '' = a row from before
+   * this field: adopted as-is, never re-derived on the deploy alone.
+   */
+  readonly sizedBy: string;
 }
 
 export const BS_EMPTY: BullSState = {
@@ -100,6 +107,7 @@ export const BS_EMPTY: BullSState = {
   rearmReqSeen: 0,
   cooldowns: [],
   entryRefusal: '',
+  sizedBy: '',
 };
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -168,5 +176,6 @@ export function hydrateBullState(raw: unknown): BullSState {
     rearmReqSeen: num(d['rearmReqSeen'], E.rearmReqSeen),
     cooldowns: Array.isArray(d['cooldowns']) ? d['cooldowns'].flatMap(cooldown) : [],
     entryRefusal: typeof d['entryRefusal'] === 'string' ? d['entryRefusal'] : E.entryRefusal,
+    sizedBy: typeof d['sizedBy'] === 'string' ? d['sizedBy'] : E.sizedBy,
   };
 }

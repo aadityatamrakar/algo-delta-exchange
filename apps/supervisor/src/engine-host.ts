@@ -323,6 +323,12 @@ export interface EngineHostDeps {
    */
   leverageFor?(strike: number, optType: OptType): number | null
   /**
+   * The book's Delta account margin mode ('isolated' | 'portfolio', the
+   * gateway's `desk-broker-margin` row), for the same estimate. Absent or
+   * null: unknown, priced as isolated — the larger figure.
+   */
+  marginModeFor?(): 'isolated' | 'portfolio' | null
+  /**
    * The venue this book trades on: its quantity step, default tick, clock and
    * expiry instant. Absent = `venueFromEnv()` (`DESK_VENUE`, NSE when unset),
    * read once when the host is built.
@@ -2207,7 +2213,8 @@ export class EngineHost {
             ce: leverageFor(r.strike, 'CE'),
             pe: leverageFor(r.strike, 'PE'),
           }))
-    return { ...inputs, ref, refAsOf, minutesToExpiry, leverage }
+    const marginMode = this.#d.marginModeFor?.() ?? null
+    return { ...inputs, ref, refAsOf, minutesToExpiry, leverage, marginMode }
   }
 
   // ------------------------------------------------------ the order budget

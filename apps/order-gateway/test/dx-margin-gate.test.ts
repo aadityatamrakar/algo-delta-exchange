@@ -84,6 +84,7 @@ function gate(o: {
   leverage?: ReadonlyMap<string, number>
   index?: number | null
   failClosed?: (rail: string) => boolean
+  marginMode?: 'isolated' | 'portfolio' | null | Error
 } = {}) {
   const alerts: Alert[] = []
   const logs: string[] = []
@@ -99,6 +100,14 @@ function gate(o: {
       return o.available === undefined ? 1_000 : o.available
     },
     failClosed: o.failClosed ?? ((rail) => rail === 'live'),
+    ...(o.marginMode === undefined
+      ? {}
+      : {
+          marginMode: async () => {
+            if (o.marginMode instanceof Error) throw o.marginMode
+            return o.marginMode ?? null
+          },
+        }),
     alerts: { raise: (a) => void alerts.push(a) },
     now: () => NOW,
     log: (m) => void logs.push(m),
@@ -244,4 +253,21 @@ test('placer: a straddle over the balance sends NOTHING, journalled margin: on b
 test('placer: a straddle within the balance sends both legs', async () => {
   const { broker } = await runPackage(100)
   assert.deepEqual(broker.placed.map((i) => i.instrument.tradingsymbol).sort(), [CE, PE])
+})
+
+test('estimate: a portfolio-margin account is asked 1% notional × 1.25 per short, never the premium', () => {
+  // 0.005 × 77460 / 100 × 1.25 = 4.84125 a leg; isolated would be 10.623.
+  const pm = estimatePackageMargin(straddle, { markOf: () => null, leverageOf: (s) => lev.get(s) ?? null, index: INDEX, mode: 'portfolio' })
+  assert.deepEqual(pm, { usd: 9.6825, missing: null })
+  const unknown = estimatePackageMargin(straddle, { markOf: () => null, leverageOf: (s) => lev.get(s) ?? null, index: INDEX, mode: null })
+  assert.equal(unknown.usd, 21.246, 'mode unknown = isolated, the larger')
+})
+
+test('demo on portfolio margin: the package the isolated formula refused goes through, and a refusal names the mode', async () => {
+  const pm = gate({ available: 10, marginMode: 'portfolio' })
+  assert.equal(await pm.g.refusal(openOrder(PE), 'dec-pm#0', 'demo'), null)
+  const tight = gate({ available: 9, marginMode: 'portfolio' })
+  assert.match(String(await tight.g.refusal(openOrder(PE), 'dec-pm2#0', 'demo')), /> available \$9\.00 on demo \(portfolio margin\)/)
+  const failed = gate({ available: 10, marginMode: new Error('profile down') })
+  assert.match(String(await failed.g.refusal(openOrder(PE), 'dec-pm3#0', 'demo')), /\$21\.25 > available \$10\.00 on demo \(isolated, mode unknown margin\)/)
 })

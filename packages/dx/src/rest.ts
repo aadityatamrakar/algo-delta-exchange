@@ -234,6 +234,12 @@ export class DxRest {
     return env.result ?? []
   }
 
+  /** The account profile; read for its `margin_mode` ('isolated' | 'portfolio'). */
+  async profile(): Promise<{ readonly margin_mode?: unknown; readonly [k: string]: unknown }> {
+    const env = await this.#request<{ readonly margin_mode?: unknown }>('GET', '/v2/profile', {}, undefined, true)
+    return env.result ?? {}
+  }
+
   async walletBalances(): Promise<DxBalance[]> {
     const env = await this.#request<DxBalance[]>('GET', '/v2/wallet/balances', {}, undefined, true)
     return env.result ?? []

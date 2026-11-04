@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import {
   bullSPyramid,
   bullSWorstAtCap,
+  bsSizeAfter,
+  marginModeOf,
+  PORTFOLIO_MARGIN_HEADROOM,
   quoteMark,
   shortOptionMargin,
 } from '../../src/bull-s/margin.ts'
@@ -74,4 +77,52 @@ test('a stop is never blocked by the margin budget', () => {
   })
   assert.equal(stop.trigger, 'bs-stop')
   assert.equal(stop.actions.length, 2)
+})
+
+test('portfolio margin: 1% notional with headroom, never the premium — the demo probe of 4 Nov', () => {
+  // A resting 10-contract sell of C-BTC-77000-131126 at 1.1× mark, index $77,390,
+  // blocked $8.78 on the portfolio-margin testnet account; the premium ($20.62) was not.
+  const m = shortOptionMargin({ mark: 2_062, qty: 0.01, index: 77_390, leverage: 100, mode: 'portfolio' })
+  assert.equal(PORTFOLIO_MARGIN_HEADROOM, 1.25)
+  assert.equal(m, 9.67375)
+  assert.ok(m >= 8.78, 'never under what Delta blocked')
+  // The same short on an isolated (or unknown) account keeps the premium term.
+  assert.equal(shortOptionMargin({ mark: 2_062, qty: 0.01, index: 77_390, leverage: 100, mode: 'isolated' }), 28.359)
+  assert.equal(shortOptionMargin({ mark: 2_062, qty: 0.01, index: 77_390, leverage: 100, mode: null }), 28.359)
+  assert.equal(marginModeOf('portfolio'), 'portfolio')
+  assert.equal(marginModeOf('cross'), null)
+})
+
+test('the budget prices by the account mode: a straddle refused on isolated goes on under portfolio', () => {
+  // ~0.05 × 4,000 + 2 × 0.05 × 80,000 / 100 ≈ 280 isolated; 2 × 40 × 1.25 = 100 portfolio.
+  const iso = new Run(dialsOf({ bs_margin_budget: 150 }))
+  assert.deepEqual(iso.tick(80_090, T0, { marginMode: 'isolated' }).actions, [])
+  const pm = new Run(dialsOf({ bs_margin_budget: 150 }))
+  assert.equal(pm.tick(80_090, T0, { marginMode: 'portfolio' }).actions.length, 2)
+})
+
+test('a retune of the lot dials re-derives the next size for the straddles held', () => {
+  const before = dialsOf({ bs_lots_start: 20, bs_lots_step: 20, bs_lots_cap: 100, bs_max_open: 5 })
+  const run = new Run(before)
+  run.tick(80_090, T0)
+  run.tick(80_250, T0 + S)
+  assert.equal(run.state.bs.groups.length, 2)
+  assert.equal(run.state.bs.size, 60)
+  run.dials = dialsOf({ bs_lots_start: 10, bs_lots_step: 10, bs_lots_cap: 100, bs_max_open: 5 })
+  const d = run.tick(80_260, T0 + 2 * S)
+  assert.equal(run.state.bs.size, 30, 'start 10, one step per held straddle')
+  assert.equal(bsSizeAfter(2, run.dials), 30)
+  assert.match(d.reason, /lot dials retuned to start\/step\/cap 10\/10\/100: next size 60 → 30 for the 2 straddle\(s\) held/)
+  // Said once: the next pass carries the new size silently.
+  assert.doesNotMatch(run.tick(80_270, T0 + 3 * S).reason, /lot dials retuned/)
+})
+
+test('a row from before sizedBy adopts its size as-is — the deploy alone never resizes a book', () => {
+  const run = new Run(dialsOf({ bs_lots_start: 20, bs_lots_step: 20, bs_lots_cap: 100, bs_max_open: 5 }))
+  run.tick(80_090, T0)
+  run.state = { ...run.state, bs: { ...run.state.bs, size: 45, sizedBy: '' } }
+  const d = run.tick(80_100, T0 + S)
+  assert.equal(run.state.bs.size, 45)
+  assert.equal(run.state.bs.sizedBy, '20/20/100')
+  assert.doesNotMatch(d.reason, /lot dials retuned/)
 })

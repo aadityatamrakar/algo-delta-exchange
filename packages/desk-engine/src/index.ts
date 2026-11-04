@@ -133,10 +133,15 @@ export { bsCrossedLevel, bsNearestLevel } from './bull-s/grid.ts';
 export {
   bsFirstSize,
   bsNextSize,
+  bsSizeAfter,
+  bsSizeKey,
   bullSPyramid,
   bullSWorstAtCap,
   leverageAt,
+  marginModeOf,
+  PORTFOLIO_MARGIN_HEADROOM,
   quoteMark,
   shortOptionMargin,
+  type MarginMode,
   type StrikeLeverage,
 } from './bull-s/margin.ts';

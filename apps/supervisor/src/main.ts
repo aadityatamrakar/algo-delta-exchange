@@ -511,6 +511,12 @@ export class Supervisor {
   /** The `desk-alerts` writer, one per process so its 10-minute dedupe spans every book. */
   readonly #alert: RaiseAlert
   readonly #margin: MarginPoll
+  /**
+   * Each Delta account's margin mode, off the gateway's `desk-broker-margin`
+   * rows (`delta` = live, `delta-demo` = testnet), refreshed with the margin
+   * poll. For the BULL-S `bs_margin_budget` estimate (`bull-s/margin.ts`).
+   */
+  readonly #marginModes = new Map<string, 'isolated' | 'portfolio'>()
   readonly #chain: ChainView
   /**
    * DELTA TESTNET QUOTES (`md.tick.demo`), for paper books on the demo rail —
@@ -1147,6 +1153,8 @@ export class Supervisor {
           this.#d.master().tickSizeFor(runtime.book.symbol, runtime.book.expiry, strike, optType),
         leverageFor: (strike, optType) =>
           this.#d.master().leverageFor(runtime.book.symbol, runtime.book.expiry, strike, optType),
+        // A paper book trades the testnet account (the demo rail); live, the live one.
+        marginModeFor: () => this.#marginModes.get(runtime.book.mode === 'live' ? 'delta' : 'delta-demo') ?? null,
         repairHold: repairHoldReader({
           lookup: repairHoldLookupFor(this.#d.db, this.#d.now),
           tag: book.tag,
@@ -1343,6 +1351,21 @@ export class Supervisor {
    * nothing and a replayed session behaves the same way in a fixture as it does
    * live. Errors are per book: one book's bad pass must not stop the others.
    */
+  async #refreshMarginModes(): Promise<void> {
+    try {
+      const rows = (await this.#d.db
+        .collection('desk-broker-margin')
+        .find({ _id: { $in: ['delta', 'delta-demo'] } } as never)
+        .toArray()) as unknown as { _id: string; marginMode?: unknown }[]
+      for (const r of rows) {
+        if (r.marginMode === 'portfolio' || r.marginMode === 'isolated') this.#marginModes.set(r._id, r.marginMode)
+        else this.#marginModes.delete(r._id)
+      }
+    } catch (err) {
+      this.#d.log.warn('margin mode read failed (priced as isolated)', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   async evaluateDue(): Promise<void> {
     // Here rather than on a timer of its own: this is the loop that WOULD be
     // steering a book with no tape, so it is the place the absence shows.
@@ -1444,6 +1467,7 @@ export class Supervisor {
     every(SUBSCRIPTION_MS, 'the subscription refresh', async () => await this.#publishSubscriptions())
     every(MARGIN_MS, 'the margin poll', async () => {
       await this.#margin.refresh([...new Set([...this.#hosts.values()].map((r) => r.book.tag))])
+      await this.#refreshMarginModes()
     })
     every(HEARTBEAT_MS, 'the lease heartbeat', async () => await this.#heartbeat())
   }

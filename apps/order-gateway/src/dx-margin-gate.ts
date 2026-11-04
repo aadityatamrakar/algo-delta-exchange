@@ -7,13 +7,14 @@
  *
  * THE ESTIMATE, per opening leg (qty in BTC = contracts × 0.001):
  *
- *   short: mark × qty + qty × index ÷ leverage   (`bull-s/margin.ts`, verified
- *          on the demo account; leverage = the product's `default_leverage`,
- *          the instrument row's `dx_leverage`)
+ *   short: `shortOptionMargin` (`bull-s/margin.ts`) by the account's margin
+ *          mode — isolated: mark × qty + qty × index ÷ leverage; portfolio:
+ *          qty × index ÷ leverage × 1.25, the premium never blocked (probed on
+ *          demo 4 Nov). Mode unknown = isolated, the larger. Leverage = the
+ *          product's `default_leverage`, the instrument row's `dx_leverage`.
  *   long:  mark × qty                            (the premium it pays)
  *
- * The mark is the HIGHER of the live mid and the planned price. On a
- * portfolio-margin account this over-estimates — the safe side.
+ * The mark is the HIGHER of the live mid and the planned price.
  *
  * AVAILABLE BALANCE: the gateway's own wallet read (`desk-broker-margin`,
  * `available`, at most `DESK_DX_MARGIN_MAX_AGE_MS` old), else a REST wallet
@@ -36,6 +37,7 @@ import { baseClientOrderId } from './gateway.ts'
 import { reducesExposure } from './queue.ts'
 import { decisionIdOf } from './dx-oicap.ts'
 import { NO_ALERTS, type AlertSink } from './alert-sink.ts'
+import { shortOptionMargin, type MarginMode } from '@algomaker/desk-engine'
 
 /** How old a `desk-broker-margin` read may be and still count. */
 export const DEFAULT_MARGIN_MAX_AGE_MS = 60_000
@@ -72,6 +74,8 @@ export interface MarginGateDeps {
   readonly index: () => number | null
   /** The rail account's fresh available balance (USD), null when none can be read. */
   readonly available: (rail: string) => Promise<number | null>
+  /** The rail account's margin mode; absent or null = unknown, priced as isolated. */
+  readonly marginMode?: (rail: string) => Promise<MarginMode | null>
   /** Refuse when a lookup fails on this rail (live). */
   readonly failClosed: (rail: string) => boolean
   readonly alerts?: AlertSink
@@ -96,6 +100,7 @@ export function estimatePackageMargin(
     readonly markOf: (symbol: string) => number | null
     readonly leverageOf: (symbol: string) => number | null
     readonly index: number | null
+    readonly mode?: MarginMode | null
   },
 ): { readonly usd: number; readonly missing: string | null } {
   let total = 0
@@ -113,7 +118,7 @@ export function estimatePackageMargin(
     const lev = f.leverageOf(l.tradingsymbol)
     if (!pos(lev)) return { usd: r8(total), missing: `no leverage for ${l.tradingsymbol}` }
     if (!pos(f.index)) return { usd: r8(total), missing: 'no BTC index price yet' }
-    total += mark * qty + (qty * f.index) / lev
+    total += shortOptionMargin({ mark, qty, index: f.index, leverage: lev, mode: f.mode ?? null })
   }
   return { usd: r8(total), missing: null }
 }
@@ -215,7 +220,18 @@ export class MarginGate {
       }
     }
 
-    const est = estimatePackageMargin(legs, { markOf: this.#d.markOf, leverageOf: this.#d.leverageOf, index: this.#d.index() })
+    let marginMode: MarginMode | null = null
+    try {
+      marginMode = (await this.#d.marginMode?.(rail)) ?? null
+    } catch (err) {
+      this.#d.log('margin: mode read failed, priced as isolated', { rail, error: msgOf(err) })
+    }
+    const est = estimatePackageMargin(legs, {
+      markOf: this.#d.markOf,
+      leverageOf: this.#d.leverageOf,
+      index: this.#d.index(),
+      mode: marginMode,
+    })
     if (est.missing !== null) return failed(est.missing)
     if (!(est.usd > 0)) return null
 
@@ -228,7 +244,7 @@ export class MarginGate {
     if (available === null || !Number.isFinite(available)) return failed(`no fresh ${rail} wallet balance`)
 
     if (est.usd > available) {
-      const refusal = `margin: est initial margin ${usd(est.usd)} > available ${usd(available)} on ${rail}`
+      const refusal = `margin: est initial margin ${usd(est.usd)} > available ${usd(available)} on ${rail} (${marginMode ?? 'isolated, mode unknown'} margin)`
       this.#d.log('margin: package refused', { rail, decisionId, estUsd: est.usd, available })
       alerts.raise({ severity: 'warn', mode, key: `margin:${key}`, tag, message: refusal })
       return refusal
