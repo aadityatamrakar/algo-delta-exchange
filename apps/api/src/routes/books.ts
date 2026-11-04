@@ -36,7 +36,7 @@ import { validateDailyLimits } from '../strategies.ts'
 import { recordSeries } from '../book-series.ts'
 import { handleSettleExpired } from '../settle-expired.ts'
 import { SUPERVISOR_STATE_COLLECTION, stateKey } from '../../../supervisor/src/state-store.ts'
-import type { Database } from '../store.ts'
+import { COLLECTIONS, type Database } from '../store.ts'
 import { liveBudgetRefusal } from '../bull-s-live.ts'
 
 /**
@@ -257,7 +257,31 @@ async function workingOnFile(db: Database, tag: string, mode: DeskMode): Promise
  * (`workingOnFile`), so there is no in-flight package to lose.
  */
 async function forgetEngineState(db: Database, tag: string, mode: DeskMode): Promise<void> {
-  await db.collection(SUPERVISOR_STATE_COLLECTION).deleteOne({ key: stateKey(tag, mode) } as never)
+  const states = db.collection(SUPERVISOR_STATE_COLLECTION)
+  const key = stateKey(tag, mode)
+  /**
+   * THE DECISION COUNTER SURVIVES. A decision id is `${tag}:${mode}:${seq}`,
+   * and desk-api answers a decision id it has already seen with the STORED
+   * result (an idempotent replay). A counter reset to 0 sends `…:1` again and
+   * gets back the old book's answer — on 4 Nov a refused entry, so the reset
+   * book's first straddle was never placed. The next id is one past the
+   * highest this tag and mode has ever used, from the state and the decisions.
+   */
+  const prev = (await states.findOne({ key } as never)) as Record<string, unknown> | null
+  let seq = typeof prev?.['seq'] === 'number' && Number.isFinite(prev['seq']) ? prev['seq'] : 0
+  const prefix = `${tag}:${mode}:`
+  const decisions = await db
+    .collection(COLLECTIONS.decisions)
+    .find({ tag, mode } as never)
+    .toArray()
+  for (const d of decisions as unknown as Record<string, unknown>[]) {
+    const id = d['decisionId']
+    if (typeof id !== 'string' || !id.startsWith(prefix)) continue
+    const n = Number(id.slice(prefix.length))
+    if (Number.isInteger(n) && n > seq) seq = n
+  }
+  await states.deleteOne({ key } as never)
+  if (seq > 0) await states.insertOne({ key, seq, updatedAt: 0 } as never)
 }
 
 /**

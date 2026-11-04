@@ -1812,17 +1812,25 @@ itMongo('paper-rail: a HOLDING book may switch — the gateway keeps its legs on
 
 itMongo("deleting a book forgets the engine's state, and a new book on the tag starts from none", async () => {
   const states = handle!.db.collection('desk-supervisor-state')
+  // Not in COLLECTIONS, so `beforeEach` does not clear it: a previous run's rows would answer.
+  await states.deleteMany({})
   const key = `${CREATE_BODY.tag}:paper`
   await post('/v1/desk/books/registry', CREATE_BODY)
-  await states.insertOne({ key, ruleState: { bs: { size: 20, lastRef: 78_321 } } } as never)
+  await states.insertOne({ key, seq: 3, ruleState: { bs: { size: 20, lastRef: 78_321 } } } as never)
   assert.equal((await del(`/v1/desk/books/registry/${CREATE_BODY.tag}?mode=paper`)).status, 200)
-  assert.equal(await states.findOne({ key } as never), null, 'the deleted book left its engine state behind')
+  const kept = (await states.findOne({ key } as never)) as Record<string, unknown> | null
+  assert.equal(kept?.['ruleState'], undefined, 'the deleted book left its engine state behind')
+  assert.equal(kept?.['seq'], 3, 'the decision counter must survive, or the next id replays an old decision')
 
   // A save that lands after the delete (a stopping supervisor's last write) is
   // cleared by the next registration, never resumed by it.
-  await states.insertOne({ key, ruleState: { bs: { size: 20 } } } as never)
+  await states.deleteOne({ key } as never)
+  await states.insertOne({ key, seq: 1, ruleState: { bs: { size: 20 } } } as never)
+  await handle!.db.collection(COLLECTIONS.decisions).insertOne({ decisionId: `${key}:7`, tag: CREATE_BODY.tag, mode: 'paper' } as never)
   assert.equal((await post('/v1/desk/books/registry', CREATE_BODY)).status, 201)
-  assert.equal(await states.findOne({ key } as never), null, 'a new book resumed the old one')
+  const fresh = (await states.findOne({ key } as never)) as Record<string, unknown> | null
+  assert.equal(fresh?.['ruleState'], undefined, 'a new book resumed the old one')
+  assert.equal(fresh?.['seq'], 7, 'the counter starts past the highest decision id this tag has used')
   // The other mode's state is not this book's and is left alone.
   await states.insertOne({ key: `${CREATE_BODY.tag}:live`, ruleState: {} } as never)
   await del(`/v1/desk/books/registry/${CREATE_BODY.tag}?mode=paper`)
