@@ -246,6 +246,21 @@ async function workingOnFile(db: Database, tag: string, mode: DeskMode): Promise
 }
 
 /**
+ * THE ENGINE'S STATE FOR THIS BOOK GOES WITH THE BOOK.
+ *
+ * `desk-supervisor-state` (`${tag}:${mode}`) holds the engine's rule state —
+ * BULL-S's straddles, next size, baseline price, armed time. Erasing the
+ * registry row and the book left it behind, so a book re-registered on the same
+ * tag (4 Nov, `BTC-2026-11-13-bull-s-live-1`) resumed the deleted one: next
+ * size 20 not 10, a baseline already set (no sale on start), and the old
+ * straddle still on its stack. A delete only reaches here with nothing working
+ * (`workingOnFile`), so there is no in-flight package to lose.
+ */
+async function forgetEngineState(db: Database, tag: string, mode: DeskMode): Promise<void> {
+  await db.collection(SUPERVISOR_STATE_COLLECTION).deleteOne({ key: stateKey(tag, mode) } as never)
+}
+
+/**
  * How many delete-with-flatten attempts one tag gets in one IST day.
  *
  * A bound, not a budget. Each one places a full set of exit orders, so a control
@@ -457,6 +472,9 @@ export function booksRoutes(deps: BooksDeps): Route {
         createdAt: nowMs,
         updatedAt: nowMs,
       }
+      // A NEW book starts from an empty engine state, whatever a previous book
+      // on this tag left — including a save that landed after its delete.
+      await forgetEngineState(deps.db, create.tag, create.mode)
       await store.upsertBook(row)
       /**
        * THE SERIES ROW — the one record of this book that outlives its erase.
@@ -855,6 +873,7 @@ export function booksRoutes(deps: BooksDeps): Route {
         const purged = purge ? await store.purgeTagHistory(tag) : null
 
         await store.eraseBook(tag, mode)
+        await forgetEngineState(deps.db, tag, mode)
         // The switch goes too. A tag left added-but-bookless still looks
         // tradable on the Strategies page, and an order under it would be
         // gated by a row whose book nobody can see.

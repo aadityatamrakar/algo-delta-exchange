@@ -1809,3 +1809,22 @@ itMongo('paper-rail: a HOLDING book may switch — the gateway keeps its legs on
   assert.equal(res.status, 200, JSON.stringify(res.body))
   assert.equal(res.body['dx_paper_rail'], 'sim')
 })
+
+itMongo("deleting a book forgets the engine's state, and a new book on the tag starts from none", async () => {
+  const states = handle!.db.collection('desk-supervisor-state')
+  const key = `${CREATE_BODY.tag}:paper`
+  await post('/v1/desk/books/registry', CREATE_BODY)
+  await states.insertOne({ key, ruleState: { bs: { size: 20, lastRef: 78_321 } } } as never)
+  assert.equal((await del(`/v1/desk/books/registry/${CREATE_BODY.tag}?mode=paper`)).status, 200)
+  assert.equal(await states.findOne({ key } as never), null, 'the deleted book left its engine state behind')
+
+  // A save that lands after the delete (a stopping supervisor's last write) is
+  // cleared by the next registration, never resumed by it.
+  await states.insertOne({ key, ruleState: { bs: { size: 20 } } } as never)
+  assert.equal((await post('/v1/desk/books/registry', CREATE_BODY)).status, 201)
+  assert.equal(await states.findOne({ key } as never), null, 'a new book resumed the old one')
+  // The other mode's state is not this book's and is left alone.
+  await states.insertOne({ key: `${CREATE_BODY.tag}:live`, ruleState: {} } as never)
+  await del(`/v1/desk/books/registry/${CREATE_BODY.tag}?mode=paper`)
+  assert.notEqual(await states.findOne({ key: `${CREATE_BODY.tag}:live` } as never), null)
+})
