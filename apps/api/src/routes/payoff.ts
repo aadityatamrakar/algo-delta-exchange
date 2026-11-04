@@ -118,7 +118,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { venueSessionOpen } from '../venue.ts'
+import { API_VENUE, venueSessionOpen, type VenueSpec } from '../venue.ts'
 import {
   b76Greeks,
   yearsToExpiry,
@@ -559,7 +559,12 @@ export interface Assembled {
  */
 const LAST_SESSION_MAX_AGE_MS = 4 * 24 * 60 * 60 * 1000
 
-export async function assemble(deps: ApiDeps, tag: string, mode: DeskMode): Promise<Assembled> {
+export async function assemble(
+  deps: ApiDeps,
+  tag: string,
+  mode: DeskMode,
+  venue: VenueSpec = API_VENUE,
+): Promise<Assembled> {
   const asOf = deps.now()
   /**
    * OUTSIDE THE SESSION, THIS COCKPIT PRICES OFF THE LAST SESSION — display
@@ -627,8 +632,15 @@ export async function assemble(deps: ApiDeps, tag: string, mode: DeskMode): Prom
     }
   }
 
-  const future = chain?.future ?? null
   const spot = chain?.spot ?? pos.spot
+  /**
+   * DELTA LISTS NO DATED BTC FUTURE, so the master's `future('BTC')` is null
+   * there and every book read "nothing can be priced". The forward on Delta is
+   * the index (`.DEXBTUSD`) — what the supervisor's ChainView uses as its
+   * proxy forward (carry 1) and what Delta marks its own options against. NSE
+   * keeps the future-or-nothing rule: a missing future there is a real gap.
+   */
+  const future = chain?.future ?? (venue.id === 'dx' && spot !== null && spot > 0 ? spot : null)
   if (future === null) {
     warnings.push(
       `no future mark for ${symbol === '' ? 'this book' : symbol} — options are marked Black-76 off the ` +

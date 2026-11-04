@@ -25,7 +25,8 @@ import { DeskStore, type Collection, type Database, type FindCursor, type Update
 import type { PayoffLeg } from '@algomaker/payoff'
 import { buildChain, type ChainResponse, type ChainRow } from '../src/chain.ts'
 import type { ApiDeps, Route, RouteCtx } from '../src/routes/kit.ts'
-import { payoffRoutes, toWireLegs } from '../src/routes/payoff.ts'
+import { assemble, payoffRoutes, toWireLegs } from '../src/routes/payoff.ts'
+import { DX, NSE } from '../src/venue.ts'
 
 // ------------------------------------------------------------- the fake port
 
@@ -1520,4 +1521,16 @@ test('OPEN MARKET with a dead feed keeps every warning — the gate is the clock
   assert.equal(res.status, 200)
   assert.equal(res.body['marketClosed'], false)
   assert.ok(said(res.body, /not ticking/), 'mid-session feed death must still be said')
+})
+
+test('on Delta, which lists no dated future, the index is the forward; NSE still needs its future', async () => {
+  const h = await harness({ future: false })
+  const dx = await assemble(h.deps, TAG, 'paper', DX)
+  assert.ok(dx.future !== null && dx.future > 0, 'a Delta book must price off the index when no future is listed')
+  assert.equal(dx.future, dx.spot)
+  assert.ok(!dx.warnings.some((w) => /no future mark/.test(w)), `still warned: ${dx.warnings.join(' | ')}`)
+
+  const nse = await assemble(h.deps, TAG, 'paper', NSE)
+  assert.equal(nse.future, null, 'a missing NSE future is a real gap, never filled with cash')
+  assert.ok(nse.warnings.some((w) => /no future mark/.test(w)))
 })
