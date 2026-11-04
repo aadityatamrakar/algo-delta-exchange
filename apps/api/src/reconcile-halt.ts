@@ -108,6 +108,11 @@ export class ReconcileHalt {
       return
     }
     if (report.divergent.length === 0) {
+      // A leg in flight (`IN_FLIGHT_GRACE_MS`) is no verdict on that leg, so a
+      // pass with one is not agreement: like a blind pass it neither moves nor
+      // resets the count, or a desk trading a leg that really diverges could
+      // keep resetting the halt it should reach.
+      if (report.symbols.some((s) => s.inFlight === true)) return
       this.#streak = 0
       this.#haltedFor = ''
       return

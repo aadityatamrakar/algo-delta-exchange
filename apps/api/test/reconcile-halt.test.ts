@@ -115,6 +115,26 @@ test('a missing or stale snapshot is NOT a mismatch: a warn, and the count neith
   assert.equal(g.halts.length, 1)
 })
 
+test('a pass whose only disagreement is a fill in flight neither moves nor resets the count, and raises nothing', async () => {
+  // The leg traded after the snapshot was read: no verdict on it this pass.
+  const IN_FLIGHT = report([
+    { ...sym('C-BTC-80000-041126', -50, null), inFlight: true },
+    sym('P-BTC-80000-041126', -50, -50),
+  ])
+  assert.deepEqual(IN_FLIGHT.divergent, [])
+  const quiet = harness()
+  await quiet.guard.observe(IN_FLIGHT)
+  await quiet.guard.observe(IN_FLIGHT)
+  assert.deepEqual(quiet.halts, [])
+  assert.deepEqual(quiet.alerts, [])
+  // A real mismatch, the same leg in flight, the mismatch again: still two passes.
+  const h = harness()
+  await h.guard.observe(OFF)
+  await h.guard.observe(IN_FLIGHT)
+  await h.guard.observe(OFF)
+  assert.equal(h.halts.length, 1)
+})
+
 test('no verdict on a rail where the desk holds nothing, or on the simulator, raises nothing', async () => {
   const h = harness()
   await h.guard.observe(report([], { comparable: false, reason: 'no broker snapshot' }))

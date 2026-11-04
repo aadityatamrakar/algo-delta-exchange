@@ -167,7 +167,14 @@ export interface SymbolCompare {
    * needs to be told to look before believing the divergence.
    */
   readonly bothSources?: boolean
-  /** Present only on a divergence. Plain numbers, no adjectives. */
+  /**
+   * The desk traded this contract after the broker snapshot was read, so the
+   * snapshot is no verdict on it: `broker` is null, `agree` is true, and the
+   * next pass — on a snapshot taken after the fill — compares it. See
+   * `IN_FLIGHT_GRACE_MS`.
+   */
+  readonly inFlight?: boolean
+  /** Present only on a divergence or an in-flight leg. Plain numbers, no adjectives. */
   readonly note?: string
 }
 
@@ -256,6 +263,12 @@ export interface PositionsComparePorts {
   books(): Promise<readonly BookPositions[]>
   /** Every `runner:positions` ledger on the LIVE rail. */
   ledgers(): Promise<readonly LedgerPositions[]>
+  /**
+   * The desk's latest fill per contract on this rail, for fills at or after
+   * `sinceMs` — what `IN_FLIGHT_GRACE_MS` judges against. A READ. Absent, or a
+   * read that fails: every mismatch is judged as it was before.
+   */
+  lastFills?(sinceMs: number): Promise<ReadonlyMap<string, number>>
   /**
    * THE JOIN, as a port: an XTS exchange token -> the desk's tradingsymbol.
    *
@@ -491,7 +504,33 @@ export interface CompareInput {
   readonly noSnapshotReason?: string
   /** Default `live`. */
   readonly rail?: CompareRail
+  /**
+   * The desk's latest fill per contract on this rail (the `desk-fills`
+   * collection, keyed by tradingsymbol), from at least
+   * `brokerAsOf - IN_FLIGHT_GRACE_MS`. Absent:
+   * every mismatch is judged as before.
+   */
+  readonly lastFillAt?: ReadonlyMap<string, number>
 }
+
+/**
+ * A FILL IN FLIGHT IS NOT A DIVERGENCE.
+ *
+ * The gateway rewrites the Delta snapshot every 30 s and this job reads
+ * whichever one is current, so a leg that fills between the two reads is on
+ * the desk and not yet in the snapshot. On 4 Nov a straddle filled 1.6–4.2 s
+ * after the 12:09:55.98 snapshot and the 12:10:19 pass named all four legs
+ * DIVERGENT — and two such passes in a row halt live opens. A mismatched leg
+ * the desk traded at or after `brokerAsOf - IN_FLIGHT_GRACE_MS` therefore gets
+ * no verdict this pass; the next snapshot postdates the fill and settles it.
+ *
+ * The grace exists because the snapshot is stamped AFTER Delta answers
+ * (`gateway-heartbeat.ts`), so Delta's view can trail its own `asOf`. Each
+ * fill defers its leg by at most one pass, and that pass neither advances nor
+ * resets the halt count (`reconcile-halt.ts`): a leg that keeps disagreeing
+ * once the snapshot has caught up is reported, and halts, exactly as before.
+ */
+export const IN_FLIGHT_GRACE_MS = 5_000
 
 /** Paper on the simulator: there is no exchange position to compare with. */
 export const SIMULATOR_NO_COMPARE = 'paper on the simulator: no exchange to compare against'
@@ -632,7 +671,30 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
     const bookQty = deskBooks.get(symbol) ?? 0
     const ledgerQty = deskLedger.get(symbol) ?? 0
     const desk = bookQty + ledgerQty
-    const brokerQty = comparable ? broker.get(symbol) ?? 0 : null
+    const read = comparable ? broker.get(symbol) ?? 0 : null
+    const filledAt = input.lastFillAt?.get(symbol)
+    const inFlight =
+      read !== null &&
+      read !== desk &&
+      brokerAsOf !== null &&
+      filledAt !== undefined &&
+      filledAt >= brokerAsOf - IN_FLIGHT_GRACE_MS
+    if (inFlight) {
+      symbols.push({
+        symbol,
+        broker: null,
+        books: bookQty,
+        ledger: ledgerQty,
+        agree: true,
+        claimedBy: [...(claimedBy.get(symbol) ?? [])].sort(),
+        inFlight: true,
+        note:
+          `filled after the broker snapshot was read (fill ${Math.round((filledAt - brokerAsOf) / 1000)}s ` +
+          `from it; the snapshot shows ${read}, the desk ${desk}) — compared on the next pass`,
+      })
+      continue
+    }
+    const brokerQty = read
     const agree = brokerQty === null || brokerQty === desk
     if (!agree) divergent.push(symbol)
     const both = bookQty !== 0 && ledgerQty !== 0
@@ -842,6 +904,13 @@ class Comparer implements PositionsComparer {
           : undefined
       const books = await this.#d.books()
       const ledgers = await this.#d.ledgers()
+      /**
+       * FILLS LAST, after the books. The gateway writes a fill before the book
+       * that carries it is updated, so every leg the books above show has its
+       * fill visible to this read — read first, a leg that filled in between
+       * would be on the desk with no fill to excuse it.
+       */
+      const lastFillAt = await this.#lastFills(snapshot)
       const report = comparePositions({
         now: nowMs,
         snapshot,
@@ -852,6 +921,7 @@ class Comparer implements PositionsComparer {
         symbolForToken: (token) => this.#d.symbolForToken(token),
         ...(noSnapshotReason === undefined ? {} : { noSnapshotReason }),
         ...(this.#rail === 'demo' ? { rail: 'demo' as const } : {}),
+        ...(lastFillAt === null ? {} : { lastFillAt }),
       })
       this.#last = report
       await this.#d.save(report)
@@ -869,6 +939,24 @@ class Comparer implements PositionsComparer {
       return report
     } finally {
       this.#running = false
+    }
+  }
+
+  /**
+   * The desk's fills since the snapshot (less the grace), or null — no port,
+   * no usable snapshot stamp, or a failed read. Null judges every mismatch as
+   * before: a read that fails can cost a false WARN, never a missed one.
+   */
+  async #lastFills(snapshot: Record<string, unknown> | null): Promise<ReadonlyMap<string, number> | null> {
+    const asOf = snapshot?.['asOf']
+    if (this.#d.lastFills === undefined || typeof asOf !== 'number') return null
+    try {
+      return await this.#d.lastFills(asOf - IN_FLIGHT_GRACE_MS)
+    } catch (err) {
+      this.#d.log('positions compare: desk fills could not be read — a leg filled after the snapshot may show as divergent', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
     }
   }
 
@@ -1039,6 +1127,32 @@ export function createPositionsComparer(
 
 // ------------------------------------------------------------------ the wiring
 
+/** The gateway's fill journal (`apps/order-gateway/src/main.ts`): `{ tradingsymbol, mode, ts }`. */
+const FILLS_COLLECTION = 'desk-fills'
+
+/**
+ * `lastFills` over `desk-fills` for one desk mode: the latest `ts` per
+ * contract since `sinceMs`. Every row counts — WORKING, FILLED or CANCELLED —
+ * because each says the desk was trading that contract; counting one that
+ * changed nothing costs that leg one deferred pass, no more.
+ */
+function lastFillsOf(deps: Pick<ApiDeps, 'db'>, mode: 'live' | 'paper') {
+  return async (sinceMs: number): Promise<ReadonlyMap<string, number>> => {
+    const rows = (await deps.db
+      .collection(FILLS_COLLECTION)
+      .find({ mode, ts: { $gte: sinceMs } })
+      .toArray()) as Record<string, unknown>[]
+    const out = new Map<string, number>()
+    for (const r of rows) {
+      const symbol = r['tradingsymbol']
+      const ts = r['ts']
+      if (typeof symbol !== 'string' || symbol === '' || typeof ts !== 'number') continue
+      if (ts > (out.get(symbol) ?? -Infinity)) out.set(symbol, ts)
+    }
+    return out
+  }
+}
+
 /** The real collections behind `PositionsComparePorts`. */
 export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
   const onDx = (deps.venue ?? API_VENUE).id === 'dx'
@@ -1075,6 +1189,7 @@ export function positionsComparePorts(deps: ApiDeps): PositionsComparePorts {
       const master = deps.master.current()
       return readLiveLedgers(docs, (symbol) => lotSizeFromMaster(master, symbol))
     },
+    lastFills: lastFillsOf(deps, 'live'),
     /**
      * `deps.master.current()` on EVERY call, never hoisted: see the port's own
      * comment. The try/catch is the same bargain `lotSizeFromMaster` makes —
@@ -1156,6 +1271,9 @@ export function positionsDemoComparePorts(deps: ApiDeps): PositionsComparePorts 
       return docs.filter((d) => demoTags.has(d.tag)).map((d) => ({ tag: d.tag, legs: d.legs }))
     },
     ledgers: async () => [],
+    // Paper fills: the demo rail's are among them. A sim-rail fill on the same
+    // contract only defers that leg one pass.
+    lastFills: lastFillsOf(deps, 'paper'),
     symbolForToken: () => null,
     save: async (report) => {
       await deps.db

@@ -42,6 +42,7 @@ import {
   createPositionsComparer,
   dxDemoNoSnapshotReason,
   dxNoSnapshotReason,
+  positionsComparePorts,
   positionsDemoComparePorts,
   readLiveLedgers,
   SIMULATOR_NO_COMPARE,
@@ -1166,4 +1167,140 @@ test('demo: a divergence is never journalled into the order feed', async () => {
 test('the demo card names the testnet account', () => {
   const card = compareCardSummary({ asOf: NOW, comparable: true, symbols: [{ symbol: 'x' }], divergent: [], unattributable: [], unmeasurable: [], intervalMs: INTERVAL }, NOW, 'the Delta testnet account')
   assert.match(card.detail, /1 desk contracts compared to the Delta testnet account/)
+})
+
+// ------------------------------------------------------- a fill in flight
+
+/**
+ * THE 4 NOV 12:10 SHAPE. The gateway rewrites the Delta snapshot every 30 s
+ * (12:09:55.98); the 78200 straddles filled 1.6–4.2 s after it; the pass at
+ * 12:10:19 compared the desk's new legs with a snapshot taken before they
+ * existed and named all four DIVERGENT — one more such pass halts live opens.
+ * A leg the desk traded after the snapshot was read is not evidence either way.
+ */
+const SNAP_AT = NOW - 23_000
+/** The grace the snapshot stamp needs: it is taken AFTER Delta answers. */
+const GRACE = 5_000
+const HELD = 'C-BTC-78000-131126'
+const FILLED = 'C-BTC-78200-051126'
+
+const dxSnap = (positions: readonly Doc[], asOf = SNAP_AT): Doc => ({
+  asOf,
+  ok: true,
+  symbolSpace: 'desk',
+  positions: [...positions],
+  emptyDiagnostic: { positions: `array(${positions.length})` },
+})
+const heldRow = { tradingsymbol: HELD, netQty: -0.01, avgPrice: 1914 }
+const liveBooks = (): BookPositions[] => [
+  book('BTC-LIVE', [
+    { symbol: HELD, qty: -0.01 },
+    { symbol: FILLED, qty: -0.03 },
+  ]),
+]
+
+test('a leg that filled AFTER the broker snapshot was read is in flight, not divergent', () => {
+  const r = compare({
+    snapshot: dxSnap([heldRow]),
+    books: liveBooks(),
+    lastFillAt: new Map([[FILLED, SNAP_AT + 1_600]]),
+  })
+  assert.equal(r.comparable, true, r.reason)
+  assert.deepEqual(r.divergent, [])
+  const row = r.symbols.find((s) => s.symbol === FILLED)
+  assert.equal(row?.inFlight, true)
+  assert.equal(row?.broker, null, 'a snapshot older than the fill is no verdict on that leg')
+  assert.match(row?.note ?? '', /filled after the broker snapshot/)
+  // The leg that did not trade is still compared, and agrees.
+  assert.equal(r.symbols.find((s) => s.symbol === HELD)?.broker, -0.01)
+})
+
+test('a fill just BEFORE the snapshot stamp is in flight too — the stamp is taken after Delta answers', () => {
+  const r = compare({
+    snapshot: dxSnap([heldRow]),
+    books: liveBooks(),
+    lastFillAt: new Map([[FILLED, SNAP_AT - GRACE + 1]]),
+  })
+  assert.deepEqual(r.divergent, [])
+})
+
+test('a mismatch on a leg whose last fill the snapshot already saw is still a divergence', () => {
+  const r = compare({
+    snapshot: dxSnap([heldRow]),
+    books: liveBooks(),
+    lastFillAt: new Map([[FILLED, SNAP_AT - GRACE - 1]]),
+  })
+  assert.deepEqual(r.divergent, [FILLED])
+  assert.equal(r.symbols.find((s) => s.symbol === FILLED)?.inFlight, undefined)
+})
+
+test('a pass asks for the desk’s fills since the snapshot, and a leg filled after it is not divergent', async () => {
+  const asked: number[] = []
+  const h = ports({
+    snapshot: async () => dxSnap([heldRow]),
+    books: async () => liveBooks(),
+    lastFills: async (since) => {
+      asked.push(since)
+      return new Map([[FILLED, SNAP_AT + 1_600]])
+    },
+  })
+  const report = await createPositionsComparer(h.ports, { intervalMs: INTERVAL }).run(NOW)
+  assert.deepEqual(asked, [SNAP_AT - GRACE])
+  assert.deepEqual(report?.divergent, [])
+})
+
+test('fills that cannot be read leave the comparison as it was — the mismatch is still reported', async () => {
+  const h = ports({
+    snapshot: async () => dxSnap([heldRow]),
+    books: async () => liveBooks(),
+    lastFills: async () => Promise.reject(new Error('mongo down')),
+  })
+  const report = await createPositionsComparer(h.ports, { intervalMs: INTERVAL }).run(NOW)
+  assert.deepEqual(report?.divergent, [FILLED])
+  assert.ok(h.logs.some((l) => /fills could not be read/.test(l)), h.logs.join('\n'))
+})
+
+/** `desk-fills` behind a stub db: the filter each read used, and the rows it matched. */
+function fillsDeps(rows: readonly Doc[]): { deps: ApiDeps; filters: Doc[] } {
+  const filters: Doc[] = []
+  const matches = (row: Doc, f: Doc): boolean =>
+    row['mode'] === f['mode'] && Number(row['ts']) >= Number((f['ts'] as Doc)['$gte'])
+  const deps = {
+    now: () => NOW,
+    log: () => {},
+    venue: { id: 'dx' },
+    db: {
+      collection: (name: string) => ({
+        find: (f: Doc) => {
+          if (name === 'desk-fills') filters.push(f)
+          return { toArray: async () => (name === 'desk-fills' ? rows.filter((r) => matches(r, f)) : []) }
+        },
+        findOne: async () => null,
+        updateOne: async () => ({ matchedCount: 1 }),
+      }),
+    },
+    store: { listBooks: async () => [], allBooks: async () => [] },
+  } as unknown as ApiDeps
+  return { deps, filters }
+}
+
+const fillRows: readonly Doc[] = [
+  { tradingsymbol: FILLED, mode: 'live', ts: SNAP_AT + 1_600 },
+  { tradingsymbol: FILLED, mode: 'live', ts: SNAP_AT + 2_400 },
+  { tradingsymbol: HELD, mode: 'live', ts: SNAP_AT - 60_000 },
+  { tradingsymbol: 'C-BTC-77000-131126', mode: 'paper', ts: SNAP_AT + 1_000 },
+]
+
+test('the live wiring reads LIVE fills since the asked time, latest per contract', async () => {
+  const { deps, filters } = fillsDeps(fillRows)
+  const got = await positionsComparePorts(deps).lastFills?.(SNAP_AT - GRACE)
+  assert.equal(filters[0]?.['mode'], 'live')
+  assert.deepEqual([...(got ?? new Map())], [[FILLED, SNAP_AT + 2_400]])
+})
+
+test('the demo wiring reads PAPER fills — the testnet rail’s', async () => {
+  const { deps, filters } = fillsDeps(fillRows)
+  const got = await positionsDemoComparePorts(deps).lastFills?.(SNAP_AT - GRACE)
+  assert.equal(filters[0]?.['mode'], 'paper')
+  assert.deepEqual([...(got ?? new Map())], [['C-BTC-77000-131126', SNAP_AT + 1_000]])
 })
