@@ -202,6 +202,16 @@ export class DxRest {
     return this.#orderPages('/v2/orders/history', {}, q.after, false)
   }
 
+  /**
+   * The newest page of closed and cancelled orders (at most 50), newest first:
+   * ONE request, for the Broker page's display. Nothing reconciles against it,
+   * so it never follows the cursor — `orderHistory` does that for the sweep.
+   */
+  async recentOrders(): Promise<DxOrder[]> {
+    const env = await this.#request<DxOrder[]>('GET', '/v2/orders/history', { page_size: 50 }, undefined, true)
+    return env.result ?? []
+  }
+
   async #orderPages(path: string, query: Query, start: string | undefined, strict: boolean): Promise<DxOrder[]> {
     const out: DxOrder[] = []
     let after = start

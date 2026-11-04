@@ -130,6 +130,9 @@ export interface DxOrder {
   readonly stop_order_type?: string | null
   readonly stop_price?: string | null
   readonly stop_trigger_method?: string | null
+  /** ISO 8601, UTC (`2026-11-04T15:47:14.592163Z`). */
+  readonly created_at?: string | null
+  readonly updated_at?: string | null
 }
 
 export interface DxFill {

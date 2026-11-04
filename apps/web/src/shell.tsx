@@ -144,12 +144,13 @@ export function navRoutesFor(venue: VenueSpec): readonly { id: Route; label: str
  * Tabs one venue's build does not offer. The routes themselves still resolve,
  * so a bookmark lands on a page rather than nowhere.
  *
- *  - DX: `broker` is the NSE broker's own order book (XTS/Kite) read against
- *    ours — there is no such page for Delta.
+ *  - DX: nothing. `broker` was hidden here while it could only read the NSE
+ *    broker's book (XTS/Kite); on the DX build it is now Delta's own book on
+ *    the switch's account (`dx-broker-view.tsx`, operator 4 Nov).
  *  - NSE: `chain` is the DX build's option-chain page (BTC); the NSE desk
  *    reads its chains on Build and in the Manual Order dialog, unchanged.
  */
-const DX_HIDDEN: ReadonlySet<Route> = new Set<Route>(['broker'])
+const DX_HIDDEN: ReadonlySet<Route> = new Set<Route>([])
 const NSE_HIDDEN: ReadonlySet<Route> = new Set<Route>(['chain'])
 
 export const NAV_ROUTES: readonly { id: Route; label: string; hash: string }[] = navRoutesFor(VENUE)

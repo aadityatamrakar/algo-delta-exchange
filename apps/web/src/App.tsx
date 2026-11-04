@@ -36,12 +36,13 @@ import { BookTabsPage, ControlsPage } from './pages.tsx'
 import { AuthGate, AuthProvider, useAuth } from './auth.tsx'
 import { StatusPage } from './status.tsx'
 import { BrokerViewPage } from './broker-view.tsx'
+import { DxBrokerPage } from './dx-broker-view.tsx'
 import { StrategiesPage, StrategyPage } from './strategies.tsx'
 import { BooksPage } from './books.tsx'
 import { BookBuildPage } from './book-build.tsx'
 import { ReportsPage } from './reports.tsx'
 import { ChainPage } from './chain.tsx'
-import { BRAND } from './venue.ts'
+import { BRAND, VENUE } from './venue.ts'
 import { AlertsBanner } from './alerts-banner.tsx'
 
 /**
@@ -270,7 +271,9 @@ function Desk(props: {
         {/* There is no `orders` branch: the page is gone and `#/orders` is
             aliased onto Status in shell.tsx — the refusals it was opened for
             are a section there, and unlike Broker it honours the switch. */}
-        {loc.route === 'broker' ? <BrokerViewPage /> : null}
+        {/* NSE: the XTS broker's book. DX: Delta's own book on the switch's
+            account — live, or the testnet for PAPER (`dx-broker-view.tsx`). */}
+        {loc.route === 'broker' ? (VENUE.id === 'dx' ? <DxBrokerPage mode={mode} /> : <BrokerViewPage />) : null}
         {/* Feed + Brokers + order failures + every process, on one page.
             `#/feed`, `#/brokers` and `#/orders` are aliased onto it in
             `shell.tsx`. */}

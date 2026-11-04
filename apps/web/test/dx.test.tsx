@@ -103,11 +103,12 @@ describe('0.001-step quantities', () => {
 })
 
 describe('the nav on DX', () => {
-  test('has the Option chain and no NSE Broker view', () => {
+  test('has the Option chain and the Delta Broker page (operator, 4 Nov: "broker page not showing in menu")', () => {
     const dx = navRoutesFor(DX).map((r) => r.id)
     expect(dx).toContain('chain')
-    expect(dx).not.toContain('broker')
+    expect(dx).toContain('broker')
     expect(navRoutesFor(NSE).map((r) => r.id)).toContain('broker')
+    expect(navRoutesFor(NSE).map((r) => r.id)).not.toContain('chain')
   })
 })
 

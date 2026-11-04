@@ -94,6 +94,7 @@ import {
   hostOf,
 } from './gateway-heartbeat.ts'
 import { BROKER_MARGIN_COLLECTION, createDeltaMarginSnapshot, DELTA_MARGIN_MS, marginFromBalances } from './dx-margin.ts'
+import { BROKER_ORDERS_COLLECTION, createDeltaOrdersSnapshot, DELTA_DEMO_ORDERS_ID, DELTA_ORDERS_MS } from './dx-broker-orders.ts'
 import { DEFAULT_MARGIN_MAX_AGE_MS, MarginGate, freshBalance } from './dx-margin-gate.ts'
 import { createAlertSink, DESK_ALERTS_COLLECTION } from './alert-sink.ts'
 import { backfillDeltaFees, DX_FEE_BACKFILL_MS, mongoFeeBackfillPorts } from './dx-fee-backfill.ts'
@@ -1819,6 +1820,23 @@ export async function main(): Promise<void> {
     void positionsSnapshot.take()
     const snapTimer = setInterval(() => void positionsSnapshot.take(), DELTA_SNAPSHOT_MS)
     snapTimer.unref()
+    /**
+     * Delta's own order book and fills, for the Broker page only
+     * (`dx-broker-orders.ts`): its own collection, so it can never delay or
+     * fail the positions snapshot above that the comparison reads.
+     */
+    const ordersSnapshot = createDeltaOrdersSnapshot({
+      openOrders: () => rest.openOrders(),
+      recentOrders: () => rest.recentOrders(),
+      fills: async () => (await rest.fills()).fills,
+      collection: mongo.db.collection(BROKER_ORDERS_COLLECTION) as never,
+      now: () => Date.now(),
+      host: dxHost,
+      step: venue.qtyStep,
+      log,
+    })
+    void ordersSnapshot.take()
+    setInterval(() => void ordersSnapshot.take(), DELTA_ORDERS_MS).unref()
     /** The live account's margin, through the live key and host only. */
     const liveMargin = createDeltaMarginSnapshot({
       id: 'delta',
@@ -2022,6 +2040,25 @@ export async function main(): Promise<void> {
           })
           void demoSnapshot.take()
           setInterval(() => void demoSnapshot.take(), DELTA_SNAPSHOT_MS).unref()
+          /** The testnet account's order book and fills, for the Broker page only. */
+          const demoOrders = createDeltaOrdersSnapshot({
+            openOrders: () => rest.openOrders(),
+            recentOrders: async () => {
+              const r = rest as Partial<Pick<DxRest, 'recentOrders'>>
+              if (r.recentOrders === undefined) throw new Error('this client reads no order history')
+              return await r.recentOrders()
+            },
+            fills: async () => (await rest.fills()).fills,
+            collection: mongo.db.collection(BROKER_ORDERS_COLLECTION) as never,
+            now: () => Date.now(),
+            host: hostOf(cfg.baseUrl),
+            step: venue.qtyStep,
+            log,
+            id: DELTA_DEMO_ORDERS_ID,
+            broker: 'delta-demo',
+          })
+          void demoOrders.take()
+          setInterval(() => void demoOrders.take(), DELTA_ORDERS_MS).unref()
           /** The testnet account's margin, through the testnet key and host only. */
           const demoMargin = createDeltaMarginSnapshot({
             id: 'delta-demo',

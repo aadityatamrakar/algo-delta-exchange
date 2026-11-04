@@ -242,3 +242,15 @@ test('orderHistory is bounded: past 20 pages it returns the newest 20 pages (his
   assert.equal(out.length, 20)
   assert.equal(calls.length, 20)
 })
+
+test('recentOrders is ONE page of history, newest first — a display read, never the sweep cursor walk', async () => {
+  const { fn, calls } = fakeFetch([{ body: { success: true, result: [ord(9), ord(8)], meta: { after: 'MORE' } } }])
+  const out = await rest(fn).recentOrders()
+  assert.deepEqual(out.map((o) => o.id), [9, 8])
+  assert.equal(calls.length, 1, 'a further page is never fetched')
+  const u = new URL(calls[0]?.url ?? '')
+  assert.equal(u.pathname, '/v2/orders/history')
+  assert.equal(u.searchParams.get('page_size'), '50')
+  assert.equal(u.searchParams.get('after'), null)
+  assert.equal(calls[0]?.headers['signature'], signRequest('test-secret', 'GET', '/v2/orders/history', u.search, '', Number(TS)))
+})

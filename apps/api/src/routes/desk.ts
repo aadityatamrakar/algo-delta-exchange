@@ -41,6 +41,7 @@ import {
   findNumber,
 } from '../book-margin.ts'
 import { handleAccountMargin, handleBookMarginEstimates } from '../dx-margin.ts'
+import { handleDxBroker } from '../dx-broker.ts'
 import { COLLECTIONS } from '../store.ts'
 import { liveArmRefusal } from '../bull-s-live.ts'
 
@@ -695,6 +696,8 @@ export function deskRoutes(deps: DeskDeps): Route {
     }
     if (path === '/v1/desk/margin/books' && method === 'GET') return handleBookMarginEstimates(deps, ctx)
 
+    // DELTA's own book on one account (`?rail=live|demo`) — the DX Broker page.
+    if (path === '/v1/desk/broker/delta' && method === 'GET') return handleDxBroker(deps, ctx)
     if (path === '/v1/desk/broker' && method === 'GET') return handleBrokerSnapshot(deps, ctx)
 
     /**

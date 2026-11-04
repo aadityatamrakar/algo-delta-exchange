@@ -911,6 +911,76 @@ export interface BookMargin {
  * account — and must render as the `error` / `reason`, never as 0. `stale`
  * still carries the last good numbers; `ageMs` says how old they are.
  */
+/**
+ * ONE DELTA ACCOUNT'S OWN BOOK, from `GET /v1/desk/broker/delta?rail=` — what
+ * Delta holds, as the gateway last read it (`apps/api/src/dx-broker.ts`).
+ *
+ * Each section carries its own state. `absent` (never written: `reason`) and
+ * `failed` (Delta refused: `error`) come with `rows: []` — the STATE says
+ * unknown, so an empty table is only ever "Delta reports none" when `ok`.
+ * Quantities are BTC (signed on positions), prices and fees USD, times epoch ms.
+ */
+export interface DxBrokerSection<T> {
+  readonly state: 'ok' | 'stale' | 'failed' | 'absent'
+  readonly asOf: number | null
+  readonly ageMs: number | null
+  readonly error: string
+  readonly reason: string
+  readonly rows: readonly T[]
+}
+
+export interface DxBrokerPosition {
+  readonly symbol: string
+  readonly netQty: number | null
+  readonly avgPrice: number | null
+}
+
+export interface DxBrokerOrder {
+  readonly id: string
+  readonly symbol: string
+  readonly side: string
+  /** `limit` | `market` | `stop` | `take-profit`, else Delta's own word. */
+  readonly kind: string
+  /** Delta's: `open` | `pending` (an untriggered stop) | `closed` | `cancelled`. */
+  readonly state: string
+  readonly qty: number | null
+  readonly filledQty: number | null
+  readonly limitPrice: number | null
+  readonly stopPrice: number | null
+  readonly avgFillPrice: number | null
+  readonly reduceOnly: boolean
+  readonly clientOrderId: string | null
+  readonly cancellationReason: string | null
+  readonly createdAt: number | null
+  readonly updatedAt: number | null
+}
+
+export interface DxBrokerFill {
+  readonly id: string
+  readonly orderId: string | null
+  readonly symbol: string
+  readonly side: string
+  readonly qty: number | null
+  readonly price: number | null
+  readonly commission: number | null
+  readonly role: string | null
+  readonly fillType: string | null
+  readonly at: number | null
+}
+
+export interface DxBrokerView {
+  readonly rail: 'live' | 'demo'
+  readonly label: 'Live' | 'Demo'
+  readonly host: string | null
+  readonly staleAfterMs: number
+  readonly inrPerUsd: number
+  readonly positions: DxBrokerSection<DxBrokerPosition>
+  readonly openOrders: DxBrokerSection<DxBrokerOrder>
+  readonly recentOrders: DxBrokerSection<DxBrokerOrder>
+  readonly fills: DxBrokerSection<DxBrokerFill>
+  readonly margin: AccountMargin
+}
+
 export interface AccountMargin {
   readonly id: 'delta-demo' | 'delta'
   readonly rail: 'demo' | 'live'
@@ -2911,6 +2981,8 @@ export const api = {
   bookMargin: (tag: string) => get<BookMargin>(`/v1/desk/margin?tag=${encodeURIComponent(tag)}`),
   /** The two Delta accounts' margin (demo, live) — no tag. See `AccountMargin`. */
   accountMargin: () => get<AccountMarginResponse>('/v1/desk/margin'),
+  /** ONE Delta account's own book — positions, orders, fills, margin. See `DxBrokerView`. */
+  dxBroker: (rail: 'live' | 'demo') => get<DxBrokerView>(`/v1/desk/broker/delta?rail=${rail}`),
   /** Estimated margin of every BULL-S book: now, and the worst case at its cap. */
   bookMarginEstimates: () => get<BookMarginEstimatesResponse>('/v1/desk/margin/books'),
   /**
