@@ -20,7 +20,8 @@
 
 import { connectWithRetry, installCrashGuards } from '@algomaker/core'
 import { WsTransportServer } from '@algomaker/bus'
-import { DxPublicSocket, DxRest, toInstrumentRows } from '@algomaker/dx'
+import { DX_DEMO_REST_URL, DxPublicSocket, DxRest, toInstrumentRows, type DxTicker } from '@algomaker/dx'
+import { DxGapFill } from './dx-gap-fill.ts'
 import { DX } from '@algomaker/venue'
 import { connectMongo } from '../../api/src/mongo.ts'
 import { DeskStore } from '../../api/src/store.ts'
@@ -38,6 +39,14 @@ export const DX_PUBLIC_WS_URL = 'wss://public-socket.india.delta.exchange'
 export const DX_DEMO_WS_URL = 'wss://socket-ind-pub.testnet.deltaex.org'
 /** How often the demo set (demo-rail books' chains and legs) is re-read. */
 export const DX_DEMO_REFRESH_MS = 30_000
+/** How often the gap fill re-reads which contracts the books hold. */
+export const GAP_FILL_HELD_REFRESH_MS = 10_000
+
+/** The REST tickers the gap fill reads. `DxRest` satisfies this. */
+export interface DxTickerPort {
+  ticker(symbol: string): Promise<DxTicker>
+  tickers(q: { contractTypes?: string[]; underlying?: string[] }): Promise<readonly DxTicker[]>
+}
 export const DEFAULT_DX_STALE_MS = 180_000
 
 function log(msg: string, ctx?: Record<string, unknown>): void {
@@ -150,15 +159,37 @@ export interface DxClients {
   readonly rest: DxRestPort
   readonly socket: DxPublicSocketFactory
   readonly normalise: DxNormaliser
+  /**
+   * REST tickers for the gap fill (`dx-gap-fill.ts`): production's for the
+   * production feed, the testnet's for the demo feed. Absent → no gap fill on
+   * that feed (the boot test's fakes).
+   */
+  readonly tickers?: DxTickerPort
+  readonly demoTickers?: DxTickerPort
 }
 
 export function realDxClients(env: NodeJS.ProcessEnv = process.env): DxClients {
   const userAgent = env['DESK_DX_USER_AGENT'] ?? 'algomaker-dx-desk/1.0'
+  const rest = new DxRest({ baseUrl: env['DESK_DX_REST_URL'] ?? DX_REST_URL, userAgent })
   return {
-    rest: new DxRest({ baseUrl: env['DESK_DX_REST_URL'] ?? DX_REST_URL, userAgent }),
+    rest,
     socket: (url, opts) => new DxPublicSocket(url, opts),
     normalise: toInstrumentRows,
+    tickers: rest,
+    demoTickers: new DxRest({ baseUrl: env['DESK_DX_DEMO_REST_URL'] ?? DX_DEMO_REST_URL, userAgent }),
   }
+}
+
+/**
+ * Every contract a book holds (non-zero qty), paper and live — what the gap
+ * fill keeps fresh. Each feed fills only the ones it carries.
+ */
+export function heldSymbols(
+  books: readonly { readonly legs: readonly { readonly qty: number; readonly instrument: { readonly tradingsymbol: string } }[] }[],
+): string[] {
+  const out = new Set<string>()
+  for (const b of books) for (const l of b.legs) if (l.qty !== 0 && l.instrument.tradingsymbol !== '') out.add(l.instrument.tradingsymbol)
+  return [...out].sort()
 }
 
 export async function mainDx(clients: DxClients = realDxClients()): Promise<void> {
@@ -304,6 +335,36 @@ export async function mainDx(clients: DxClients = realDxClients()): Promise<void
   const demoTimer = setInterval(() => void refreshDemo(), DX_DEMO_REFRESH_MS)
   demoTimer.unref()
 
+  // GAP FILL: a held leg the socket has gone quiet on is read from REST, so a
+  // pause in Delta's push stream does not leave a straddle on a stale quote
+  // (the stale-exit clock). Both feeds; `DESK_DX_GAP_FILL=off` disables it.
+  const gapFills: DxGapFill[] = []
+  if (process.env['DESK_DX_GAP_FILL'] !== 'off') {
+    let held: readonly string[] = []
+    const refreshHeld = async (): Promise<void> => {
+      try {
+        held = heldSymbols([...(await store.allBooks('paper')), ...(await store.allBooks('live'))])
+      } catch (err) {
+        log('gap fill: held legs read failed, keeping the last set', { error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+    await refreshHeld()
+    const heldTimer = setInterval(() => void refreshHeld(), GAP_FILL_HELD_REFRESH_MS)
+    heldTimer.unref()
+    const bulk = (rest: DxTickerPort) => () => rest.tickers({ contractTypes: ['call_options', 'put_options'], underlying: [DX_UNDERLYING] })
+    const pairs: [string, DxFeed | null, DxTickerPort | undefined][] = [
+      ['prod', feed, clients.tickers],
+      ['demo', demoFeed, clients.demoTickers],
+    ]
+    for (const [label, f, rest] of pairs) {
+      if (f === null || rest === undefined) continue
+      const gf = new DxGapFill({ feed: f, held: () => held, ticker: (s) => rest.ticker(s), tickers: bulk(rest), label, log })
+      gf.start()
+      gapFills.push(gf)
+    }
+    log('gap fill on', { feeds: gapFills.length, held: held.length })
+  }
+
   const syncTimer = setInterval(() => {
     if (dxSyncDue(Date.now(), lastSyncMs)) void sync()
   }, 30_000)
@@ -357,6 +418,7 @@ export async function mainDx(clients: DxClients = realDxClients()): Promise<void
 
   const shutdown = (signal: string): void => {
     log(`${signal} received, shutting down`)
+    for (const g of gapFills) g.stop()
     feed.close()
     demoFeed?.close()
     void bus.close().then(() => mongo.close()).then(() => process.exit(0))

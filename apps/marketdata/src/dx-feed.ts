@@ -41,6 +41,8 @@ export { DX_SPOT_SYMBOL }
 export const DX_UNDERLYING = 'BTC'
 /** Symbols per subscribe message. Delta documents no cap; a chain is ~550 symbols, sent in a few frames. */
 export const SUBSCRIBE_CHUNK = 200
+/** A filled quote stamped further ahead of this host's clock than this is not trusted. */
+export const FILL_FUTURE_SKEW_MS = 5_000
 
 const pos = (n: number | null): number | null => (n !== null && n > 0 ? n : null)
 
@@ -238,6 +240,55 @@ export class DxFeed {
       }
     } catch (err) {
       this.#d.log?.('dx frame dropped', { error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /**
+   * Which of `symbols` this feed carries and has not heard from in `gapMs`
+   * (or never has). Symbols it does not carry are not its business and are
+   * left out.
+   */
+  silent(symbols: Iterable<string>, gapMs: number): string[] {
+    const now = this.#now()
+    const out: string[] = []
+    for (const s of new Set(symbols)) {
+      const token = this.#tokenOf.get(s)
+      if (token === undefined) continue
+      const seen = this.#lastSeen.get(token)
+      if (seen === undefined || now - seen > gapMs) out.push(s)
+    }
+    return out
+  }
+
+  /**
+   * A REST quote laid into the feed while the socket is quiet on it
+   * (`dx-gap-fill.ts`). Published on this feed's topic in the socket's shape,
+   * and only when it is NEWER than the last tick held.
+   *
+   * STAMPED WITH THE EXCHANGE'S TIME, never receipt time. Delta's REST answers
+   * come through a cache (1–6 s old, probe 4 Nov) and a frozen market keeps
+   * answering with its frozen quote: a receipt stamp would dress either up as
+   * fresh. The exchange stamp lets every consumer's own stale test judge it.
+   * A quote without one, or stamped in the future past a small clock skew, is
+   * not used. Returns true when published.
+   */
+  fill(q: DxQuote): boolean {
+    try {
+      const token = this.#tokenOf.get(q.symbol)
+      if (token === undefined || q.tsMs === null || !Number.isFinite(q.tsMs)) return false
+      const now = this.#now()
+      if (q.tsMs > now + FILL_FUTURE_SKEW_MS) return false
+      const ts = Math.min(q.tsMs, now)
+      const seen = this.#lastSeen.get(token)
+      if (seen !== undefined && ts <= seen) return false
+      const p = dxTickPayload(q, token, ts)
+      if (p === null) return false
+      this.#seen(token, p, ts)
+      this.#d.publish(this.#d.tickTopic ?? 'md.tick', p, ts)
+      return true
+    } catch (err) {
+      this.#d.log?.('dx fill dropped', { error: err instanceof Error ? err.message : String(err) })
+      return false
     }
   }
 
