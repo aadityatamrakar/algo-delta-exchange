@@ -160,7 +160,8 @@ itMongo('the reconcile halt engages a LIVE-scoped kill switch and writes desk-al
     divergent: ['C-BTC-80000-041126'], unattributable: [], unmeasurable: [], intervalMs: 300_000,
   }
   await guard.observe(off)
-  await guard.observe(off)
+  // The next pass reads the NEXT snapshot: one snapshot read twice is one pass.
+  await guard.observe({ ...off, asOf: NOW + 60_000, brokerAsOf: NOW + 30_000 })
   const halt = await store.loadKillSwitch()
   assert.equal(halt.enabled, true)
   assert.equal(halt.scope, 'live')

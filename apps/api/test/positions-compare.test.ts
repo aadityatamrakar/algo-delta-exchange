@@ -1304,3 +1304,44 @@ test('the demo wiring reads PAPER fills — the testnet rail’s', async () => {
   assert.equal(filters[0]?.['mode'], 'paper')
   assert.deepEqual([...(got ?? new Map())], [['C-BTC-77000-131126', SNAP_AT + 1_000]])
 })
+
+/**
+ * THE 4 NOV 15:01:19 SHAPE. The 13-11 book decided a 79500 straddle at
+ * 15:01:16 and recorded both legs; the put's order reached the gateway at
+ * 15:01:19.48, the call's never did. The pass at 15:01:19.19 compared those
+ * legs with the 15:00:56 snapshot — with no fill row yet to say they were
+ * moving. A leg the BOOK opened after the snapshot is in flight too.
+ */
+const OPENED = 'C-BTC-79500-131126'
+const openedBooks = (openedTs: number): BookPositions[] => [
+  {
+    tag: 'BTC-LIVE',
+    legs: [
+      { instrument: { tradingsymbol: HELD }, qty: -0.01, openedTs: SNAP_AT - 3_600_000 },
+      { instrument: { tradingsymbol: OPENED }, qty: -0.04, openedTs },
+    ],
+  },
+]
+
+test('a leg the book OPENED after the snapshot, before any order reached the gateway, is in flight', () => {
+  const r = compare({ snapshot: dxSnap([heldRow]), books: openedBooks(SNAP_AT + 20_000) })
+  assert.equal(r.comparable, true, r.reason)
+  assert.deepEqual(r.divergent, [])
+  const row = r.symbols.find((s) => s.symbol === OPENED)
+  assert.equal(row?.inFlight, true)
+  assert.match(row?.note ?? '', /after the broker snapshot/)
+  assert.equal(r.symbols.find((s) => s.symbol === HELD)?.broker, -0.01, 'the old leg is still compared')
+})
+
+test('a leg the book opened BEFORE the snapshot (less the grace) that Delta still lacks is divergent', () => {
+  const r = compare({ snapshot: dxSnap([heldRow]), books: openedBooks(SNAP_AT - GRACE - 1) })
+  assert.deepEqual(r.divergent, [OPENED])
+})
+
+test('the live wiring hands the books’ legs over with their opening time', async () => {
+  const { deps } = fillsDeps([])
+  const stored = { tag: 'BTC-LIVE', legs: openedBooks(SNAP_AT + 20_000)[0]?.legs ?? [] }
+  ;(deps.store as unknown as { allBooks: () => Promise<unknown[]> }).allBooks = async () => [stored]
+  const got = await positionsComparePorts(deps).books()
+  assert.equal(got[0]?.legs.find((l) => l.instrument.tradingsymbol === OPENED)?.openedTs, SNAP_AT + 20_000)
+})

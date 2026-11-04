@@ -233,7 +233,12 @@ export interface PositionsCompareReport {
 /** A `desk-books` document, narrowed to what this compares. `StoredBook` fits. */
 export interface BookPositions {
   readonly tag: string
-  readonly legs: readonly { readonly instrument: { readonly tradingsymbol: string }; readonly qty: number }[]
+  readonly legs: readonly {
+    readonly instrument: { readonly tradingsymbol: string }
+    readonly qty: number
+    /** When the book opened the leg (`StoredBook` carries it) — see `IN_FLIGHT_GRACE_MS`. */
+    readonly openedTs?: number
+  }[]
 }
 
 /** One runner ledger, already converted from lots to contract quantity. */
@@ -524,11 +529,19 @@ export interface CompareInput {
  * the desk traded at or after `brokerAsOf - IN_FLIGHT_GRACE_MS` therefore gets
  * no verdict this pass; the next snapshot postdates the fill and settles it.
  *
+ * THE BOOK MOVES FIRST. A book records a new leg when it decides, before its
+ * order reaches the gateway, so there is a window with no fill row at all: on
+ * 4 Nov the 13-11 book decided a 79500 straddle at 15:01:16, the put's order
+ * was placed at 15:01:19.48, and the 15:01:19.19 pass named both legs against
+ * the 15:00:56 snapshot. A leg the book OPENED (`openedTs`) after the snapshot
+ * is in flight on the same terms as one that filled after it.
+ *
  * The grace exists because the snapshot is stamped AFTER Delta answers
- * (`gateway-heartbeat.ts`), so Delta's view can trail its own `asOf`. Each
- * fill defers its leg by at most one pass, and that pass neither advances nor
- * resets the halt count (`reconcile-halt.ts`): a leg that keeps disagreeing
- * once the snapshot has caught up is reported, and halts, exactly as before.
+ * (`gateway-heartbeat.ts`), so Delta's view can trail its own `asOf`. A leg is
+ * excused only against snapshots taken before (or within the grace after) its
+ * last fill or opening — every later snapshot judges it — and a pass that
+ * excuses it neither advances nor resets that leg's halt count
+ * (`reconcile-halt.ts`).
  */
 export const IN_FLIGHT_GRACE_MS = 5_000
 
@@ -556,12 +569,18 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
     set.add(tag)
     claimedBy.set(symbol, set)
   }
+  /** The latest `openedTs` among the books' legs on each contract. */
+  const openedAt = new Map<string, number>()
   for (const b of books) {
     for (const leg of b.legs) {
       const symbol = leg.instrument.tradingsymbol
       if (symbol === '' || !Number.isFinite(leg.qty) || leg.qty === 0) continue
       deskBooks.set(symbol, (deskBooks.get(symbol) ?? 0) + leg.qty)
       claim(symbol, b.tag)
+      const opened = leg.openedTs
+      if (typeof opened === 'number' && Number.isFinite(opened) && opened > (openedAt.get(symbol) ?? -Infinity)) {
+        openedAt.set(symbol, opened)
+      }
     }
   }
   const unmeasurable: string[] = []
@@ -672,14 +691,20 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
     const ledgerQty = deskLedger.get(symbol) ?? 0
     const desk = bookQty + ledgerQty
     const read = comparable ? broker.get(symbol) ?? 0 : null
+    // The desk's latest move on this contract: a fill row, or a book opening
+    // the leg before its order has reached the gateway.
     const filledAt = input.lastFillAt?.get(symbol)
+    const opened = openedAt.get(symbol)
+    const byFill = filledAt !== undefined && (opened === undefined || filledAt >= opened)
+    const movedAt = byFill ? filledAt : opened
     const inFlight =
       read !== null &&
       read !== desk &&
       brokerAsOf !== null &&
-      filledAt !== undefined &&
-      filledAt >= brokerAsOf - IN_FLIGHT_GRACE_MS
+      movedAt !== undefined &&
+      movedAt >= brokerAsOf - IN_FLIGHT_GRACE_MS
     if (inFlight) {
+      const secs = Math.round((movedAt - brokerAsOf) / 1000)
       symbols.push({
         symbol,
         broker: null,
@@ -689,8 +714,10 @@ export function comparePositions(input: CompareInput): PositionsCompareReport {
         claimedBy: [...(claimedBy.get(symbol) ?? [])].sort(),
         inFlight: true,
         note:
-          `filled after the broker snapshot was read (fill ${Math.round((filledAt - brokerAsOf) / 1000)}s ` +
-          `from it; the snapshot shows ${read}, the desk ${desk}) — compared on the next pass`,
+          (byFill
+            ? `filled after the broker snapshot was read (fill ${secs}s from it; `
+            : `opened in the book after the broker snapshot was read (${secs}s from it, no fill yet; `) +
+          `the snapshot shows ${read}, the desk ${desk}) — compared on the next pass`,
       })
       continue
     }

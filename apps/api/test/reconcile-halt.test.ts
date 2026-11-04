@@ -44,6 +44,17 @@ function report(symbols: SymbolCompare[], over: Partial<PositionsCompareReport> 
   }
 }
 
+/**
+ * Pass `n`, reading ITS OWN broker snapshot (the gateway rewrites it every
+ * 30 s). Consecutive passes are consecutive snapshots: the same report handed
+ * over twice is one read of one snapshot, not two passes.
+ */
+const at = (r: PositionsCompareReport, n: number): PositionsCompareReport => ({
+  ...r,
+  asOf: T0 + n * 60_000,
+  brokerAsOf: T0 - 5_000 + n * 30_000,
+})
+
 const AGREE = report([sym('C-BTC-80000-041126', -50, -50)])
 const OFF = report([sym('C-BTC-80000-041126', -50, -30), sym('P-BTC-80000-041126', -50, -50)])
 const NO_SNAPSHOT = report([sym('C-BTC-80000-041126', -50, null)], {
@@ -70,10 +81,10 @@ function harness(rail: 'live' | 'demo' = 'live', halted = false) {
 
 test('LIVE: one mismatched pass warns; the second consecutive one halts opens and raises a critical alert naming the contracts', async () => {
   const h = harness()
-  await h.guard.observe(OFF)
+  await h.guard.observe(at(OFF, 1))
   assert.deepEqual(h.halts, [], 'one pass is not two')
   assert.equal(h.alerts.at(-1)?.severity, 'warn')
-  await h.guard.observe(OFF)
+  await h.guard.observe(at(OFF, 2))
   assert.equal(h.halts.length, 1)
   assert.match(h.halts[0] ?? '', /C-BTC-80000-041126/)
   const crit = h.alerts.filter((a) => a.severity === 'critical')
@@ -84,17 +95,17 @@ test('LIVE: one mismatched pass warns; the second consecutive one halts opens an
   assert.doesNotMatch(crit[0]?.message ?? '', /P-BTC-80000-041126/, 'only the contracts that differ')
   // A third pass of the SAME mismatch does not engage the halt again (the
   // operator may have released it on purpose); the alert repeats (the sink dedupes).
-  await h.guard.observe(OFF)
+  await h.guard.observe(at(OFF, 3))
   assert.equal(h.halts.length, 1)
 })
 
 test('an agreeing pass between two mismatches resets the count', async () => {
   const h = harness()
-  await h.guard.observe(OFF)
-  await h.guard.observe(AGREE)
-  await h.guard.observe(OFF)
+  await h.guard.observe(at(OFF, 1))
+  await h.guard.observe(at(AGREE, 2))
+  await h.guard.observe(at(OFF, 3))
   assert.deepEqual(h.halts, [])
-  await h.guard.observe(OFF)
+  await h.guard.observe(at(OFF, 4))
   assert.equal(h.halts.length, 1)
 })
 
@@ -109,9 +120,9 @@ test('a missing or stale snapshot is NOT a mismatch: a warn, and the count neith
   assert.equal(h.alerts.some((a) => a.severity === 'critical'), false)
   // No verdict says nothing either way: a mismatch, a blind pass, a mismatch is still two.
   const g = harness()
-  await g.guard.observe(OFF)
+  await g.guard.observe(at(OFF, 1))
   await g.guard.observe(NO_SNAPSHOT)
-  await g.guard.observe(OFF)
+  await g.guard.observe(at(OFF, 2))
   assert.equal(g.halts.length, 1)
 })
 
@@ -123,16 +134,63 @@ test('a pass whose only disagreement is a fill in flight neither moves nor reset
   ])
   assert.deepEqual(IN_FLIGHT.divergent, [])
   const quiet = harness()
-  await quiet.guard.observe(IN_FLIGHT)
-  await quiet.guard.observe(IN_FLIGHT)
+  await quiet.guard.observe(at(IN_FLIGHT, 1))
+  await quiet.guard.observe(at(IN_FLIGHT, 2))
   assert.deepEqual(quiet.halts, [])
   assert.deepEqual(quiet.alerts, [])
   // A real mismatch, the same leg in flight, the mismatch again: still two passes.
   const h = harness()
-  await h.guard.observe(OFF)
-  await h.guard.observe(IN_FLIGHT)
-  await h.guard.observe(OFF)
+  await h.guard.observe(at(OFF, 1))
+  await h.guard.observe(at(IN_FLIGHT, 2))
+  await h.guard.observe(at(OFF, 3))
   assert.equal(h.halts.length, 1)
+})
+
+test('two reads of ONE broker snapshot are one pass, not two (4 Nov 15:01:19)', async () => {
+  // The mirror sync's pass and the minute's pass ran 55 ms apart on the same
+  // 15:00:56 snapshot: a WARN, then "2 consecutive passes" and a halt that
+  // stopped the call leg of a straddle whose put had already gone.
+  const h = harness()
+  await h.guard.observe(at(OFF, 1))
+  await h.guard.observe({ ...at(OFF, 1), asOf: T0 + 60_055 })
+  assert.deepEqual(h.halts, [], 'the same snapshot read twice is one sighting')
+  assert.equal(h.alerts.some((a) => a.severity === 'critical'), false)
+  // The NEXT snapshot still showing it is the second pass.
+  await h.guard.observe(at(OFF, 2))
+  assert.equal(h.halts.length, 1)
+})
+
+test('a different leg on each pass is not a persisting mismatch (4 Nov 14:40 → 14:41)', async () => {
+  const X = 'C-BTC-78800-051126'
+  const Y = 'C-BTC-79000-051126'
+  const h = harness()
+  // 14:40:19 — the 78800 legs, opened after the snapshot.
+  await h.guard.observe(at(report([sym(X, -0.04, 0)]), 1))
+  // 14:41:19 — 78800 now agrees; the 79000 legs, opened after THIS snapshot.
+  await h.guard.observe(at(report([sym(X, -0.04, -0.04), sym(Y, -0.05, 0)]), 2))
+  assert.deepEqual(h.halts, [], 'no contract was wrong on two passes')
+  assert.equal(h.alerts.some((a) => a.severity === 'critical'), false)
+  // Y wrong on the next snapshot as well: that one persists.
+  await h.guard.observe(at(report([sym(X, -0.04, -0.04), sym(Y, -0.05, 0)]), 3))
+  assert.equal(h.halts.length, 1)
+  assert.match(h.halts[0] ?? '', /C-BTC-79000-051126/)
+  assert.doesNotMatch(h.halts[0] ?? '', /C-BTC-78800-051126/)
+})
+
+test('a leg wrong on both passes halts, and the halt names only the legs that persisted', async () => {
+  const X = 'C-BTC-80000-041126'
+  const Y = 'P-BTC-80000-041126'
+  const Z = 'C-BTC-81000-041126'
+  const h = harness()
+  await h.guard.observe(at(report([sym(X, -50, -30), sym(Y, -50, -20)]), 1))
+  await h.guard.observe(at(report([sym(X, -50, -30), sym(Y, -50, -50), sym(Z, -10, 0)]), 2))
+  assert.equal(h.halts.length, 1)
+  assert.match(h.halts[0] ?? '', /C-BTC-80000-041126: desk -50 vs exchange -30/)
+  assert.doesNotMatch(h.halts[0] ?? '', /P-BTC-80000-041126/, 'Y agreed on the second pass')
+  assert.doesNotMatch(h.halts[0] ?? '', /C-BTC-81000-041126/, 'Z has been wrong on one pass only')
+  const crit = h.alerts.filter((a) => a.severity === 'critical')
+  assert.equal(crit.length, 1)
+  assert.match(crit[0]?.message ?? '', /C-BTC-80000-041126/)
 })
 
 test('no verdict on a rail where the desk holds nothing, or on the simulator, raises nothing', async () => {
@@ -144,7 +202,7 @@ test('no verdict on a rail where the desk holds nothing, or on the simulator, ra
 
 test('DEMO: a mismatch alerts but never halts — the demo keeps testing', async () => {
   const h = harness('demo')
-  for (let i = 0; i < 4; i++) await h.guard.observe({ ...OFF, mode: 'paper', rail: 'demo' })
+  for (let i = 0; i < 4; i++) await h.guard.observe({ ...at(OFF, i + 1), mode: 'paper', rail: 'demo' })
   assert.deepEqual(h.halts, [])
   assert.ok(h.alerts.length > 0)
   assert.ok(h.alerts.every((a) => a.mode === 'paper' && a.severity !== 'critical'))
@@ -157,8 +215,8 @@ test('a halt that throws still raises the critical alert, and says the halt fail
     { alert: (a) => alerts.push(a), halt: async () => Promise.reject(new Error('mongo down')), log: () => {} },
     'live',
   )
-  await guard.observe(OFF)
-  await guard.observe(OFF)
+  await guard.observe(at(OFF, 1))
+  await guard.observe(at(OFF, 2))
   const crit = alerts.filter((a) => a.severity === 'critical')
   assert.equal(crit.length, 1)
   assert.match(crit[0]?.message ?? '', /could NOT be engaged/)
