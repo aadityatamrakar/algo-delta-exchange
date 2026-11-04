@@ -472,6 +472,11 @@ export interface Dials {
   /** Strikes per grid step, 1 or 2: the grid is `jump × step`. Applies to new
    * entries; open straddles keep their strikes. */
   readonly bs_strike_jump: number;
+  /** The grid is the strikes the exchange LISTS for this expiry (Delta: 500
+   * near the money, wider out), not multiples of jump × step: a straddle is
+   * sold at each listed strike the price crosses. `bs_strike_step` and
+   * `bs_strike_jump` are then not read. Off = the fixed grid. */
+  readonly bs_grid_listed: boolean;
   /** The combined stop: buy both legs back when the summed exit price is at
    * or past this multiple of the summed entry premium. Read live, so a change
    * reaches open straddles at the next decision. */
@@ -766,6 +771,7 @@ export const DEFAULT_DIALS: Dials = {
   bs_enabled: false,
   bs_strike_step: 0, // > 0 required once enabled
   bs_strike_jump: 1,
+  bs_grid_listed: false,
   bs_stop_mult: 1.25,
   bs_stop_basis: 1, // the ask
   bs_stop_confirm_s: 3,
@@ -1101,6 +1107,7 @@ export const DIAL_SECTIONS: ReadonlyArray<DialSection> = [
       // The grid
       'bs_strike_step',
       'bs_strike_jump',
+      'bs_grid_listed',
       // The stop
       'bs_stop_mult',
       'bs_stop_basis',

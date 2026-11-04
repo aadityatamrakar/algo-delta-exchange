@@ -63,7 +63,7 @@ import type {
   RuleState,
   Trigger,
 } from '../types.ts';
-import { bsCrossedLevel, bsNearestLevel } from './grid.ts';
+import { bsCrossedLevel, bsCrossedListed, bsNearestLevel, bsNearestListed } from './grid.ts';
 import type { BullSGroup, BullSHaltReason, BullSState } from './state.ts';
 import { bsFirstSize, bsNextSize, bsSizeAfter, bsSizeKey, leverageAt, quoteMark, shortOptionMargin, type MarginMode, type StrikeLeverage } from './margin.ts';
 
@@ -318,10 +318,20 @@ export function decideBullS(
   const { nowMs, legs, chain } = inputs;
 
   if (!dials.bs_enabled) return hold('BULL-S is off (bs_enabled is false)', state);
-  if (!(dials.bs_strike_step > 0)) {
+  // THE GRID: multiples of jump × step, or (`bs_grid_listed`) the strikes the
+  // exchange lists for this expiry — the chain's own rows, quoted or not.
+  const ladder = dials.bs_grid_listed ? [...new Set(chain.strikes.map((s) => s.strike))].filter((k) => k > 0) : null;
+  if (ladder !== null && ladder.length === 0) {
+    return hold('no grid: bs_grid_listed is on but the chain lists no strikes for this expiry', state);
+  }
+  if (ladder === null && !(dials.bs_strike_step > 0)) {
     return hold('no grid: bs_strike_step is 0 — set one strike, in price units, for this expiry', state);
   }
   const grid = dials.bs_strike_jump * dials.bs_strike_step;
+  const gridWord = ladder !== null ? 'listed strikes' : fmt(grid);
+  const nearestLevel = (r: number): number | null => (ladder !== null ? bsNearestListed(r, ladder) : bsNearestLevel(r, grid));
+  const crossedLevel = (p: number, r: number): number | null =>
+    ladder !== null ? bsCrossedListed(p, r, ladder) : bsCrossedLevel(p, r, grid);
   const maxAgeMs = dials.bs_ref_max_age_s * 1_000;
   const basis = dials.bs_stop_basis;
   const notes: string[] = [];
@@ -435,8 +445,8 @@ export function decideBullS(
   if (fresh) {
     if (bs.lastRef === 0) {
       if (dials.bs_enter_on_start) {
-        crossed = bsNearestLevel(ref, grid);
-        crossing = `first price ${fmt(ref)} after the arm: the nearest level, ${fmt(crossed)}`;
+        crossed = nearestLevel(ref);
+        if (crossed !== null) crossing = `first price ${fmt(ref)} after the arm: the nearest level, ${fmt(crossed)}`;
       } else {
         notes.push(`first price ${fmt(ref)} after the arm: a baseline (bs_enter_on_start is off)`);
       }
@@ -446,7 +456,7 @@ export function decideBullS(
       const gapS = Math.round((inputs.refAsOf - bs.lastRefMs) / 1_000);
       notes.push(`fresh price ${fmt(ref)} after a ${gapS}s gap: re-baselined, no crossing counted`);
     } else {
-      crossed = bsCrossedLevel(bs.lastRef, ref, grid);
+      crossed = crossedLevel(bs.lastRef, ref);
       if (crossed !== null) crossing = `${fmt(crossed)} crossed (${fmt(bs.lastRef)} → ${fmt(ref)})`;
     }
     bs = { ...bs, lastRef: ref, lastRefMs: inputs.refAsOf };
@@ -664,7 +674,7 @@ export function decideBullS(
     return hold(withNotes(`${what} — no entry and no crossing counted; stops still run`, notes), mark);
   }
   if (crossed === null) {
-    return hold(withNotes(`no grid level crossed (price ${fmt(ref)}, grid ${fmt(grid)})`, notes), mark);
+    return hold(withNotes(`no grid level crossed (price ${fmt(ref)}, grid ${gridWord})`, notes), mark);
   }
   const level = crossed;
   const refuse = (but: string): EngineDecision => hold(withNotes(`${crossing}, but ${but}`, notes), mark);

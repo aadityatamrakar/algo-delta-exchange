@@ -11,6 +11,7 @@ const BS_DEFAULTS = {
   bs_enabled: false,
   bs_strike_step: 0,
   bs_strike_jump: 1,
+  bs_grid_listed: false,
   bs_stop_mult: 1.25,
   bs_stop_basis: 1,
   bs_stop_confirm_s: 3,
@@ -155,4 +156,11 @@ test('the six BULL-S presets are the spec §6.2 table; the -2 twins differ only 
     const two = PRESETS.find((x) => x.key === `${k}-2`)!.dials
     assert.deepEqual({ ...two, bs_strike_jump: 1 }, one, `${k}-2 is ${k} with jump 2 and nothing else`)
   }
+})
+
+test('bs_grid_listed defaults off and is a BULL-S panel field', async () => {
+  const { DEFAULT_DIALS, DIAL_SECTIONS } = await import('../../src/dials.ts')
+  assert.equal(DEFAULT_DIALS.bs_grid_listed, false)
+  const bs = DIAL_SECTIONS.find((s) => s.key === 'bull-s')
+  assert.ok(bs?.fields.includes('bs_grid_listed'))
 })

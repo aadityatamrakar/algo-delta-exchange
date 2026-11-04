@@ -514,3 +514,26 @@ test('while a level cools, EVERY decision names it — the book\'s last-decision
   assert.match(quiet.reason, /^no grid level crossed .*; level 80000 cooling down after a refused entry \(oi-cap: open interest at the cap\) — 241s left/)
   assert.doesNotMatch(run.tick(80_096, T0 + 302 * S).reason, /cooling/, 'gone once it clears')
 })
+
+test('bs_grid_listed: the grid is the listed strikes — 500 near the money, 1000 further out, step and jump not read', () => {
+  // Delta's weekly ladder: 1000 apart below 79,000 and above 82,000, 500 between.
+  const ladder = [76_000, 77_000, 78_000, 79_000, 79_500, 80_000, 80_500, 81_000, 81_500, 82_000, 83_000, 84_000]
+  const chain = { strikes: ladder }
+  const run = new Run(dialsOf({ bs_grid_listed: true, bs_strike_jump: 2, bs_loss_cap: 0, bs_stop_mult: 50, bs_max_open: 0 }))
+  assert.deepEqual(opensOf(run.tick(80_090, T0, { chain })), ['Sell 80000PE x50', 'Sell 80000CE x50'], 'nearest listed strike')
+  assert.deepEqual(opensOf(run.tick(80_250, T0 + S, { chain })), [], 'no listed strike between 80,090 and 80,250')
+  assert.deepEqual(opensOf(run.tick(80_510, T0 + 2 * S, { chain })), ['Sell 80500PE x100', 'Sell 80500CE x100'], 'the next listed strike, though jump is 2')
+  // Out where the ladder widens: 82,000 → 83,000 with nothing listed between.
+  run.tick(82_010, T0 + 3 * S, { chain })
+  const wide = run.tick(82_600, T0 + 4 * S, { chain })
+  assert.deepEqual(opensOf(wide), [], '82,500 is not listed, so it is not a level')
+  assert.match(wide.reason, /grid listed strikes/)
+  assert.deepEqual(opensOf(run.tick(83_000, T0 + 5 * S, { chain })).length, 2, '83,000 is the next level')
+})
+
+test('bs_grid_listed with no strikes in the chain holds and says why; off with step 0 still holds', () => {
+  const run = new Run(dialsOf({ bs_grid_listed: true }))
+  const d = run.tick(80_090, T0, { chain: { strikes: [] } })
+  assert.deepEqual(d.actions, [])
+  assert.match(d.reason, /lists no strikes/)
+})

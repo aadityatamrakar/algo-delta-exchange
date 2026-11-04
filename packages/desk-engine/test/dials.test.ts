@@ -222,6 +222,7 @@ const SPEC_TABLE: Dials = {
   bs_enabled: false,
   bs_strike_step: 0,
   bs_strike_jump: 1,
+  bs_grid_listed: false,
   bs_stop_mult: 1.25,
   bs_stop_basis: 1,
   bs_stop_confirm_s: 3,
