@@ -24,6 +24,8 @@ import { VStack, HStack } from '@astryxdesign/core/Layout'
 import { Text, Heading } from '@astryxdesign/core/Text'
 import { Card } from '@astryxdesign/core/Card'
 import { Badge } from '@astryxdesign/core/Badge'
+import { Collapsible } from '@astryxdesign/core/Collapsible'
+import { useState } from 'react'
 import {
   ago,
   api,
@@ -167,24 +169,68 @@ export function AccountMarginPanel(): React.ReactElement {
   const { data, error } = usePoll<AccountMarginResponse>(() => api.accountMargin(), ACCOUNT_MARGIN_POLL_MS)
   const accounts = accountsOf(data)
   const rate = rateOf(data?.inrPerUsd)
+  const [open, setOpen] = useStoredOpen(MARGIN_OPEN_KEY)
+  const tone = TONE_PAINT[marginTone(accounts ?? [])]
   return (
     <Card padding={3}>
-      <VStack gap={2}>
-        <HStack justify="between" align="center" wrap="wrap" gap={2}>
-          <Heading level={3}>Margin</Heading>
+      <Collapsible
+        isOpen={open}
+        onOpenChange={setOpen}
+        trigger={
+          <HStack gap={3} align="center" wrap="wrap">
+            <Heading level={3}>Margin</Heading>
+            <Badge variant={tone.variant} label={tone.label} />
+            {/* SHUT, IT STILL SAYS THE NUMBERS THAT MATTER: used and free per account. */}
+            {(accounts ?? []).map((a) => (
+              <Text key={a.id} size="sm" color="secondary">{teaserOf(a)}</Text>
+            ))}
+          </HStack>
+        }
+      >
+        <VStack gap={2}>
           <Text size="sm" color="secondary">{`Delta accounts · USD, ₹ at ${rate}`}</Text>
-        </HStack>
-        {error !== null ? (
-          <Text size="sm" color="secondary">{`Cannot read account margin: ${error}`}</Text>
-        ) : null}
-        {data === null && error === null ? <Text size="sm" color="secondary">reading…</Text> : null}
-        {data !== null && accounts === null ? (
-          <Text size="sm" color="secondary">No accounts in the reply — the api may be a deploy behind.</Text>
-        ) : null}
-        {(accounts ?? []).map((a) => <AccountBlock key={a.id} account={a} rate={rate} />)}
-      </VStack>
+          {error !== null ? (
+            <Text size="sm" color="secondary">{`Cannot read account margin: ${error}`}</Text>
+          ) : null}
+          {data === null && error === null ? <Text size="sm" color="secondary">reading…</Text> : null}
+          {data !== null && accounts === null ? (
+            <Text size="sm" color="secondary">No accounts in the reply — the api may be a deploy behind.</Text>
+          ) : null}
+          {(accounts ?? []).map((a) => <AccountBlock key={a.id} account={a} rate={rate} />)}
+        </VStack>
+      </Collapsible>
     </Card>
   )
+}
+
+/** Where the panel's open/shut choice is remembered, per browser. */
+export const MARGIN_OPEN_KEY = 'dx.marginPanel.open'
+
+/** The one-line account summary the SHUT panel shows: `Live 7.9% used · $574.24 free`. */
+export function teaserOf(a: AccountMargin): string {
+  if (!hasFigures(a)) return `${a.label} · ${ACCOUNT_PAINT[a.state]?.label ?? a.state}`
+  const free = typeof a.available === 'number' && Number.isFinite(a.available) ? cash(a.available, DX) : '—'
+  return `${a.label} ${pct(a.utilizedPct)} used · ${free} free${a.state === 'stale' ? ' (stale)' : ''}`
+}
+
+/** Shut by default; the operator's last choice wins. Storage can be blocked — then it lasts the visit. */
+function useStoredOpen(key: string): [boolean, (open: boolean) => void] {
+  const [open, setOpenState] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(key) === '1'
+    } catch {
+      return false
+    }
+  })
+  const setOpen = (next: boolean): void => {
+    setOpenState(next)
+    try {
+      window.localStorage.setItem(key, next ? '1' : '0')
+    } catch {
+      // A private window: the choice lasts the visit.
+    }
+  }
+  return [open, setOpen]
 }
 
 // ------------------------------------------------------------ Status card

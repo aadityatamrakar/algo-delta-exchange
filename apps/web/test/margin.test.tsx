@@ -7,10 +7,10 @@
  * and null is never painted as 0. A failed account shows its error, an absent
  * one its reason, an unestimable book a dash with what is missing.
  */
-import { describe, expect, test } from 'vitest'
+import { beforeEach, describe, expect, test } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import type { AccountMargin, BookMarginEstimate, BookRow } from '../src/api.ts'
-import { AccountMarginPanel, MarginStatusCard, marginTone, usdWithInr } from '../src/margin.tsx'
+import { AccountMarginPanel, MARGIN_OPEN_KEY, MarginStatusCard, marginTone, usdWithInr } from '../src/margin.tsx'
 import { BooksPage } from '../src/books.tsx'
 import { DialsPanel } from '../src/dials-panel.tsx'
 import { ModeProvider } from '../src/mode.tsx'
@@ -66,6 +66,11 @@ describe('USD with ₹ beside it', () => {
 // ------------------------------------------------------- Positions panel
 
 describe('the Margin panel', () => {
+  // These read the figures, so the panel is opened; the shut default has its own test below.
+  beforeEach(() => {
+    window.localStorage.setItem(MARGIN_OPEN_KEY, '1')
+  })
+
   test('ok demo: balance, available, used and % utilized, each USD with ₹', async () => {
     serveAccounts([account(), ABSENT])
     render(<AccountMarginPanel />)
@@ -261,5 +266,18 @@ describe('bs_margin_budget', () => {
     expect(line.textContent).toContain('$12.40 (₹1,054)')
     expect(line.textContent).toContain('$96.20 (₹8,177)')
     expect(line.textContent).not.toContain('999')
+  })
+})
+
+describe('the Margin panel, shut', () => {
+  test('opens shut by default, still naming each account used and free; opening it is remembered', async () => {
+    window.localStorage.removeItem(MARGIN_OPEN_KEY)
+    serveAccounts([account(), ABSENT])
+    render(<AccountMarginPanel />)
+    expect(await screen.findByText('Demo 40.0% used · $600.00 free')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Margin' })).toBeTruthy()
+    screen.getByRole('button', { name: /Margin/ }).click()
+    expect(await screen.findByRole('group', { name: 'Demo margin' })).toBeTruthy()
+    expect(window.localStorage.getItem(MARGIN_OPEN_KEY)).toBe('1')
   })
 })
