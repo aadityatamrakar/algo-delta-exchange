@@ -730,9 +730,21 @@ export class LiveRail implements OrderRail {
           `only reduces the live book is allowed through regardless of the switch.`,
       )
     }
+    /**
+     * `mode: 'live'` ON THE GATEWAY DOCUMENT, or it is not a live order.
+     *
+     * The gateway sends a document to Delta production only on an EXACT
+     * `mode: 'live'` (`dx-edge.ts:routesToDelta`); anything else is paper,
+     * fail-closed, and a paper document is worked on its book's paper rail. This
+     * insert carried no mode, so on 4 Nov the first live BULL-S straddle
+     * (`BTC-2026-11-13-bull-s-live-1:live:1`) was sold on the Delta TESTNET
+     * with the registry row's default `dx_paper_rail: 'demo'` — the desk booked
+     * it as live and Delta production never saw it. The paper rail stamps
+     * `mode: 'paper'` the same way (`PaperRail`).
+     */
     const doc =
       this.#executor === 'desk-gateway'
-        ? gatewayOrderDocument(fill, ctx)
+        ? { ...gatewayOrderDocument(fill, ctx), mode: 'live' }
         : orderDocument(fill, ctx)
     await this.#db.collection(this.#collection).insertOne(doc)
     // AFTER the await, never before — see `nudgeGateway`. A refused order threw

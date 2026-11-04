@@ -294,3 +294,11 @@ test('an OPEN wearing a close\'s clothes is refused on its OP, not its numbers',
   await new LiveRail(honest.db, []).route({ ...disguised, op: 'close' }, ctx)
   assert.equal(honest.routed.length, 1)
 })
+
+test('a live order reaches the gateway stamped mode: live — the only stamp the gateway sends to production', async () => {
+  const h = db(liveBook([leg()]))
+  await new LiveRail(h.db, [TAG]).route(open, ctx)
+  assert.equal(h.routed.length, 1)
+  assert.equal(h.routed[0]?.['mode'], 'live', 'without it the gateway reads the order as paper and works it on the demo rail')
+  assert.equal(h.routed[0]?.['dx_paper_rail'], undefined, 'a live order carries no paper-rail stamp')
+})
