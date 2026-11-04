@@ -607,9 +607,17 @@ async function frozenStraddle(): Promise<Harness> {
   return h
 }
 
+test('a held-leg quote stale under 30 s refuses new straddles but raises no alert (a restart, a blip)', async () => {
+  const h = await frozenStraddle()
+  h.advance(30_000) // quote 30 s old: stale 10 s past the 20 s max
+  await h.host.evaluate()
+  assert.equal(h.client.requests.length, 0, 'no new straddle on a book that cannot see its legs')
+  assert.equal(h.alerts.length, 0)
+})
+
 test('a stale held-leg quote raises a warn alert keyed by the tag, and sends nothing', async () => {
   const h = await frozenStraddle()
-  h.advance(30_000)
+  h.advance(50_000) // stale 30 s
   await h.host.evaluate()
   assert.equal(h.client.requests.length, 0, 'no new straddle on a book that cannot see its legs')
   const warn = h.alerts.filter((a) => a.severity === 'warn')

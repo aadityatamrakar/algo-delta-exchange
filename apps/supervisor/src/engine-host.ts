@@ -704,13 +704,21 @@ export const BS_EXIT_TRIGGERS: ReadonlySet<Trigger> = new Set<Trigger>([
  *
  *   - `bs-stale` — a straddle is being closed because a held leg's quote has
  *     been stale past `bs_stale_exit_s`: CRITICAL, key `<tag>:stale-exit`.
- *   - any straddle whose `staleSinceMs` is set (`markState`, so a held pass
- *     counts too): new straddles are refused — WARN, key `<tag>:stale-quote`.
+ *   - any straddle stale for `BS_STALE_ALERT_AFTER_MS` or longer
+ *     (`markState`, so a held pass counts too): new straddles are refused —
+ *     WARN, key `<tag>:stale-quote`. The engine refuses from the first stale
+ *     pass; only the ALERT waits. A supervisor restart seeds the chain from
+ *     the last saved marks (up to 60 s old), so every held leg reads stale for
+ *     the few seconds until the first live tick — that is not news (4 Nov,
+ *     05:07 and 07:07, both restarts). A gap that outlasts the gap fill is.
  *
  * The message is the decision's own reason, which names the stale leg. The
  * sink dedupes per key (10 min), so this is asked every pass.
  */
-export function bullSAlertsOf(tag: string, mode: Mode, decision: EngineDecision): DeskAlert[] {
+/** A held leg stale this long is alerted on. Shorter is a restart or a blip the gap fill closes. */
+export const BS_STALE_ALERT_AFTER_MS = 30_000
+
+export function bullSAlertsOf(tag: string, mode: Mode, decision: EngineDecision, nowMs: number): DeskAlert[] {
   const out: DeskAlert[] = []
   const base = { source: 'supervisor', mode, tag } as const
   if (decision.trigger === 'bs-stale') {
@@ -721,7 +729,7 @@ export function bullSAlertsOf(tag: string, mode: Mode, decision: EngineDecision)
       message: `${tag}: closing a straddle on a stale quote — ${decision.reason}`,
     })
   }
-  const stale = decision.markState.bs.groups.filter((g) => g.staleSinceMs > 0)
+  const stale = decision.markState.bs.groups.filter((g) => g.staleSinceMs > 0 && nowMs - g.staleSinceMs >= BS_STALE_ALERT_AFTER_MS)
   if (stale.length > 0) {
     out.push({
       ...base,
@@ -1997,7 +2005,7 @@ export class EngineHost {
     }
     if (this.#d.alert === undefined) return
     try {
-      for (const a of bullSAlertsOf(this.#d.tag, this.#d.mode, decision)) {
+      for (const a of bullSAlertsOf(this.#d.tag, this.#d.mode, decision, this.#d.now())) {
         try {
           this.#d.alert(a)
         } catch {
