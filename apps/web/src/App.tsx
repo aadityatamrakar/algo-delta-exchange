@@ -40,6 +40,7 @@ import { DxBrokerPage } from './dx-broker-view.tsx'
 import { StrategiesPage, StrategyPage } from './strategies.tsx'
 import { BooksPage } from './books.tsx'
 import { BookBuildPage } from './book-build.tsx'
+import { BookWizardPage } from './book-wizard.tsx'
 import { ReportsPage } from './reports.tsx'
 import { ChainPage } from './chain.tsx'
 import { BRAND, VENUE } from './venue.ts'
@@ -266,6 +267,7 @@ function Desk(props: {
           : null}
         {loc.route === 'books' ? <BooksPage mode={mode} /> : null}
         {loc.route === 'build' ? <BookBuildPage mode={mode} /> : null}
+        {loc.route === 'new-book' ? <BookWizardPage mode={mode} /> : null}
         {loc.route === 'reports' ? <ReportsPage mode={mode} /> : null}
         {loc.route === 'chain' ? <ChainPage /> : null}
         {/* There is no `orders` branch: the page is gone and `#/orders` is

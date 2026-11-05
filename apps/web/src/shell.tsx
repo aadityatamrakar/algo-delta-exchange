@@ -30,7 +30,7 @@ import { VENUE, type VenueSpec } from './venue.ts'
  */
 export type Route =
   | 'positions' | 'strategies' | 'books'
-  | 'reports' | 'broker' | 'status' | 'controls' | 'build' | 'chain'
+  | 'reports' | 'broker' | 'status' | 'controls' | 'build' | 'chain' | 'new-book'
 
 /**
  * NO ROUTE CARRIES A MODE ANY MORE.
@@ -67,6 +67,12 @@ export const ROUTES: readonly { id: Route; label: string; hash: string; nav?: fa
    * a different one, for every bookmark and every link.
    */
   { id: 'build', label: 'Build', hash: '#/build', nav: false },
+  /**
+   * NEW BOOK — the wizard for a strategy that places its own trades (BULL-S):
+   * a book with no positions and its dials set before it starts. No tab, for
+   * the reason `build` has none: Books' "Build a book" is the way in.
+   */
+  { id: 'new-book', label: 'New book', hash: '#/new-book', nav: false },
   /** The option chain: per strike CE | strike | PE, live. Read-only. */
   { id: 'chain', label: 'Option chain', hash: '#/chain' },
   { id: 'reports', label: 'Reports', hash: '#/reports' },

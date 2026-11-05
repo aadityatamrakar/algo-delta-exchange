@@ -359,7 +359,7 @@ describe('an empty registry', () => {
     mount('paper', [])
     // The sentence has to name the button that is actually on the page: it used
     // to say "Create book", which is the wizard's name and no longer exists here.
-    await screen.findByText(/No books are registered in paper yet\. "Build a book" opens a position/)
+    await screen.findByText(/No books are registered in paper yet\. "Build a book" sets one up/)
   })
 })
 
@@ -373,13 +373,13 @@ describe('an empty registry', () => {
  * unreachable at that point and has since been deleted.
  */
 describe('the build entry point', () => {
-  test('"Build a book" navigates to the build page', async () => {
+  test('"Build a book" opens the New book wizard', async () => {
     window.location.hash = '#/books'
     mount('paper', [])
     await screen.findByText(/No books are registered in paper yet/)
 
     act(() => { screen.getByRole('button', { name: 'Build a book' }).click() })
-    expect(window.location.hash).toBe('#/build')
+    expect(window.location.hash).toBe('#/new-book')
   })
 
   test('the create wizard no longer opens from this page', async () => {

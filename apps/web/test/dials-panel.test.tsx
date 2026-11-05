@@ -8,7 +8,7 @@
  * prove: that the operator can see and reach it.
  */
 import { expect, test, describe } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { DialsPanel } from '../src/dials-panel.tsx'
 import { AuthProvider, useReauth } from '../src/auth.tsx'
 import type { BookRow, DialValue } from '../src/api.ts'
@@ -194,6 +194,21 @@ function openDeltaLean(): void {
 }
 
 /**
+ * ONE SECTION'S OWN BODY, found through its trigger's `aria-controls`.
+ *
+ * A count of badges or units over the whole panel is a count over every
+ * section it draws open — and BULL-S opens by default, with its own risk
+ * badges and clock dials since its dials were described (5 Nov). A section's
+ * claim about itself is asserted inside that section.
+ */
+function sectionBody(name: RegExp): HTMLElement {
+  const id = screen.getByRole('button', { name }).getAttribute('aria-controls')
+  const el = id === null ? null : document.getElementById(id)
+  if (el === null) throw new Error(`no body for the section ${String(name)}`)
+  return el
+}
+
+/**
  * Every rendered dial's name, in ONE pass over the DOM.
  *
  * Deliberately not forty-eight `getAllByLabelText` calls: each of those walks
@@ -359,8 +374,9 @@ describe('a dial reads in its own units', () => {
     openDeltaLean()
     // dl_open_by_min, dl_warmup_min, dl_flatten_passive_min, dl_flatten_urgent_min,
     // dl_flat_by_min.
-    expect(screen.getAllByText('min of day').length).toBe(5)
-    expect(screen.getAllByText('Δ').length).toBeGreaterThan(0)
+    const lean = within(sectionBody(/Delta lean/))
+    expect(lean.getAllByText('min of day').length).toBe(5)
+    expect(lean.getAllByText('Δ').length).toBeGreaterThan(0)
   })
 })
 
@@ -404,7 +420,7 @@ describe('in Delta lean, the two dials that decide what the book can lose', () =
   test('are badged as risk limits, and nothing else is', () => {
     mount(leanRow())
     openDeltaLean()
-    expect(screen.getAllByText('risk limit')).toHaveLength(2)
+    expect(within(sectionBody(/Delta lean/)).getAllByText('risk limit')).toHaveLength(2)
   })
 })
 
@@ -618,14 +634,15 @@ describe('a playbook dial reads in its own units', () => {
     openPlaybook()
     // The number stays typeable in the box; the clock time is the line under it.
     expect(dialInput('pb_entry_start_min').value).toBe('570')
-    expect(screen.getByText(/= 09:30/)).toBeTruthy()
-    expect(screen.getByText(/= 10:15/)).toBeTruthy()
-    expect(screen.getByText(/= 13:00/)).toBeTruthy()
+    const pb = within(sectionBody(/^Playbook/))
+    expect(pb.getByText(/= 09:30/)).toBeTruthy()
+    expect(pb.getByText(/= 10:15/)).toBeTruthy()
+    expect(pb.getByText(/= 13:00/)).toBeTruthy()
     // `pb_time_exit_min` is 0 on this preset: no time exit — not a 00:00 one.
     expect(dialInput('pb_time_exit_min').value).toBe('0')
-    expect(screen.queryByText(/= 00:00/)).toBe(null)
-    expect(screen.getAllByText('min of day')).toHaveLength(4)
-    expect(screen.getAllByText('%')).toHaveLength(2)
+    expect(pb.queryByText(/= 00:00/)).toBe(null)
+    expect(pb.getAllByText('min of day')).toHaveLength(4)
+    expect(pb.getAllByText('%')).toHaveLength(2)
   })
 })
 
@@ -639,7 +656,7 @@ describe('in Playbook, the dials that decide what a trade can lose', () => {
   test('opened, the section badges those three and nothing else', () => {
     mount(playbookRow())
     openPlaybook()
-    expect(screen.getAllByText('risk limit')).toHaveLength(3)
+    expect(within(sectionBody(/^Playbook/)).getAllByText('risk limit')).toHaveLength(3)
   })
 })
 

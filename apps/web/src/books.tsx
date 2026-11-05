@@ -656,7 +656,12 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
           what it actually got, so the wizard was not a second way in: it was
           the old one, and it has been deleted.
         */}
-        <Button variant="secondary" label="Build a book" onClick={() => goTo('build')} />
+        {/*
+          THE WIZARD FIRST (5 Nov): a BULL-S book starts empty and is only its
+          dials, so "Build a book" opens the step-by-step New book page; the
+          structure builder that places real orders is one link away from it.
+        */}
+        <Button variant="secondary" label="Build a book" onClick={() => goTo('new-book')} />
       </HStack>
 
       {/*
@@ -730,8 +735,8 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
       {registry === null && error === null ? <Text color="secondary">Loading…</Text> : null}
       {registry !== null && rows.length === 0 ? (
         <Text color="secondary">
-          {`No books are registered in ${props.mode} yet. "Build a book" opens a position and ` +
-            'puts one here, stopped.'}
+          {`No books are registered in ${props.mode} yet. "Build a book" sets one up and ` +
+            'puts it here, stopped.'}
         </Text>
       ) : null}
 

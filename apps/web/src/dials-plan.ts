@@ -779,7 +779,117 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
 
     // ── BULL-S ─────────────────────────────────────────────────────────────
     // USD: BULL-S books are Delta books, and a 'rupee' dial reads in the
-    // venue currency ($ on the DX build).
+    // venue currency ($ on the DX build). Sizes are CONTRACTS (0.001 BTC on
+    // Delta), so they carry that word rather than `lots`. Written for the
+    // New-book wizard (5 Nov), which shows every one of these beside its box.
+    bs_enabled: meta(
+      'plain',
+      'Turns the BULL-S strategy on for this book. Every BULL-S preset sets it; off, the book reads none of the dials below.',
+    ),
+    bs_strike_step: meta(
+      'rupee',
+      'The distance between listed strikes for this expiry ($200 daily, $500 weekly, $1,000 monthly). The grid levels are built from it.',
+    ),
+    bs_strike_jump: meta(
+      'count',
+      'Strikes per grid level: 1 sells a straddle at every strike the index crosses, 2 at every second one (a $400 grid on a $200 daily).',
+      { units: 'strikes' },
+    ),
+    bs_grid_listed: meta(
+      'plain',
+      'Use the strikes the exchange actually lists as the grid, instead of fixed steps. Strike step and jump are then ignored.',
+    ),
+    bs_stop_mult: meta(
+      'multiple',
+      "Each straddle's own stop: buy both legs back when their combined price reaches this multiple of what they were sold for (1.25 = 25% above the sale).",
+      { risk: true },
+    ),
+    bs_stop_basis: meta(
+      'plain',
+      'What the stop prices: 1 = each leg’s ask, what it can really be bought back at; 0 = the last traded price (the old NSE behaviour).',
+    ),
+    bs_stop_confirm_s: meta(
+      'seconds',
+      'The stop must stay breached this long before it fires, so one bad print does not close a straddle. 0 = fire on the first reading.',
+    ),
+    bs_lots_start: meta(
+      'count',
+      'Size of the FIRST straddle, in contracts (1 contract = 0.001 BTC). Start and Re-arm put the size back here.',
+      { units: 'contracts', risk: true },
+    ),
+    bs_lots_step: meta(
+      'count',
+      'Each new straddle is this many contracts bigger than the last (the pyramid).',
+      { units: 'contracts' },
+    ),
+    bs_lots_cap: meta(
+      'count',
+      'The largest a straddle can get, in contracts: the pyramid stops growing here. Every BTC book must have one.',
+      { units: 'contracts', risk: true },
+    ),
+    bs_max_open: meta(
+      'count',
+      'The most straddles held at once; at the limit no new one opens until one is stopped out. 0 = no limit.',
+      { units: 'straddles' },
+    ),
+    bs_target: meta(
+      'rupee',
+      'Profit target for the whole book, on P&L since the last Start or Re-arm: reached, it closes everything and halts. 0 = off.',
+      { zeroOff: true },
+    ),
+    bs_loss_cap: meta(
+      'rupee',
+      'Loss limit for the whole book, on P&L since the last Start or Re-arm: at −this or worse, it closes everything and halts. 0 = off.',
+      { zeroOff: true, risk: true },
+    ),
+    bs_after_halt: meta(
+      'plain',
+      'After a target or loss-cap halt: 0 = stay flat until you press Re-arm; 1 = re-arm by itself once flat (size back to the start) and trade from the next crossing.',
+    ),
+    bs_enter_on_start: meta(
+      'plain',
+      'On: sell a straddle at the nearest level as soon as the book starts or re-arms. Off: wait for the index to cross a level first.',
+    ),
+    bs_entry_from_min: meta(
+      'clock',
+      'New straddles open only from this time of day (IST). Stops and closes run at any time. 0 = from midnight.',
+    ),
+    bs_entry_to_min: meta(
+      'plain',
+      'New straddles open only before this time of day (IST, minutes after midnight). 1440 = until midnight, i.e. no limit.',
+      { units: 'min of day' },
+    ),
+    bs_entry_weekdays: meta(
+      'plain',
+      'Days new straddles may open, added up: Sun 1, Mon 2, Tue 4, Wed 8, Thu 16, Fri 32, Sat 64. 127 = every day.',
+    ),
+    bs_no_entry_before_expiry_min: meta(
+      'plain',
+      'No new straddle in the last this-many minutes before expiry; what is open stays open. 0 = off.',
+      { units: 'min', zeroOff: true },
+    ),
+    bs_flat_before_expiry_min: meta(
+      'plain',
+      'Close everything and halt this many minutes before expiry. 0 = hold into settlement.',
+      { units: 'min', zeroOff: true },
+    ),
+    bs_ref_max_age_s: meta(
+      'seconds',
+      'A BTC index price older than this is not traded on: no entry, and it does not count as a crossing. Stops still run.',
+    ),
+    bs_level_cooldown_s: meta(
+      'seconds',
+      'After the exchange refuses an entry at a level, that level is not sold again for this long. 0 = off.',
+      { zeroOff: true },
+    ),
+    bs_close_req: meta(
+      'count',
+      'A counter the Close book button raises. Not set by hand.',
+    ),
+    bs_rearm_req: meta(
+      'count',
+      'A counter the Re-arm button raises. Not set by hand.',
+    ),
     bs_margin_budget: meta(
       'rupee',
       'Margin budget in USD for the book: a new straddle whose estimated margin would take the book over it is refused. Stops and closes are never blocked. 0 = off. A LIVE book cannot be armed with 0.',
@@ -1083,6 +1193,61 @@ const PLAYBOOK_GROUPS: ReadonlyArray<DialGroupSpec> = [
   },
 ]
 
+const BULL_S_SECTION = 'bull-s'
+
+/**
+ * BULL-S, in the order the engine lists it and the groups its own comments
+ * draw (`dials.ts`). The two command counters get a group of their own at the
+ * foot: they are set by buttons, never typed.
+ */
+const BULL_S_GROUPS: ReadonlyArray<DialGroupSpec> = [
+  {
+    key: 'bs-grid',
+    label: 'The grid',
+    note: 'Where straddles are sold: one each time the BTC index crosses a grid level.',
+    keys: ['bs_strike_step', 'bs_strike_jump', 'bs_grid_listed'],
+  },
+  {
+    key: 'bs-size',
+    label: 'Size',
+    note: 'The first straddle, how much bigger each next one is, and the ceilings.',
+    keys: ['bs_lots_start', 'bs_lots_step', 'bs_lots_cap', 'bs_max_open', 'bs_margin_budget'],
+  },
+  {
+    key: 'bs-stop',
+    label: 'Each straddle’s stop',
+    note: 'Every straddle is bought back on its own when its combined price climbs past the stop.',
+    keys: ['bs_stop_mult', 'bs_stop_basis', 'bs_stop_confirm_s'],
+  },
+  {
+    key: 'bs-book',
+    label: 'The book’s target and loss cap',
+    note: 'Whole-book limits on P&L since the last Start or Re-arm, and how it starts.',
+    keys: ['bs_target', 'bs_loss_cap', 'bs_after_halt', 'bs_enter_on_start'],
+  },
+  {
+    key: 'bs-timing',
+    label: 'When new straddles may open',
+    note: 'Limits on NEW entries only. Stops run at any hour.',
+    keys: [
+      'bs_entry_from_min', 'bs_entry_to_min', 'bs_entry_weekdays',
+      'bs_no_entry_before_expiry_min', 'bs_flat_before_expiry_min',
+    ],
+  },
+  {
+    key: 'bs-safety',
+    label: 'Feed safety',
+    note: 'What the book does when prices go stale or the exchange refuses an entry. The defaults are the tested ones.',
+    keys: ['bs_ref_max_age_s', 'bs_level_cooldown_s', 'bs_quote_max_age_s', 'bs_stale_exit_s'],
+  },
+  {
+    key: 'bs-commands',
+    label: 'Book commands',
+    note: 'Counters the Close book and Re-arm buttons raise. Leave them alone.',
+    keys: ['bs_close_req', 'bs_rearm_req'],
+  },
+]
+
 /** Where a dial the table forgot goes. Shown, never dropped. */
 const UNGROUPED: DialGroupSpec = {
   key: 'ungrouped',
@@ -1106,6 +1271,7 @@ const groupingOf = (specs: ReadonlyArray<DialGroupSpec>): SectionGrouping => ({
 const GROUPINGS: ReadonlyMap<string, SectionGrouping> = new Map([
   [DELTA_LEAN_SECTION, groupingOf(DELTA_LEAN_GROUPS)],
   [PLAYBOOK_SECTION, groupingOf(PLAYBOOK_GROUPS)],
+  [BULL_S_SECTION, groupingOf(BULL_S_GROUPS)],
 ])
 
 export interface DialGroupView {
@@ -1119,7 +1285,7 @@ export interface DialGroupView {
 /**
  * One section's fields, split into the groups the panel draws.
  *
- * Every section but `delta-lean` and `playbook` comes back as a single
+ * Every section but `delta-lean`, `playbook` and `bull-s` comes back as a single
  * unlabelled group, which is exactly what it rendered as before — four dials
  * under a heading do not need subheadings, and inventing them would push the
  * corridor an operator came for further down the page.
