@@ -560,7 +560,14 @@ export function BooksPage(props: { mode: DeskMode }): React.ReactElement {
     {
       key: 'actions', header: '', width: pixel(440),
       renderCell: ({ row }) => (
-        <HStack gap={1} justify="end">
+        /*
+          WRAPS. A stopped BULL-S book carries seven controls (Order, Close
+          book, Re-arm, Dials, Start, Delete, Delete + clear history) — wider
+          than this fixed column — and right-aligned without wrapping, the
+          first two were pushed off its left edge: Close book could not be
+          reached on a stopped book (5 Nov).
+        */
+        <HStack gap={1} justify="end" wrap="wrap">
           {/*
             MANUAL ORDER — offered on a running book too (that is the case it
             exists for: a missed exit on a live book has to be re-placeable
