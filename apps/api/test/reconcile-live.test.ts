@@ -520,6 +520,56 @@ test('a FILLED order restates the price only and never touches the book', async 
   assert.equal(h.events()[0]?.['ok'], true, 'the broker did exactly what we booked')
 })
 
+// ------------------------------------------------------- the venue's fee
+
+/**
+ * DELTA'S COMMISSION REACHES THE RECORD P&L IS READ FROM (operator, 5 Nov:
+ * "next trades and positions books should show fees paid and fees on close
+ * both"). Every live Delta order document carries Delta's own `fee`, but the
+ * correction restated qty and price and dropped it, so every live P&L figure
+ * was gross. The paper fold has always carried it (`foldedFee`); the live
+ * correction now writes it in the same `$set` as the stamp.
+ */
+test('a FILLED Delta order books its fee onto the decision fill with the correction', async () => {
+  const h = harness({ orders: [gatewayOrder({ state: 'FILLED', filledQty: 500, avgPrice: 99.25, fee: 0.85 })] })
+  await h.run()
+  const f = fillOf(h)
+  assert.equal(f['fee'], 0.85)
+  assert.equal(f['price'], 99.25)
+})
+
+test('a PARTIAL books the fee on the document — the fee of what traded', async () => {
+  const h = harness({
+    orders: [gatewayOrder({ state: 'PARTIAL', filledQty: 300, avgPrice: 101.5, fee: 0.51 })],
+    decisions: [decision({ fills: [fill({ qty: 500, price: 100 })] })],
+    books: [book({ legs: [leg({ qty: -500 })] })],
+  })
+  await h.run()
+  assert.equal(fillOf(h)['fee'], 0.51)
+})
+
+test('a clamped fill books the fee in proportion to what the desk keeps', async () => {
+  const h = harness({
+    orders: [gatewayOrder({ state: 'PARTIAL', filledQty: 700, avgPrice: 101, fee: 0.7 })],
+    decisions: [decision({ fills: [fill({ qty: 500 })] })],
+  })
+  await h.run()
+  assert.equal(fillOf(h)['fee'], 0.5)
+})
+
+test('an order with no fee on its document (NSE) grows no fee key', async () => {
+  const h = harness({ orders: [gatewayOrder({ state: 'FILLED', filledQty: 500, avgPrice: 99.25 })] })
+  await h.run()
+  assert.equal('fee' in fillOf(h), false)
+})
+
+test('a REJECTED order books no fee, whatever its document says', async () => {
+  const h = harness({ orders: [gatewayOrder({ fee: 0 })] })
+  await h.run()
+  assert.equal(fillOf(h)['qty'], 0)
+  assert.equal('fee' in fillOf(h), false)
+})
+
 // ------------------------------------------------- a refused close restores
 
 test('a REJECTED close RESTORES the leg that is really still open', async () => {

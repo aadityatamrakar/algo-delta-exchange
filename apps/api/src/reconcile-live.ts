@@ -65,6 +65,7 @@ import type { BridgeLeg, DeskMode, DeskSide } from './contract.ts'
 // `routes/repair.ts` takes, for the same reason — see `IS_TERMINAL`.
 import type { OrderState } from '../../order-gateway/src/queue.ts'
 import { COLLECTIONS, type Collection } from './store.ts'
+import { foldedFee } from './order-fee.ts'
 
 /**
  * WHICH GATEWAY STATES THIS JOB MAY ACT ON — one answer per state, forced.
@@ -535,6 +536,20 @@ async function reconcileOne(
   // absent one must leave the booked mark alone rather than restate it to zero.
   const brokerPrice = num(doc['avgPrice'])
   const actualPrice = Number.isFinite(brokerPrice) && brokerPrice > 0 ? brokerPrice : bookedPrice
+  /**
+   * THE VENUE'S FEE TRAVELS WITH THE CORRECTION (operator, 5 Nov: "next
+   * trades and positions books should show fees paid"). Delta's commission is
+   * on the gateway document (`awaitDeltaFee` puts it there before the terminal
+   * update is recorded); `desk-decisions` is what every P&L figure reads, and
+   * the correction used to restate qty and price and leave the fee behind — so
+   * every live P&L was gross. The paper fold's rule (`foldedFee`): the
+   * document's fee, cut in proportion when a clamp books less than the broker
+   * reported. Nothing traded, no fee; no fee on the document (NSE), no key.
+   *
+   * The engine is not fed by this: it banks the fills in the decision's own
+   * response, which went out before any correction.
+   */
+  const fee = actualQty > 0 ? foldedFee(doc, actualQty, reported) : undefined
 
   /**
    * THE RECORD FIRST, the book second, the mark last.
@@ -562,6 +577,7 @@ async function reconcileOne(
       $set: {
         [`fills.${k}.qty`]: actualQty,
         [`fills.${k}.price`]: actualPrice,
+        ...(fee === undefined ? {} : { [`fills.${k}.fee`]: fee }),
         [`fills.${k}.corrected`]: {
           at: now,
           fromQty: bookedQty,

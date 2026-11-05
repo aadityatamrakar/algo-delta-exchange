@@ -61,6 +61,10 @@ import { notifySupervisor } from './engine-notify.ts'
 // The SAME id split and the SAME terminal-state list the live reconciler uses.
 // A second copy of either is a second thing to get wrong about one collection.
 import { restoreView, splitOrderId, TERMINAL_STATES, type ReconcileMaster } from './reconcile-live.ts'
+import { foldedFee } from './order-fee.ts'
+// Re-exported where it always lived: the fee rule is shared with the live
+// reconciler now (`order-fee.ts`), and its callers need not move with it.
+export { foldedFee }
 import { COLLECTIONS, type Collection } from './store.ts'
 
 const DEFAULT_INTERVAL_MS = 2_000
@@ -813,30 +817,6 @@ function str(value: unknown): string {
  */
 function leanStamp(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-/**
- * THE FEE FOR THE QUANTITY BEING BOOKED, off the gateway's terminal document.
- *
- * The document's own `fee` total when it has one, else the sum of its fill
- * rows' `fee`. When the fold books less than the gateway reported (directive
- * 2's cap), the fee is cut in the same proportion — the desk pays for what it
- * books. `undefined` when nothing on the document is a fee: an NSE order, whose
- * fill must not grow a `fee: 0` key it never had.
- */
-export function foldedFee(doc: Record<string, unknown>, bookedQty: number, reportedQty: number): number | undefined {
-  const asFee = (v: unknown): number | undefined =>
-    typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined
-  let total = asFee(doc['fee'])
-  if (total === undefined) {
-    for (const row of asArray(doc['fills'])) {
-      const f = asFee(row['fee'])
-      if (f !== undefined) total = (total ?? 0) + f
-    }
-  }
-  if (total === undefined) return undefined
-  const share = reportedQty > 0 && bookedQty < reportedQty ? bookedQty / reportedQty : 1
-  return Number((total * share).toFixed(8))
 }
 
 function num(value: unknown): number {
