@@ -75,10 +75,10 @@ function resolved(p: Preset) {
   return dials
 }
 
-test('there are thirty-one presets, each keyed once', () => {
-  assert.equal(PRESETS.length, 31)
+test('there are thirty-four presets, each keyed once', () => {
+  assert.equal(PRESETS.length, 34)
   const keys = PRESETS.map((p) => p.key)
-  assert.equal(new Set(keys).size, 31)
+  assert.equal(new Set(keys).size, 34)
   assert.deepEqual(keys, [
     'recenter-r',
     'recenter-eod-r',
@@ -122,6 +122,11 @@ test('there are thirty-one presets, each keyed once', () => {
     'bull-s-btc-weekly-2',
     'bull-s-btc-monthly',
     'bull-s-btc-monthly-2',
+    // LION-S (5 Nov): the BULL-S engine with per-leg stops and a flat size,
+    // one per expiry class, after BULL-S so no key moves. test/bull-s/lion.test.ts.
+    'lion-s-btc-daily',
+    'lion-s-btc-weekly',
+    'lion-s-btc-monthly',
   ])
 })
 
@@ -327,8 +332,8 @@ test('every preset carries the recenter family target and cap', () => {
   ])
   // BULL-S reads neither dial — its target and cap are `bs_target` and
   // `bs_loss_cap`, in USD — so its six carry neither, rather than a number
-  // nobody chose.
-  for (const p of PRESETS.filter((x) => !x.key.startsWith('bull-s-'))) {
+  // nobody chose. LION-S is the same engine, so its three do not either.
+  for (const p of PRESETS.filter((x) => !x.key.startsWith('bull-s-') && !x.key.startsWith('lion-s-'))) {
     assert.equal(p.dials.target_pnl, 250000, p.key)
     assert.equal(
       p.dials.margin_cap,

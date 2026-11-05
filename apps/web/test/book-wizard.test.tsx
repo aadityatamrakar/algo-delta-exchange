@@ -73,6 +73,22 @@ describe('the new-book wizard', () => {
     expect(dials['margin_cap']).toBeUndefined()
   })
 
+  test('a LION-S book: picked in step 1, created with per-leg stops and a flat size', async () => {
+    const sent = mount('paper')
+    fireEvent.click(await screen.findByRole('button', { name: 'LION-S — BTC daily ($200 grid, per-leg stop)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    const tag = `BTC-${day(1)}-lion-s-btc-daily`
+    await screen.findByText(tag)
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByLabelText('Per-leg stop and re-entry (LION-S)')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create book' }))
+    await screen.findByText(new RegExp(`Created ${tag}`))
+    const post = sent.find((r) => r.path === '/v1/desk/books/registry' && r.method === 'POST')
+    expect(post?.body).toMatchObject({ tag, variant: 'lion-s-btc-daily' })
+    expect(post?.body?.['dials']).toMatchObject({ bs_enabled: true, bs_per_leg: true, bs_lots_start: 50, bs_lots_step: 0, bs_lots_cap: 50 })
+  })
+
   test('a live book cannot be created without a margin budget', async () => {
     const sent = mount('live')
     fireEvent.click(await screen.findByRole('button', { name: 'Next' }))

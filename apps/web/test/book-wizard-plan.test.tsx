@@ -7,8 +7,8 @@
  */
 import { describe, expect, test } from 'vitest'
 import {
-  BS_TITLES, WIZARD_HIDDEN, bullSPresets, liveExpiries, pickExpiry, wizardChanges, wizardDials,
-  wizardGroups, wizardProblems, wizardTag,
+  BS_TITLES, WIZARD_HIDDEN, liveExpiries, pickExpiry, wizardChanges, wizardDials,
+  wizardGroups, wizardPresets, wizardProblems, wizardTag,
 } from '../src/book-wizard-plan.ts'
 import { dialMeta, presetDials } from '../src/dials-plan.ts'
 import { DIAL_SECTIONS } from '@algomaker/desk-engine/dials'
@@ -18,14 +18,18 @@ const NOW = Date.parse('2026-11-05T08:00:00Z')
 const LISTED = ['2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07', '2026-11-13', '2026-11-27', '2026-12-25']
 
 describe('presets', () => {
-  test('every BULL-S preset, with its expiry class and grid jump', () => {
-    const p = bullSPresets()
+  test('every BULL-S and LION-S preset, with its strategy, expiry class and grid jump', () => {
+    const p = wizardPresets()
     expect(p.map((x) => x.key)).toEqual([
       'bull-s-btc-daily', 'bull-s-btc-daily-2', 'bull-s-btc-weekly', 'bull-s-btc-weekly-2',
       'bull-s-btc-monthly', 'bull-s-btc-monthly-2',
+      'lion-s-btc-daily', 'lion-s-btc-weekly', 'lion-s-btc-monthly',
     ])
-    expect(p[0]).toMatchObject({ expiryClass: 'daily', jump: 1, grid: 200, start: 50, step: 50, cap: 150, lossCap: 250 })
-    expect(p[3]).toMatchObject({ expiryClass: 'weekly', jump: 2, grid: 1000 })
+    expect(p[0]).toMatchObject({ strategy: 'bull-s', expiryClass: 'daily', jump: 1, grid: 200, start: 50, step: 50, cap: 150, lossCap: 250 })
+    expect(p[3]).toMatchObject({ strategy: 'bull-s', expiryClass: 'weekly', jump: 2, grid: 1000 })
+    // LION-S: per leg, flat — no step, the cap is the size.
+    expect(p[6]).toMatchObject({ strategy: 'lion-s', expiryClass: 'daily', grid: 200, start: 50, step: 0, cap: 50, lossCap: 250 })
+    expect(p[7]).toMatchObject({ strategy: 'lion-s', expiryClass: 'weekly', grid: 500 })
   })
 })
 

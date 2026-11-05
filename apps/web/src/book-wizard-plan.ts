@@ -23,9 +23,13 @@ const SECTION = 'bull-s'
 
 // ------------------------------------------------------------------ presets
 
+/** The two strategies the engine's BULL-S path runs (`bs_per_leg` tells them apart). */
+export type WizardStrategy = 'bull-s' | 'lion-s'
+
 export interface WizardPreset {
   readonly key: string
   readonly label: string
+  readonly strategy: WizardStrategy
   /** Which expiries it is meant for — the default expiry is picked by it. */
   readonly expiryClass: ExpiryClass
   readonly jump: number
@@ -45,14 +49,19 @@ function classOfKey(key: string): ExpiryClass {
   return key.includes('monthly') ? 'monthly' : key.includes('weekly') ? 'weekly' : 'daily'
 }
 
-/** Every BULL-S preset, in the engine's order, with the figures its card shows. */
-export function bullSPresets(): WizardPreset[] {
+/**
+ * Every preset the wizard offers — the BULL-S path's, which since 5 Nov runs
+ * two strategies: BULL-S (combined stop, pyramid) and LION-S (`bs_per_leg`:
+ * per-leg stop and refill, flat size). In the engine's order.
+ */
+export function wizardPresets(): WizardPreset[] {
   return PRESETS.filter((p) => p.dials.bs_enabled === true).map((p) => {
     const d = p.dials
     const jump = num(d.bs_strike_jump, 1)
     return {
       key: p.key,
       label: p.label,
+      strategy: d.bs_per_leg === true ? 'lion-s' : 'bull-s',
       expiryClass: classOfKey(p.key),
       jump,
       grid: num(d.bs_strike_step, 0) * jump,
@@ -120,6 +129,7 @@ export const BS_TITLES: Readonly<Record<string, string>> = {
   bs_stop_mult: 'Stop multiple',
   bs_stop_basis: 'Stop prices off',
   bs_stop_confirm_s: 'Stop confirmation',
+  bs_per_leg: 'Per-leg stop and re-entry (LION-S)',
   bs_target: 'Book profit target',
   bs_loss_cap: 'Book loss cap',
   bs_after_halt: 'After a target or loss halt',

@@ -379,6 +379,21 @@ function bullS(step: number, start: number, lotStep: number, cap: number, lossCa
   };
 }
 
+/**
+ * LION-S ON DELTA BTC OPTIONS (operator, 5 Nov: "add loss cap, target, same
+ * features as bull, rest stop and re-entry as suggested, straddle or fill
+ * leg"). The legacy `lion-s25-2` mechanism on the BULL-S engine: an ATM
+ * straddle at each crossing, EACH LEG ITS OWN POSITION (`bs_per_leg`: its own
+ * stop at 1.25x its own entry, a lone leg kept, the missing leg refilled at
+ * the level's next crossing) and a FLAT size — the legacy book sold one lot
+ * every time, so the step is 0 and the cap is the size. Everything else is
+ * BULL-S's: loss cap, target, halt/Re-arm, entry window and blackout, margin
+ * budget, feed safety. Grid jump 1: every listed strike of the class.
+ */
+function lionS(step: number, lots: number, lossCap: number): Partial<Dials> {
+  return { ...bullS(step, lots, 0, lots, lossCap, 1), bs_per_leg: true };
+}
+
 export const PRESETS: ReadonlyArray<Preset> = [
   {
     key: 'recenter-r',
@@ -798,6 +813,10 @@ export const PRESETS: ReadonlyArray<Preset> = [
   { key: 'bull-s-btc-weekly-2', label: 'BULL-S — BTC weekly, jump 2 ($1,000 grid)', dials: bullS(500, 10, 10, 30, 500, 2) },
   { key: 'bull-s-btc-monthly', label: 'BULL-S — BTC monthly ($1,000 grid)', dials: bullS(1000, 10, 10, 30, 500, 1) },
   { key: 'bull-s-btc-monthly-2', label: 'BULL-S — BTC monthly, jump 2 ($2,000 grid)', dials: bullS(1000, 10, 10, 30, 500, 2) },
+  // LION-S: the same three classes, per-leg, flat — after BULL-S so no key moves.
+  { key: 'lion-s-btc-daily', label: 'LION-S — BTC daily ($200 grid, per-leg stop)', dials: lionS(200, 50, 250) },
+  { key: 'lion-s-btc-weekly', label: 'LION-S — BTC weekly ($500 grid, per-leg stop)', dials: lionS(500, 10, 500) },
+  { key: 'lion-s-btc-monthly', label: 'LION-S — BTC monthly ($1,000 grid, per-leg stop)', dials: lionS(1000, 10, 500) },
 ];
 
 /**

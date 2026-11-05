@@ -808,6 +808,10 @@ const DIAL_META: ReadonlyMap<string, DialMeta> = new Map(
       'plain',
       'What the stop prices: 1 = each leg’s ask, what it can really be bought back at; 0 = the last traded price (the old NSE behaviour).',
     ),
+    bs_per_leg: meta(
+      'plain',
+      'LION-S: each leg is its own position. It stops on its own price at the stop multiple × its own entry, a lone leg is kept, and the level’s next crossing sells only the missing leg. Off = BULL-S: both legs stop together on their combined price.',
+    ),
     bs_stop_confirm_s: meta(
       'seconds',
       'The stop must stay breached this long before it fires, so one bad print does not close a straddle. 0 = fire on the first reading.',
@@ -1215,9 +1219,9 @@ const BULL_S_GROUPS: ReadonlyArray<DialGroupSpec> = [
   },
   {
     key: 'bs-stop',
-    label: 'Each straddle’s stop',
-    note: 'Every straddle is bought back on its own when its combined price climbs past the stop.',
-    keys: ['bs_stop_mult', 'bs_stop_basis', 'bs_stop_confirm_s'],
+    label: 'Stops and re-entry',
+    note: 'BULL-S buys a straddle back whole when its combined price climbs past the stop; LION-S (per leg) buys back each leg on its own price and refills it at the next crossing.',
+    keys: ['bs_stop_mult', 'bs_stop_basis', 'bs_stop_confirm_s', 'bs_per_leg'],
   },
   {
     key: 'bs-book',

@@ -47,6 +47,14 @@ export interface BullSGroup {
    * pass that saw no quote at all. 0 = every held leg is fresh.
    */
   readonly staleSinceMs: number;
+  /**
+   * PER-LEG MODE ONLY (`bs_per_leg`, LION-S): when each leg's own exit price
+   * first stood at or past `bs_stop_mult` x its own entry. 0 = not breaching.
+   * ABSENT on a straddle-mode group, so a BULL-S row keeps exactly the shape
+   * it has always stored (`sameRuleState` is a JSON equality).
+   */
+  readonly ceBreachSinceMs?: number;
+  readonly peBreachSinceMs?: number;
 }
 
 /** A level whose last entry was refused, not to be sold again before `untilMs`. */
@@ -142,8 +150,13 @@ function group(v: unknown): BullSGroup[] {
   // the quotes again and starts the clock if they are.
   const staleSinceMs = finite(g['staleSinceMs']) && g['staleSinceMs'] > 0 ? g['staleSinceMs'] : 0;
   // The ten fields and nothing else, in this order: `sameRuleState` is a
-  // `JSON.stringify` equality.
-  return [{ strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs, filled, staleSinceMs }];
+  // `JSON.stringify` equality. The two per-leg clocks follow only when the row
+  // carries them (a LION-S group), so a BULL-S row reads back unchanged.
+  const base = { strike, lots, ceEntry, peEntry, openedMs, ceOpen, peOpen, breachSinceMs, filled, staleSinceMs };
+  const ceB = g['ceBreachSinceMs'];
+  const peB = g['peBreachSinceMs'];
+  if (!finite(ceB) && !finite(peB)) return [base];
+  return [{ ...base, ceBreachSinceMs: finite(ceB) && ceB > 0 ? ceB : 0, peBreachSinceMs: finite(peB) && peB > 0 ? peB : 0 }];
 }
 
 function cooldown(v: unknown): BullSCooldown[] {

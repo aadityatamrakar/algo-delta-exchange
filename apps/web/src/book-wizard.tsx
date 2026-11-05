@@ -34,8 +34,8 @@ import { expiryClass, expiryPillLabel } from './chain-model.ts'
 import { dialMeta, readDial, type DialFieldView } from './dials-plan.ts'
 import { currencySymbol } from './format.ts'
 import {
-  BS_TITLES, bullSPresets, liveExpiries, pickExpiry, wizardChanges, wizardDials, wizardGroups,
-  wizardProblems, wizardRefusals, wizardTag, type WizardGroup, type WizardPreset,
+  BS_TITLES, liveExpiries, pickExpiry, wizardChanges, wizardDials, wizardGroups, wizardPresets,
+  wizardProblems, wizardRefusals, wizardTag, type WizardGroup, type WizardPreset, type WizardStrategy,
 } from './book-wizard-plan.ts'
 
 /** BULL-S books are Delta BTC books; the preset table carries no other symbol. */
@@ -44,6 +44,20 @@ const SYMBOL = 'BTC'
 const STEPS = ['Strategy', 'Expiry', 'Dials', 'Review'] as const
 
 const CLASS_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' } as const
+
+/** What each strategy does, in a sentence — the step-1 heading over its presets. */
+const STRATEGY_TEXT: Readonly<Record<WizardStrategy, { name: string; text: string }>> = {
+  'bull-s': {
+    name: 'BULL-S',
+    text: 'Sells a BTC straddle each time the index crosses a grid level, each one bigger than the last. ' +
+      'Each straddle is bought back whole when its combined price passes the stop.',
+  },
+  'lion-s': {
+    name: 'LION-S',
+    text: 'Sells a straddle at each crossing, the same size every time, and treats each leg as its own position: ' +
+      'a leg is bought back on its own price, the other is kept, and the next crossing of that level sells only the missing leg.',
+  },
+}
 
 // ------------------------------------------------------------------ pieces
 
@@ -202,7 +216,7 @@ function DialGroup(props: {
 // -------------------------------------------------------------------- page
 
 export function BookWizardPage(props: { mode: DeskMode }): React.ReactElement {
-  const presets = useMemo(() => bullSPresets(), [])
+  const presets = useMemo(() => wizardPresets(), [])
   const [step, setStep] = useState(0)
   const [preset, setPreset] = useState<string>(presets[0]?.key ?? '')
   const [expiry, setExpiry] = useState('')
@@ -338,21 +352,27 @@ export function BookWizardPage(props: { mode: DeskMode }): React.ReactElement {
             <Card>
               <VStack gap={3}>
                 <Heading level={3}>1 · Strategy and preset</Heading>
-                <Text>
-                  BULL-S sells a BTC straddle each time the index crosses a grid level, each one bigger than the last,
-                  each with its own stop. The preset fills every dial; you can change any of them in step 3.
+                <Text color="secondary">
+                  The preset fills every dial with tested defaults; you can change any of them in step 3.
                 </Text>
-                {(['daily', 'weekly', 'monthly'] as const).map((cls) => (
-                  <VStack key={cls} gap={2}>
-                    <Text weight="bold">{CLASS_LABEL[cls]}</Text>
-                    {presets.filter((p) => p.expiryClass === cls).map((p) => (
-                      <PresetChoice key={p.key} p={p} picked={p.key === preset} onPick={() => setPreset(p.key)} />
-                    ))}
+                {(['bull-s', 'lion-s'] as const).map((strategy) => (
+                  <VStack key={strategy} gap={2}>
+                    <Heading level={4}>{STRATEGY_TEXT[strategy].name}</Heading>
+                    <Text>{STRATEGY_TEXT[strategy].text}</Text>
+                    {(['daily', 'weekly', 'monthly'] as const).map((cls) => {
+                      const these = presets.filter((p) => p.strategy === strategy && p.expiryClass === cls)
+                      if (these.length === 0) return null
+                      return (
+                        <VStack key={cls} gap={2}>
+                          <Text weight="bold">{CLASS_LABEL[cls]}</Text>
+                          {these.map((p) => (
+                            <PresetChoice key={p.key} p={p} picked={p.key === preset} onPick={() => setPreset(p.key)} />
+                          ))}
+                        </VStack>
+                      )
+                    })}
                   </VStack>
                 ))}
-                <Text size="sm" color="secondary">
-                  More strategies that run on their own, like LION-S, will be listed here.
-                </Text>
               </VStack>
             </Card>
           ) : null}

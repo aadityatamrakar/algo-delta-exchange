@@ -487,6 +487,15 @@ export interface Dials {
   readonly bs_stop_basis: number;
   /** The breach must hold this many seconds. 0 = on the first reading. */
   readonly bs_stop_confirm_s: number;
+  /**
+   * LION-S: each leg is its own position (operator, 5 Nov). Each held leg
+   * stops on its OWN price at `bs_stop_mult` x its own entry, a straddle left
+   * with one leg is kept rather than closed as a half, and a crossing of a
+   * level holding one leg sells only the missing leg ("straddle or fill
+   * leg"); a level holding nothing sells a straddle. Off = BULL-S: the
+   * combined stop, both legs out together, a half straddle closed.
+   */
+  readonly bs_per_leg: boolean;
   /** The pyramid, in contracts: the first straddle's size, the step each
    * accepted entry adds, and the ceiling. `bs_lots_cap` 0 = uncapped — the NSE
    * parity setting only; every BTC preset caps. */
@@ -775,6 +784,7 @@ export const DEFAULT_DIALS: Dials = {
   bs_stop_mult: 1.25,
   bs_stop_basis: 1, // the ask
   bs_stop_confirm_s: 3,
+  bs_per_leg: false, // BULL-S: the combined stop
   bs_lots_start: 1,
   bs_lots_step: 1,
   bs_lots_cap: 0, // uncapped: NSE parity only — every DX preset sets it
@@ -1112,6 +1122,7 @@ export const DIAL_SECTIONS: ReadonlyArray<DialSection> = [
       'bs_stop_mult',
       'bs_stop_basis',
       'bs_stop_confirm_s',
+      'bs_per_leg',
       // The pyramid
       'bs_lots_start',
       'bs_lots_step',

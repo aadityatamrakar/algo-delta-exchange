@@ -197,6 +197,15 @@ function stopLine(g: BullSGroup, dials: Dials): number {
   return dials.bs_stop_basis === 0 ? Math.trunc(raw) : raw;
 }
 
+/**
+ * A LEG'S OWN stop line (`bs_per_leg`): its entry x the multiple. Never
+ * truncated, on either basis — the legacy per-leg book kept the float
+ * (`lion-s25-2.js`, `premium-leg-book/logic.ts` perLegStopTrigger).
+ */
+function legStopLine(entry: number, dials: Dials): number {
+  return entry * dials.bs_stop_mult;
+}
+
 const firstSize = bsFirstSize;
 const nextSize = bsNextSize;
 
@@ -225,6 +234,8 @@ interface FailedEntry {
 function reconcile(
   groups: readonly BullSGroup[],
   inputs: BullSInputs,
+  /** `bs_per_leg` (LION-S): an entry with either wing held has opened; the other is refilled at its next crossing. */
+  perLeg: boolean,
 ): { groups: BullSGroup[]; failed: FailedEntry[] } {
   const { legs } = inputs;
   const settled = inputs.pendingLots === 0;
@@ -237,7 +248,8 @@ function reconcile(
     // shows nothing or one wing was refused (the venue's cap, a rejected
     // leg) — the one fact the size step and the level cooldown turn on.
     const both = ce !== undefined && pe !== undefined;
-    if (settled && !g.filled && !both) {
+    const opened = perLeg ? ce !== undefined || pe !== undefined : both;
+    if (settled && !g.filled && !opened) {
       failed.push({ group: g, held: ce !== undefined ? 'CE' : pe !== undefined ? 'PE' : '' });
     }
     const next: BullSGroup = {
@@ -246,7 +258,7 @@ function reconcile(
       peEntry: pe?.entry ?? g.peEntry,
       ceOpen: settled ? ce !== undefined : g.ceOpen,
       peOpen: settled ? pe !== undefined : g.peOpen,
-      filled: g.filled || (settled && both),
+      filled: g.filled || (settled && opened),
     };
     if (next.ceOpen || next.peOpen) out.push(next);
   }
@@ -274,9 +286,10 @@ function reconcile(
       peOpen: pe !== undefined,
       breachSinceMs: 0,
       // An adopted short was sold by this book at some point; only a whole
-      // straddle counts as one that opened.
-      filled: ce !== undefined && pe !== undefined,
+      // straddle counts as one that opened — or, per leg, any held leg.
+      filled: perLeg || (ce !== undefined && pe !== undefined),
       staleSinceMs: 0,
+      ...(perLeg ? { ceBreachSinceMs: 0, peBreachSinceMs: 0 } : {}),
     });
   }
   return { groups: out, failed };
@@ -352,7 +365,8 @@ export function decideBullS(
   }
 
   // ── 2. reconcile with the book ───────────────────────────────────────────
-  const rec = reconcile(bs.groups, inputs);
+  const perLeg = dials.bs_per_leg;
+  const rec = reconcile(bs.groups, inputs, perLeg);
   bs = { ...bs, groups: rec.groups, cooldowns: bs.cooldowns.filter((c) => c.untilMs > nowMs) };
 
   // ── 2b. an entry the venue refused ──────────────────────────────────────
@@ -383,6 +397,13 @@ export function decideBullS(
           (cdS > 0 ? `, level cools down ${fmt(cdS)}s` : ''),
       );
     }
+  }
+  // PER LEG, a refused wing does not fail the entry (its twin opened) and a
+  // refused REFILL fails nothing: the refusal is said once and consumed, and
+  // the leg is sold again at the level's next crossing.
+  if (perLeg && inputs.pendingLots === 0 && rec.failed.length === 0 && bs.entryRefusal !== '') {
+    notes.push(`a leg sale was refused (${bs.entryRefusal}) — that leg is sold again at its level's next crossing`);
+    bs = { ...bs, entryRefusal: '' };
   }
   // Every level still cooling is said on EVERY decision until it clears, so
   // the book's last-decision line names the refusal for as long as it holds —
@@ -491,6 +512,23 @@ export function decideBullS(
     }
     return words.length === 0 ? null : { since, words };
   };
+  /**
+   * PER LEG (`bs_per_leg`): one leg's stop clock — started when its own exit
+   * price stands at or past its line, left where it was without a price or on
+   * a stale reading, reset only on a fresh one under the line. A leg not held
+   * has no clock.
+   */
+  const legClock = (g: BullSGroup, opt: OptType, stale: boolean): number => {
+    if (!(opt === 'CE' ? g.ceOpen : g.peOpen)) return 0;
+    const since = (opt === 'CE' ? g.ceBreachSinceMs : g.peBreachSinceMs) ?? 0;
+    const px = exitPx(quoteOf(chain, g.strike, opt), basis);
+    if (px === null) {
+      notes.push(`stop on the ${fmt(g.strike)}${opt} held — no ${priceWord}, so the leg can be neither priced safe nor bought back`);
+      return since;
+    }
+    if (px >= legStopLine(opt === 'CE' ? g.ceEntry : g.peEntry, dials)) return since > 0 ? since : nowMs;
+    return stale ? since : 0;
+  };
   bs = {
     ...bs,
     groups: bs.groups.map((g0): BullSGroup => {
@@ -503,6 +541,9 @@ export function decideBullS(
             `stale ${fmt(Math.round((nowMs - staleSinceMs) / 1_000))}s` +
             (dials.bs_stale_exit_s > 0 ? ` of ${fmt(dials.bs_stale_exit_s)}s before it is closed` : ''),
         );
+      }
+      if (perLeg) {
+        return { ...g, ceBreachSinceMs: legClock(g, 'CE', st !== null), peBreachSinceMs: legClock(g, 'PE', st !== null) };
       }
       if (!g.ceOpen || !g.peOpen) return g; // a half straddle is closed in step 9
       const ce = exitPx(quoteOf(chain, g.strike, 'CE'), basis);
@@ -537,6 +578,21 @@ export function decideBullS(
     return (
       `stop at ${fmt(g.strike)}: ${priceWord}s ${fmt(ceX + peX)} ≥ ${fmt(dials.bs_stop_mult)} × entry ${fmt(g.ceEntry + g.peEntry)} ` +
       `= ${fmt(stopLine(g, dials))}, held ${fmt(Math.round(heldS * 10) / 10)}s`
+    );
+  };
+
+  /** PER LEG: one leg's confirmed stop, in words, or null when it does not fire this pass. */
+  const legStopFires = (g: BullSGroup, opt: OptType): string | null => {
+    const since = (opt === 'CE' ? g.ceBreachSinceMs : g.peBreachSinceMs) ?? 0;
+    if (!(opt === 'CE' ? g.ceOpen : g.peOpen) || since === 0) return null;
+    const heldS = (nowMs - since) / 1_000;
+    if (heldS < dials.bs_stop_confirm_s) return null;
+    const px = exitPx(quoteOf(chain, g.strike, opt), basis);
+    if (px === null) return null;
+    const entry = opt === 'CE' ? g.ceEntry : g.peEntry;
+    return (
+      `stop at ${fmt(g.strike)} ${opt}: ${priceWord} ${fmt(px)} ≥ ${fmt(dials.bs_stop_mult)} × entry ${fmt(entry)} ` +
+      `= ${fmt(legStopLine(entry, dials))}, held ${fmt(Math.round(heldS * 10) / 10)}s — buying back the ${opt} only`
     );
   };
 
@@ -603,6 +659,32 @@ export function decideBullS(
   for (const g of [...bs.groups].sort((a, b) => a.openedMs - b.openedMs)) {
     const ceH = heldLeg(legs, g.strike, 'CE');
     const peH = heldLeg(legs, g.strike, 'PE');
+    /*
+      PER LEG (LION-S): a straddle holding one leg is the ordinary state, not
+      a half to close, and there is no "true straddle" to balance. The stale
+      exit still buys back whatever the level holds; each held leg then stops
+      on its own price.
+    */
+    if (perLeg) {
+      if (dials.bs_stale_exit_s > 0 && g.staleSinceMs > 0 && nowMs - g.staleSinceMs >= dials.bs_stale_exit_s * 1_000) {
+        closes.push(...closeGroup(g, legs));
+        anyStale = true;
+        why.push(
+          `stale exit at ${fmt(g.strike)}: a held leg's quote has been stale ${fmt(Math.round((nowMs - g.staleSinceMs) / 1_000))}s, ` +
+            `past bs_stale_exit_s ${fmt(dials.bs_stale_exit_s)}s — buying back what the level holds`,
+        );
+        continue;
+      }
+      for (const opt of ['PE', 'CE'] as const) {
+        const stop = legStopFires(g, opt);
+        const leg = opt === 'CE' ? ceH : peH;
+        if (stop === null || leg === undefined) continue;
+        closes.push({ op: 'close', instrument: leg.instrument });
+        anyStop = true;
+        why.push(stop);
+      }
+      continue;
+    }
     // A HALF STRADDLE NEVER WAITS ON AN UNRELATED ORDER. Settled, the
     // reconciled flags say it. While an order of the book works, the legs
     // say it: a straddle that OPENED has no order of its own to wait for (its
@@ -693,11 +775,23 @@ export function decideBullS(
       `${fmt(inputs.minutesToExpiry)} min to expiry is inside the ${fmt(dials.bs_no_entry_before_expiry_min)}-min entry blackout`,
     );
   }
-  if (dials.bs_max_open > 0 && bs.groups.length >= dials.bs_max_open) {
-    return refuse(`${bs.groups.length} open straddles is bs_max_open`);
-  }
-  if (bs.groups.some((g) => sameStrike(g.strike, level))) {
-    return refuse(`${fmt(level)} already holds a straddle`);
+  /*
+    STRADDLE OR FILL LEG (`bs_per_leg`, LION-S). A level holding ONE leg —
+    its twin stopped out, or never filled — has the missing leg sold again on
+    this crossing, at the straddle's own size; it is not a new straddle, so
+    `bs_max_open` and the pyramid step do not apply. A level holding both is
+    occupied; a level holding nothing sells a straddle.
+  */
+  const fill = perLeg
+    ? bs.groups.find((g) => sameStrike(g.strike, level) && g.ceOpen !== g.peOpen)
+    : undefined;
+  if (fill === undefined) {
+    if (dials.bs_max_open > 0 && bs.groups.length >= dials.bs_max_open) {
+      return refuse(`${bs.groups.length} open straddles is bs_max_open`);
+    }
+    if (bs.groups.some((g) => sameStrike(g.strike, level))) {
+      return refuse(`${fmt(level)} already holds a straddle`);
+    }
   }
   const cool = bs.cooldowns.find((c) => sameStrike(c.strike, level));
   if (cool !== undefined) {
@@ -728,6 +822,45 @@ export function decideBullS(
   if (!listed) {
     return refuse(`${fmt(level)} is not listed with both a CE and a PE for this expiry — skipped, never substituted`);
   }
+  if (fill !== undefined) {
+    // Only the missing leg is sold, so only its quote is waited on.
+    const opt: OptType = fill.ceOpen ? 'PE' : 'CE';
+    const other: OptType = opt === 'CE' ? 'PE' : 'CE';
+    const legQ = opt === 'CE' ? ceQ : peQ;
+    if (legQ === null) return waiting(`${fmt(level)} has no ${opt} quote yet`);
+    const legIn = entryPx(legQ, basis);
+    if (legIn === null) {
+      return waiting(`${fmt(level)} has no ${basis === 0 ? 'last price' : 'bid'} to sell the ${opt} at yet`);
+    }
+    const lots = fill.lots;
+    if (dials.bs_margin_budget > 0) {
+      const est = marginWithEntry(inputs, level, lots, [[opt, legQ]]);
+      if ('missing' in est) return refuse(`margin budget: ${est.missing} — cannot estimate, no entry`);
+      if (est.usd > dials.bs_margin_budget) {
+        return refuse(
+          `margin budget: est $${est.usd.toFixed(2)} > $${fmt(dials.bs_margin_budget)} ` +
+            `(held $${est.held.toFixed(2)} + this leg $${est.entry.toFixed(2)})`,
+        );
+      }
+    }
+    const refilled: BullSGroup =
+      opt === 'CE'
+        ? { ...fill, ceOpen: true, ceEntry: legIn, ceBreachSinceMs: 0 }
+        : { ...fill, peOpen: true, peEntry: legIn, peBreachSinceMs: 0 };
+    const after = withBs(state, { ...bs, groups: bs.groups.map((g) => (g === fill ? refilled : g)) });
+    return acted(
+      'adjust',
+      'bs-entry',
+      withNotes(
+        `${crossing}: refilling the ${fmt(level)} ${opt}, ${lots} contracts, at ${fmt(legIn)} ` +
+          `(its stop ${fmt(legStopLine(legIn, dials))}; the ${other} is still held)`,
+        notes,
+      ),
+      [{ op: 'open', strike: level, optType: opt, side: 'Sell', lots }],
+      after,
+      mark,
+    );
+  }
   if (ceQ === null || peQ === null) {
     return waiting(`${fmt(level)} has no ${ceQ === null ? 'CE' : 'PE'} quote yet`);
   }
@@ -740,7 +873,7 @@ export function decideBullS(
 
   const size = bs.size > 0 ? bs.size : firstSize(dials);
   if (dials.bs_margin_budget > 0) {
-    const est = marginWithEntry(inputs, level, size, ceQ, peQ);
+    const est = marginWithEntry(inputs, level, size, [['CE', ceQ], ['PE', peQ]]);
     if ('missing' in est) return refuse(`margin budget: ${est.missing} — cannot estimate, no entry`);
     if (est.usd > dials.bs_margin_budget) {
       return refuse(
@@ -760,6 +893,7 @@ export function decideBullS(
     breachSinceMs: 0,
     filled: false,
     staleSinceMs: 0,
+    ...(perLeg ? { ceBreachSinceMs: 0, peBreachSinceMs: 0 } : {}),
   };
   const next = nextSize(size, dials);
   const after = withBs(state, { ...bs, groups: [...bs.groups, group], size: next });
@@ -768,7 +902,9 @@ export function decideBullS(
     'bs-entry',
     withNotes(
       `${crossing}: selling the ${fmt(level)} straddle, ${size} contracts, for ${fmt(ceIn + peIn)} ` +
-        `(stop ${fmt(stopLine(group, dials))}; next size ${next})`,
+        (perLeg
+          ? `(leg stops CE ${fmt(legStopLine(ceIn, dials))} / PE ${fmt(legStopLine(peIn, dials))}; next size ${next})`
+          : `(stop ${fmt(stopLine(group, dials))}; next size ${next})`),
       notes,
     ),
     [
@@ -790,8 +926,8 @@ function marginWithEntry(
   inputs: BullSInputs,
   level: number,
   size: number,
-  ceQ: Quote,
-  peQ: Quote,
+  /** The wings being sold: both for a straddle, one for a per-leg refill. */
+  wings: ReadonlyArray<readonly [OptType, Quote]>,
 ): { usd: number; held: number; entry: number } | { missing: string } {
   const index = inputs.ref as number;
   const mode = inputs.marginMode ?? null;
@@ -806,7 +942,7 @@ function marginWithEntry(
   }
   let entry = 0;
   const qty = size * inputs.chain.lotSize;
-  for (const [opt, q] of [['CE', ceQ], ['PE', peQ]] as const) {
+  for (const [opt, q] of wings) {
     const lev = leverageAt(inputs.leverage, level, opt);
     if (lev === null) return { missing: `no leverage for the ${fmt(level)} ${opt}` };
     const mark = quoteMark(q);
