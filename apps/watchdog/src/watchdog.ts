@@ -26,7 +26,7 @@
  * every reading is healthy, and resets on the first healthy tick.
  * NEVER THROWS: a failed read is an alert, not a crash.
  */
-import { isBackstopOrderId, type DxOrder, type DxPosition, type DxRest } from '@algomaker/dx'
+import { coverOf, isBackstopOrderId, isManualStop, type DxOrder, type DxPosition, type DxRest } from '@algomaker/dx'
 
 type Env = Readonly<Record<string, string | undefined>>
 
@@ -244,9 +244,10 @@ export function createWatchdog(deps: {
         for (const p of held) {
           if (p.size >= 0) continue
           const need = -p.size
+          // The desk's backstops, and the operator's own stop-loss on a leg they sold by hand.
           const cover = open
-            .filter((o) => o.product_id === p.product_id && isBackstopOrderId(o.client_order_id) && o.side === 'buy' && o.reduce_only === true)
-            .reduce((s, o) => s + (o.state === 'pending' ? o.size : o.unfilled_size), 0)
+            .filter((o) => o.product_id === p.product_id && o.side === 'buy' && o.reduce_only === true && (isBackstopOrderId(o.client_order_id) || isManualStop(o)))
+            .reduce((s, o) => s + coverOf(o), 0)
           const k = `${r.rail}|${p.product_symbol}`
           if (cover >= need) continue
           unprotected++
@@ -258,7 +259,7 @@ export function createWatchdog(deps: {
               severity: r.rail === 'live' ? 'critical' : 'warn',
               mode,
               key: `watchdog:${r.rail}:${p.product_symbol}:backstop`,
-              message: `WATCHDOG ${RAIL}: ${p.product_symbol} short ${need} has exchange backstops for only ${cover} — ${need - cover} of ${need} contracts have NO resting stop on Delta`,
+              message: `WATCHDOG ${RAIL}: ${p.product_symbol} short ${need} has exchange stops for only ${cover} — ${need - cover} of ${need} contracts have NO resting stop on Delta (no desk backstop, no stop-loss of your own)`,
             })
           }
         }

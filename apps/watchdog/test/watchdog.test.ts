@@ -210,6 +210,39 @@ test('a fully covered leg is not alerted; DX_BACKSTOP=0 turns the check off', as
   assert.equal(off.alerts.length, 0)
 })
 
+/** A stop the operator rested by hand in Delta's app: no client id, reduce-only buy. */
+const manual = (over: Partial<DxOrder> = {}): DxOrder => ({
+  id: 3, product_id: 11, product_symbol: CE, size: 10, unfilled_size: 10, side: 'buy', state: 'pending', reduce_only: true,
+  stop_order_type: 'stop_loss_order', client_order_id: null, ...over,
+})
+
+test('the operator\'s own stop-loss on Delta covers a short like a backstop; a take-profit or a resting buy does not', async () => {
+  // A hand-sold leg with the operator's own stop: covered, never alerted.
+  const own = fakeRest({ positions: [short(-10)], open: [manual()] })
+  const h = harness({ health: () => OK, live: own })
+  await h.at(0)
+  await h.at(100)
+  assert.equal(h.alerts.length, 0)
+  const rail = (await h.wd.tick()).rails['live']
+  assert.ok(rail !== undefined && 'unprotected' in rail)
+  assert.equal(rail.unprotected, 0)
+
+  // A take-profit (fires as the price FALLS) and a plain reduce-only buy are no protection.
+  const tp = manual({ id: 4, stop_order_type: 'take_profit_order' })
+  const limit = manual({ id: 5, stop_order_type: null, state: 'open' })
+  const bare = harness({ health: () => OK, live: fakeRest({ positions: [short(-10)], open: [tp, limit] }) })
+  await bare.at(0)
+  await bare.at(61)
+  assert.equal(bare.alerts.length, 1)
+  assert.match(bare.alerts[0]?.message ?? '', /10 of 10/)
+
+  // The two kinds add up: 4 of the operator's + 6 of the desk's cover a short 10.
+  const both = harness({ health: () => OK, live: fakeRest({ positions: [short(-10)], open: [manual({ size: 4, unfilled_size: 4 }), backstop(6)] }) })
+  await both.at(0)
+  await both.at(100)
+  assert.equal(both.alerts.length, 0)
+})
+
 test('Delta unreadable: alerted, nothing acted on', async () => {
   const rest: WatchdogRest = {
     positions: async () => { throw new Error('503') },

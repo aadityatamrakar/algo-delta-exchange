@@ -231,6 +231,28 @@ test('a Delta short no desk book accounts for is reported unprotected', () => {
   assert.deepEqual(p.unprotected, [{ symbol: CE, contracts: 3 }])
 })
 
+test('the operator\'s own stop-loss covers a short no book holds; a take-profit does not; it is never touched', () => {
+  const own = stopOrder({ id: 7, client_order_id: null, size: 10, unfilled_size: 10 })
+  const covered = plan({ desired: [], positions: [pos(CE, -10)], open: [own] })
+  assert.deepEqual(covered.unprotected, [])
+  assert.deepEqual([covered.place, covered.edit, covered.cancel], [[], [], []], 'the operator\'s stop is left alone')
+
+  const tp = stopOrder({ id: 8, client_order_id: null, stop_order_type: 'take_profit_order' })
+  assert.deepEqual(plan({ desired: [], positions: [pos(CE, -10)], open: [tp] }).unprotected, [{ symbol: CE, contracts: 10 }])
+
+  const part = stopOrder({ id: 9, client_order_id: null, size: 4, unfilled_size: 4 })
+  assert.deepEqual(plan({ desired: [], positions: [pos(CE, -10)], open: [part] }).unprotected, [{ symbol: CE, contracts: 6 }])
+})
+
+test('a hand-sold extra on a book\'s contract: the book still gets its full backstop, the operator\'s stop covers the extra', () => {
+  const own = stopOrder({ id: 7, client_order_id: null, size: 10, unfilled_size: 10 })
+  const p = plan({ positions: [pos(CE, -30), pos(PE, -20)], open: [own] })
+  assert.equal(p.place.find((o) => o.symbol === CE)?.size, 20, 'the book\'s 20, not reduced by the operator\'s stop')
+  assert.deepEqual(p.unprotected, [])
+  const bare = plan({ positions: [pos(CE, -30), pos(PE, -20)] })
+  assert.deepEqual(bare.unprotected, [{ symbol: CE, contracts: 10 }])
+})
+
 // ------------------------------------------------------------------- run
 
 function fakeRest(state: { positions: DxPosition[]; open: DxOrder[] }) {

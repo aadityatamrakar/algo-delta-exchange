@@ -42,7 +42,7 @@
  * NEVER THROWS out of `run`; failures are logged and alerted (`desk-alerts`).
  */
 import type { PlacedOrder } from '@algomaker/brokers'
-import { backstopClientOrderId, isBackstopOrderId, type DxOrder, type DxOrderRequest, type DxPosition, type DxRest } from '@algomaker/dx'
+import { backstopClientOrderId, coverOf, isBackstopOrderId, isManualStop, type DxOrder, type DxOrderRequest, type DxPosition, type DxRest } from '@algomaker/dx'
 
 export { DX_BACKSTOP_PREFIX, backstopClientOrderId, isBackstopOrderId } from '@algomaker/dx'
 import { createDxHeartbeat, retireDxHeartbeat, DX_HEARTBEAT_MS } from './dx-heartbeat.ts'
@@ -325,6 +325,17 @@ export function planBackstops(input: {
       limitPrice: ceilTick(l.stopPrice * (1 + input.limitPct), tick).toFixed(d),
     })
   }
+  // What no book accounts for may be the operator's own, sold by hand in
+  // Delta's app with their own stop-loss: that stop covers it. Counted only
+  // here, after the books — it never shrinks a book's backstop, and the
+  // operator's order is never placed, edited or cancelled below.
+  const symbolOf = new Map<number, string>()
+  for (const [s, v] of shortBy) symbolOf.set(v.productId, s)
+  for (const o of input.open) {
+    if (!isManualStop(o)) continue
+    const s = symbolOf.get(o.product_id)
+    if (s !== undefined) left.set(s, Math.max(0, (left.get(s) ?? 0) - coverOf(o)))
+  }
   const unprotected: { symbol: string; contracts: number }[] = []
   for (const [s, n] of left) if (n > 0) unprotected.push({ symbol: s, contracts: n })
 
@@ -502,8 +513,8 @@ export function createDxBackstop(deps: {
             severity: 'critical',
             key: `backstop:${rail}:${u.symbol}:unprotected`,
             message:
-              `${RAIL}: Delta shows ${u.contracts} short ${u.symbol} contracts that no desk book accounts for — ` +
-              'no stop line, so NO exchange backstop. Reconcile the book or flatten the position.',
+              `${RAIL}: Delta shows ${u.contracts} short ${u.symbol} contracts that no desk book accounts for ` +
+              'and no stop-loss of your own covers — NO exchange stop. Rest a stop on Delta, reconcile the book, or flatten the position.',
           })
         }
       }
