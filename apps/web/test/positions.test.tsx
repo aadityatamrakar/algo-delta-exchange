@@ -956,7 +956,8 @@ describe('summaryRows', () => {
     tradingsymbol: 'ITC26AUG280PE', strike: 280, type: 'PE', qty: -1725,
     entry: 5, entries: [5], fills: 1, mark: 4.6, iv: 0.22, delta: -0.41,
     lotSize: 1725,
-    posDelta: 707.25, pnl: 690, quote: null, unpriced: false, modelPriced: false, ...over,
+    posDelta: 707.25, pnl: 690, quote: null, unpriced: false, modelPriced: false,
+    intrinsic: null, posIntrinsic: null, ...over,
   })
 
   test('with a realised figure the block is Open, Realised, and their sum', () => {
@@ -1064,7 +1065,7 @@ describe('sinceEntryTotal with a closing cost', () => {
   const row = (pnl: number | null): PositionRow => ({
     tradingsymbol: 'C-BTC-80000-061126', strike: 80000, type: 'CE', qty: -0.1, entry: 731.4, entries: [731.4],
     fills: 1, mark: 917, iv: 0.358, delta: 0.623, lotSize: 0.001, posDelta: -0.062, pnl, quote: null,
-    unpriced: false, modelPriced: false,
+    unpriced: false, modelPriced: false, intrinsic: null, posIntrinsic: null,
   })
 
   test('open + realised − closing fees: the Net if closed now row', () => {
@@ -1437,5 +1438,98 @@ describe('the Protect control on a leg row', () => {
     )
     await waitFor(() => expect(screen.getByText('ITC 280 PE')).toBeTruthy())
     expect(screen.getByRole('button', { name: 'Protect' })).toBeTruthy()
+  })
+})
+
+/**
+ * INTRINSIC VALUE, per contract and for the book (operator, 2026-11-05: "we
+ * want to see it in total and each strike").
+ *
+ * Per share it is what the contract is worth at today's spot if it expired
+ * now — a call's spot − strike, a put's strike − spot, never below 0. The row
+ * also carries its signed share, `qty x intrinsic`, signed like P&L: a short
+ * leg in the money is NEGATIVE, because that is what the book would owe at
+ * expiry if spot held. The strong summary row totals that share, so the foot
+ * of the column is checkable against the rows above it.
+ */
+describe('intrinsic value', () => {
+  const ITM_PUT = leg({ deskTag: 'L1', tradingsymbol: 'ITC26AUG280PE', qty: -1725, entryPrice: 5, strike: 280 })
+  const OTM_PUT = leg({ deskTag: 'L2', tradingsymbol: 'ITC26AUG277.5PE', qty: -1725, entryPrice: 4.7 })
+  const ITM_CALL = leg({ deskTag: 'L3', tradingsymbol: 'ITC26AUG275CE', qty: 1725, entryPrice: 6, strike: 275, type: 'CE' })
+
+  test('per share off the spot, and the row’s signed share of it', () => {
+    const rows = consolidatePositions([ITM_PUT, OTM_PUT, ITM_CALL], undefined, undefined, 279)
+    const by = (s: string): PositionRow | undefined => rows.find((r) => r.tradingsymbol === s)
+
+    // 280 PE at 279: 1.00 in the money, and a short owes it.
+    expect(by('ITC26AUG280PE')?.intrinsic).toBe(1)
+    expect(by('ITC26AUG280PE')?.posIntrinsic).toBe(-1725)
+    // 277.5 PE at 279: out of the money — zero, and a plain 0, not −0.
+    expect(by('ITC26AUG277.5PE')?.intrinsic).toBe(0)
+    expect(by('ITC26AUG277.5PE')?.posIntrinsic).toBe(0)
+    // 275 CE at 279: 4.00, held long, so the book owns it.
+    expect(by('ITC26AUG275CE')?.intrinsic).toBe(4)
+    expect(by('ITC26AUG275CE')?.posIntrinsic).toBe(6900)
+  })
+
+  test('no spot, no intrinsic — null, never a confident 0', () => {
+    const [row] = consolidatePositions([ITM_PUT], undefined, undefined, null)
+    expect(row?.intrinsic).toBe(null)
+    expect(row?.posIntrinsic).toBe(null)
+  })
+
+  test('needs no mark: a leg the feed cannot price still has its intrinsic', () => {
+    const [row] = consolidatePositions([ITM_PUT], bookGreeks([], ['ITC26AUG280PE']), undefined, 279)
+    expect(row?.mark).toBe(null)
+    expect(row?.intrinsic).toBe(1)
+  })
+
+  test('the strong summary row totals the book’s intrinsic; the working rows do not', () => {
+    const rows = consolidatePositions([ITM_PUT, OTM_PUT, ITM_CALL], undefined, undefined, 279)
+    const block = summaryRows(rows, -100)
+    expect(block.map((r) => r.posIntrinsic)).toEqual([null, null, -1725 + 0 + 6900])
+    // Single-row block too.
+    expect(summaryRows(rows, null)[0]?.posIntrinsic).toBe(5175)
+    // And with the venue's fee lines: only the answer carries it.
+    const fees = summaryRows(rows, -100, undefined, { feesPaid: 1, closeFees: 2 })
+    expect(fees.map((r) => r.posIntrinsic)).toEqual([null, null, null, null, 5175])
+  })
+
+  test('unknown the moment any row has none', () => {
+    const rows = consolidatePositions([ITM_PUT], undefined, undefined, null)
+    expect(summaryRows(rows, null)[0]?.posIntrinsic).toBe(null)
+  })
+
+  test('on screen: an Intrinsic column, per share on the row, the book’s total at the foot', async () => {
+    installFetch(({ path }) => {
+      if (path === '/v1/desk/positions') {
+        return {
+          body: {
+            // Spot 278: the short 280 PE is 2.00 in the money.
+            tag: TAG, symbol: 'ITC', mode: 'paper', spot: 278, asOf: Date.now(), complete: true,
+            legs: [ITM_PUT],
+            greeks: bookGreeks([priced({ tradingsymbol: 'ITC26AUG280PE', qty: -1725, delta: -0.41 })]),
+          },
+        }
+      }
+      if (path === '/v1/desk/diff') {
+        return { body: { matched: [], mismatched: [], deskOnly: [], bridgeOnly: [], inSync: true, declaredAt: null } }
+      }
+      return { body: {} }
+    })
+    render(
+      <AuthProvider>
+        <ModeProvider>
+          <PositionsPage mode="paper" tag={TAG} />
+        </ModeProvider>
+      </AuthProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('ITC 280 PE')).toBeTruthy())
+
+    expect(screen.getByText('Intrinsic')).toBeTruthy()
+    expect(screen.getByText('2.00')).toBeTruthy()
+    // −1,725 x 2.00: under the per-share figure on the row, and again as the
+    // book's total on the Total row — one contract, so the same number twice.
+    expect(screen.getAllByText('-3,450')).toHaveLength(2)
   })
 })

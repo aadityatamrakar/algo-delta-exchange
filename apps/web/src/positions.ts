@@ -63,6 +63,23 @@ export interface PositionRow extends Record<string, unknown> {
    */
   pnl: number | null
   /**
+   * INTRINSIC VALUE PER SHARE — what the contract is worth at today's spot if
+   * it expired now: a call's spot − strike, a put's strike − spot, never below
+   * 0. Per share like `entry` and `mark`, so the three read side by side and
+   * `mark − intrinsic` is the time value still in the price.
+   *
+   * NEEDS NO MARK, only a spot: a leg the feed cannot price still has one.
+   * Null without a spot, or on a leg this union does not call CE/PE (a future)
+   * — never 0, which would read as "out of the money" when it is unknown.
+   */
+  intrinsic: number | null
+  /**
+   * `qty x intrinsic`: the row's signed share of the book's intrinsic, signed
+   * like P&L — a SHORT leg in the money is NEGATIVE, because that is what the
+   * book would owe at expiry if spot held. The strong summary row sums it.
+   */
+  posIntrinsic: number | null
+  /**
    * The bid/ask pair the mark was valued off — a long at its bid, a short at
    * its ask. Null when the server sent none (a book that could not answer, or
    * a bridge a deploy behind).
@@ -99,6 +116,23 @@ export interface PositionRow extends Record<string, unknown> {
 }
 
 /**
+ * Intrinsic value per share at `spot`: a call's spot − strike, a put's
+ * strike − spot, floored at 0. Null without a usable spot, and on any leg type
+ * that is not CE/PE — a future has no strike to be in the money against.
+ */
+export function intrinsicOf(
+  type: BridgeLeg['type'] | string,
+  strike: number,
+  spot: number | null | undefined,
+): number | null {
+  if (typeof spot !== 'number' || !Number.isFinite(spot) || !(spot > 0)) return null
+  if (typeof strike !== 'number' || !Number.isFinite(strike)) return null
+  if (type === 'CE') return Math.max(spot - strike, 0)
+  if (type === 'PE') return Math.max(strike - spot, 0)
+  return null
+}
+
+/**
  * The book's legs, joined to their greeks and grouped onto their contract.
  *
  * Rows come back in first-seen book order. Per contract:
@@ -124,6 +158,8 @@ export function consolidatePositions(
   legs: readonly BridgeLeg[],
   greeks: BookGreeks | undefined,
   quotes?: Readonly<Record<string, LegQuote>>,
+  /** The underlying's price, for each row's intrinsic value. Absent: none. */
+  spot?: number | null,
 ): PositionRow[] {
   const unpriced = new Set(greeks?.unpriced ?? [])
   const modelPriced = new Set(greeks?.fallbackPriced ?? [])
@@ -171,7 +207,8 @@ export function consolidatePositions(
         qty: leg.qty, entry: leg.entryPrice,
         mark: p?.mark ?? null, iv: p?.iv ?? null, delta: p?.delta ?? null,
         lotSize: leg.instrument.lotSize,
-        posDelta: null, pnl: null, quote: quotes?.[symbol] ?? null,
+        posDelta: null, pnl: null, intrinsic: intrinsicOf(leg.type, leg.strike, spot),
+        posIntrinsic: null, quote: quotes?.[symbol] ?? null,
         unpriced: unpriced.has(symbol),
         modelPriced: modelPriced.has(symbol),
         fills: 1, entries: [leg.entryPrice],
@@ -238,6 +275,15 @@ export function consolidatePositions(
     overnight. `bookTotals.mtm` — the tile's fallback — is the one these sum to.
   */
   for (const row of rows) row.pnl = row.mark === null ? null : row.qty * (row.mark - row.entry)
+
+  /*
+    THE ROW'S SHARE OF THE BOOK'S INTRINSIC, off the merged qty — the same
+    reason position delta is derived rather than summed. An out-of-the-money
+    row is a plain 0, not the −0 a short's `qty x 0` would produce.
+  */
+  for (const row of rows) {
+    row.posIntrinsic = row.intrinsic === null ? null : row.intrinsic === 0 ? 0 : row.qty * row.intrinsic
+  }
 
   return rows
 }
@@ -337,10 +383,17 @@ export function summaryRows(
       : over.reduce((n, r) => n + (field(r) ?? 0), 0)
   const openPnl = sumOrNull(rows, (r) => r.pnl)
   const posDelta = sumOrNull(deltaRows, (r) => r.posDelta)
+  /*
+    THE BOOK'S INTRINSIC, on the strong row beside its delta — over EVERY row,
+    whatever the delta view: like P&L it is money, and money does not become
+    shorts-only when the steering is. Unknown the moment any row has none.
+  */
+  const posIntrinsic = sumOrNull(rows, (r) => r.posIntrinsic)
   /** Everything a sentinel dashes out, shared so the rows cannot drift. */
   const blank: PositionRow = {
     tradingsymbol: '', strike: 0, type: 'CE', qty: 0, entry: 0, entries: [],
     fills: 0, mark: null, pnl: null, quote: null, iv: null, delta: null, posDelta: null,
+    intrinsic: null, posIntrinsic: null,
     // A summary row is not a contract, so it has no lot size — the cells that
     // would use one (Protect) render nothing on an `isTotal` row anyway.
     lotSize: 0,
@@ -350,13 +403,13 @@ export function summaryRows(
   if (realised === null) {
     if (close === undefined) {
       return [{
-        ...blank, tradingsymbol: 'Total', pnl: openPnl, posDelta,
+        ...blank, tradingsymbol: 'Total', pnl: openPnl, posDelta, posIntrinsic,
         summary: { label: 'Total', note: 'open, since entry', strong: true },
       }]
     }
     return [{
       ...blank, tradingsymbol: 'Total',
-      pnl: openPnl === null || close === null ? null : openPnl - close, posDelta,
+      pnl: openPnl === null || close === null ? null : openPnl - close, posDelta, posIntrinsic,
       summary: { label: 'Total', note: 'open, since entry, less closing fees', strong: true },
     }]
   }
@@ -390,7 +443,7 @@ export function summaryRows(
       },
       {
         ...blank, tradingsymbol: 'Net if closed now',
-        pnl: openPnl === null || close === null ? null : openPnl + realised - close, posDelta,
+        pnl: openPnl === null || close === null ? null : openPnl + realised - close, posDelta, posIntrinsic,
         summary: { label: 'Net if closed now', note: 'what the account would get', strong: true },
       },
     ]
@@ -406,7 +459,7 @@ export function summaryRows(
     },
     {
       ...blank, tradingsymbol: 'Total',
-      pnl: openPnl === null ? null : openPnl + realised, posDelta,
+      pnl: openPnl === null ? null : openPnl + realised, posDelta, posIntrinsic,
       summary: { label: 'Total', note: 'net, open + realised', strong: true },
     },
   ]

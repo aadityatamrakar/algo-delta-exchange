@@ -84,11 +84,13 @@
   box-shadow: 0 0 0 1px var(--color-border-emphasized);
 }
 
-.chain-greeks-toggle {
+.chain-greeks-toggle,
+.chain-intrinsic-toggle {
   box-shadow: inset 0 0 0 1px var(--color-border);
 }
 
-.chain-greeks-toggle[aria-pressed='true'] {
+.chain-greeks-toggle[aria-pressed='true'],
+.chain-intrinsic-toggle[aria-pressed='true'] {
   background: color-mix(in srgb, var(--chain-heat) 16%, var(--color-background-card));
   box-shadow: inset 0 0 0 1px var(--color-border-purple);
 }
@@ -455,6 +457,11 @@
 
 .chain-td.chain-c-iv:not([data-heat]) {
   background-image: none;
+}
+
+/* Intrinsic: an out-of-the-money side's 0 recedes, so the in-the-money figures read. */
+.chain-v.chain-zero {
+  color: var(--color-text-disabled);
 }
 
 /* A missing figure is a quiet dot, not a wall of dashes. */

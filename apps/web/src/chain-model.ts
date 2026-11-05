@@ -109,6 +109,17 @@ export function itmSides(strike: number, spot: number | null): { ce: boolean; pe
 }
 
 /**
+ * Each side's intrinsic value at the index: a call's index − strike, a put's
+ * strike − index, never below 0 — what the option would settle for if it
+ * expired now. Measured off the INDEX, which is what a Delta option settles
+ * on. No index, no figure: null, never a 0 that reads as "out of the money".
+ */
+export function intrinsicValue(strike: number, spot: number | null): { ce: number | null; pe: number | null } {
+  if (spot === null || !Number.isFinite(spot) || !Number.isFinite(strike)) return { ce: null, pe: null }
+  return { ce: Math.max(spot - strike, 0), pe: Math.max(strike - spot, 0) }
+}
+
+/**
  * Where the spot line goes: the number of strikes at or below the index, so
  * the line is drawn before row `i` — between the last strike under the price
  * and the first above it. 0 puts it above every row, `strikes.length` below

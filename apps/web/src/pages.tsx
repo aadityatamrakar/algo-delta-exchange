@@ -605,7 +605,7 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
     separate because it is the number the store, the desk and every close-by-tag
     action still work in, and the header below has to be able to say both.
   */
-  const rows: PositionRow[] = consolidatePositions(pos?.legs ?? [], g, pos?.quotes)
+  const rows: PositionRow[] = consolidatePositions(pos?.legs ?? [], g, pos?.quotes, pos?.spot ?? null)
   // THE page's one P&L: open-vs-entry plus realised, shared with the table's
   // Total row so the tile and the foot cannot disagree. See `sinceEntryTotal`.
   // Where the venue charges to close (Delta: `closeFees` on the payload) the
@@ -776,6 +776,45 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
               <Text size="sm" color="secondary">
                 {`${r.quote.bid.toFixed(2)} / ${r.quote.ask.toFixed(2)}${r.quote.basis === 'snapshot' ? ' · last session' : ''}`}
               </Text>
+            )}
+          </VStack>
+        )
+      } },
+    /*
+      INTRINSIC VALUE (operator, 2026-11-05: "we want to see it in total and
+      each strike").
+
+      THE ROW reads per share, beside Entry and Mark, so `Mark − Intrinsic` is
+      the time value still in the price — the same per-strike figure the chain
+      shows. Under it, when the leg is in the money, its signed share of the
+      book (`qty x intrinsic`, a short owes it, so negative): those are what
+      the foot of the column sums. An out-of-the-money leg carries no second
+      line — there is nothing to add.
+
+      THE TOTAL ROW is the book's intrinsic in money, whole book whatever the
+      shorts-only view — like P&L, it is what the open legs would settle for
+      if spot held to expiry, before the premium.
+
+      Em dash without a spot: intrinsic is "how far in the money", and there
+      is no distance without a price to measure it from.
+    */
+    { key: 'intrinsic', header: 'Intrinsic', align: 'end', width: pixel(110),
+      renderCell: (r) => {
+        if (r.isTotal === true) {
+          return r.posIntrinsic === null
+            ? <Text color="secondary">—</Text>
+            : (
+              <Text weight="bold" style={sign(r.posIntrinsic)}>
+                {money(r.posIntrinsic)}
+              </Text>
+            )
+        }
+        if (r.intrinsic === null) return <Text color="secondary">—</Text>
+        return (
+          <VStack gap={0} style={{ alignItems: 'flex-end' }}>
+            <Text>{inr(r.intrinsic, 2)}</Text>
+            {r.posIntrinsic === null || r.posIntrinsic === 0 ? null : (
+              <Text size="sm" color="secondary">{money(r.posIntrinsic)}</Text>
             )}
           </VStack>
         )

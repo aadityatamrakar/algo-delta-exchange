@@ -9,10 +9,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { installFetch } from './http.tsx'
 import type { ChainRowWire, ChainSide } from '../src/api.ts'
-import { ChainPage, ChainTable, ExpiryPills, MISSING } from '../src/chain.tsx'
+import { ChainPage, ChainTable, ExpiryPills, MISSING, callColumns, putColumns } from '../src/chain.tsx'
 import { OiChart } from '../src/chain-oi-chart.tsx'
 import {
-  compactNumber, daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, indexChange, isFar, itmSides, maxPain,
+  compactNumber, daysToExpiry, expiryPillLabel, formatCountdown, groupExpiries, indexChange, intrinsicValue, isFar,
+  itmSides, maxPain,
   niceCeil, oiWalls, perContractText, unitsLine,
   putCallRatio, spotLineIndex,
 } from '../src/chain-model.ts'
@@ -31,7 +32,7 @@ const ROWS: ChainRowWire[] = [
   { strike: 76600, CE: side({ oi: 5 }), PE: side({ oi: 60 }) },
 ]
 
-function table(rows: readonly ChainRowWire[], spot: number | null): ReturnType<typeof render> {
+function table(rows: readonly ChainRowWire[], spot: number | null, intrinsic = false): ReturnType<typeof render> {
   return render(
     <ChainTable
       rows={rows}
@@ -40,6 +41,7 @@ function table(rows: readonly ChainRowWire[], spot: number | null): ReturnType<t
       expiry="2026-11-06"
       density="full"
       greeks={false}
+      intrinsic={intrinsic}
       msToSettle={3 * 86_400_000}
     />,
   )
@@ -71,6 +73,74 @@ describe('in-the-money shading', () => {
     const above = sides('76,400')
     expect(above.ce.every((c) => c.dataset.itm === 'false')).toBe(true)
     expect(above.pe.every((c) => c.dataset.itm === 'true')).toBe(true)
+  })
+})
+
+/**
+ * INTRINSIC VALUE PER STRIKE (operator, 2026-11-05). A call's index − strike,
+ * a put's strike − index, never below 0 — measured against the INDEX, which
+ * is what a Delta option settles on. It needs no quote, so a side the feed has
+ * not priced still states it; `mark − intrinsic` is the time value, which the
+ * hover carries.
+ */
+describe('intrinsic value', () => {
+  test('arithmetic: in the money by the distance, out of it by nothing, no index no figure', () => {
+    expect(intrinsicValue(76200, 76290)).toEqual({ ce: 90, pe: 0 })
+    expect(intrinsicValue(76400, 76290)).toEqual({ ce: 0, pe: 110 })
+    expect(intrinsicValue(76290, 76290)).toEqual({ ce: 0, pe: 0 })
+    expect(intrinsicValue(76200, null)).toEqual({ ce: null, pe: null })
+  })
+
+  test('the column sits on the inside of IV, next to the prices, mirrored on the put side', () => {
+    expect(callColumns('full', false, true)).toEqual(['oi', 'delta', 'iv', 'intr', 'bid', 'mark', 'ask'])
+    expect(putColumns('full', false, true)).toEqual(['bid', 'mark', 'ask', 'intr', 'iv', 'delta', 'oi'])
+    expect(callColumns('compact', false, true)).toEqual(['oi', 'iv', 'intr', 'mark'])
+    expect(putColumns('compact', false, true)).toEqual(['mark', 'intr', 'iv', 'oi'])
+    // Off: exactly the columns the chain always had.
+    expect(callColumns('full', false, false)).toEqual(['oi', 'delta', 'iv', 'bid', 'mark', 'ask'])
+  })
+
+  test('each side states its own: the ITM side its distance, the OTM side a quiet zero', () => {
+    table(ROWS, 76290, true)
+    const cell = (label: string, s: 'ce' | 'pe'): HTMLElement =>
+      sides(label)[s].find((c) => c.classList.contains('chain-c-intr')) as HTMLElement
+    expect(cell('76,200', 'ce').textContent).toBe('90.00')
+    expect(cell('76,200', 'pe').textContent).toBe('0.00')
+    expect(cell('76,200', 'pe').querySelector('.chain-zero')).not.toBe(null)
+    expect(cell('76,400', 'ce').textContent).toBe('0.00')
+    expect(cell('76,400', 'pe').textContent).toBe('110.00')
+    // The hover splits the mark: 100 = 90 intrinsic + 10 time value.
+    expect(cell('76,200', 'ce').title).toContain('intrinsic 90.00   time value 10.00')
+  })
+
+  test('needs no quote — an unpriced side still has its intrinsic', () => {
+    table([{ strike: 76400, CE: side(), PE: null }], 76290, true)
+    const pe = sides('76,400').pe
+    expect(pe.find((c) => c.classList.contains('chain-c-intr'))?.textContent).toBe('110.00')
+    // Every QUOTED figure on that side is still the missing dot.
+    for (const c of pe.filter((x) => !x.classList.contains('chain-c-intr'))) expect(c.textContent).toBe(MISSING)
+  })
+
+  test('no index, no intrinsic — the missing dot, never a zero', () => {
+    table(ROWS, null, true)
+    const ce = sides('76,200').ce.find((c) => c.classList.contains('chain-c-intr')) as HTMLElement
+    expect(ce.textContent).toBe(MISSING)
+  })
+
+  test('the page shows it by default, and the toggle takes it off', async () => {
+    installFetch(({ path }) => {
+      if (path === '/v1/desk/chain/BTC/expiries') return { body: { expiries: ['2026-11-06'] } }
+      if (path === '/v1/desk/chain/BTC') return { body: { expiry: '2026-11-06', spot: 76290, future: null, rows: ROWS } }
+      return { body: {} }
+    })
+    render(<ChainPage />)
+    await screen.findByRole('rowheader', { name: '76,200' })
+    const toggle = screen.getByRole('button', { name: 'Intrinsic' })
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelectorAll('th.chain-c-intr')).toHaveLength(2)
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(document.querySelectorAll('th.chain-c-intr')).toHaveLength(0)
   })
 })
 
@@ -187,7 +257,7 @@ describe('live cells and far strikes', () => {
     const { rerender } = table(r(99), 76290)
     const bid = (): HTMLElement =>
       sides('76,200').ce.find((c) => c.classList.contains('chain-c-bid'))?.querySelector('.chain-v') as HTMLElement
-    const props = { spot: 76290, underlying: 'BTC', expiry: '2026-11-06', density: 'full' as const, greeks: false, msToSettle: 86_400_000 }
+    const props = { spot: 76290, underlying: 'BTC', expiry: '2026-11-06', density: 'full' as const, greeks: false, intrinsic: false, msToSettle: 86_400_000 }
     rerender(<ChainTable rows={r(105)} {...props} />)
     expect(bid().classList.contains('chain-up')).toBe(true)
     rerender(<ChainTable rows={r(90)} {...props} />)

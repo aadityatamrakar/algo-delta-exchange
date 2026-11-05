@@ -31,7 +31,7 @@ import { asOf, usePoll } from './shell.tsx'
 import { DX, VENUE } from './venue.ts'
 import {
   atmIv, atmStraddle, atmStrike, expiryLabel, expiryPillLabel, daysToExpiry, formatCountdown,
-  groupExpiries, heatStep, indexChange, isFar, itmSides, maxPain, oiWalls, putCallRatio, settlesAt,
+  groupExpiries, heatStep, indexChange, intrinsicValue, isFar, itmSides, maxPain, oiWalls, putCallRatio, settlesAt,
   perContractText, spotLineIndex, unitsLine, wallRank, type OiWalls,
 } from './chain-model.ts'
 import { OiChart } from './chain-oi-chart.tsx'
@@ -82,7 +82,7 @@ function oiText(v: number | null | undefined): string {
 
 // ---------------------------------------------------------------- columns
 
-type ColKey = 'oi' | 'vega' | 'theta' | 'gamma' | 'delta' | 'iv' | 'bid' | 'mark' | 'ask'
+type ColKey = 'oi' | 'vega' | 'theta' | 'gamma' | 'delta' | 'iv' | 'intr' | 'bid' | 'mark' | 'ask'
 
 interface Col {
   readonly label: string
@@ -98,6 +98,17 @@ const COLS: Record<ColKey, Col> = {
   gamma: { label: 'Gamma', title: 'Gamma', text: (s) => upTo(s.gamma, 6), value: (s) => s.gamma },
   delta: { label: 'Delta', title: 'Delta', text: (s) => fixed(s.delta, 2), value: (s) => s.delta },
   iv: { label: 'IV', title: 'Mark implied volatility', text: (s) => pct(s.iv), value: (s) => s.iv },
+  /*
+    NOT A QUOTE FIELD — intrinsic is the strike against the index, so the cell
+    reads it off the row's view (`SideView.intrinsic`) and renders it even on
+    a side the feed has not priced. These two are never called for it.
+  */
+  intr: {
+    label: 'Intrinsic',
+    title: 'Intrinsic value at the index: call index − strike, put strike − index, never below 0',
+    text: () => MISSING,
+    value: () => null,
+  },
   bid: { label: 'Bid', title: 'Best bid', text: (s) => fixed(s.bid, 2), value: (s) => s.bid },
   mark: { label: 'Mark', title: 'Exchange mark price', text: (s) => fixed(s.mark, 2), value: (s) => s.mark },
   ask: { label: 'Ask', title: 'Best ask', text: (s) => fixed(s.ask, 2), value: (s) => s.ask },
@@ -110,15 +121,17 @@ export type Density = 'compact' | 'full'
  * everything except bid / mark / ask, which read the same way on both sides —
  * a trader looks for the bid left of the ask, whichever side it is on.
  */
-export function callColumns(density: Density, greeks: boolean): ColKey[] {
+export function callColumns(density: Density, greeks: boolean, intrinsic = false): ColKey[] {
   const g: ColKey[] = greeks ? ['vega', 'theta', 'gamma'] : []
+  // Beside the prices, so `mark − intrinsic` — the time value — is read across one gap.
+  const i: ColKey[] = intrinsic ? ['intr'] : []
   return density === 'compact'
-    ? ['oi', ...g, 'iv', 'mark']
-    : ['oi', ...g, 'delta', 'iv', 'bid', 'mark', 'ask']
+    ? ['oi', ...g, 'iv', ...i, 'mark']
+    : ['oi', ...g, 'delta', 'iv', ...i, 'bid', 'mark', 'ask']
 }
 
-export function putColumns(density: Density, greeks: boolean): ColKey[] {
-  const call = callColumns(density, greeks)
+export function putColumns(density: Density, greeks: boolean, intrinsic = false): ColKey[] {
+  const call = callColumns(density, greeks, intrinsic)
   const isTouch = (k: ColKey): boolean => k === 'bid' || k === 'mark' || k === 'ask'
   return [...call.filter(isTouch), ...call.filter((k) => !isTouch(k)).reverse()]
 }
@@ -159,10 +172,11 @@ function Flash(props: { value: number | null | undefined; text: string; classNam
 const FLASHES: ReadonlySet<ColKey> = new Set<ColKey>(['bid', 'mark', 'ask', 'oi'])
 
 /** A figure that does not flash. */
-function Fig(props: { text: string }): React.ReactElement {
+function Fig(props: { text: string; zero?: boolean }): React.ReactElement {
   const missing = props.text === MISSING
+  const cls = missing ? 'chain-v chain-missing' : props.zero === true ? 'chain-v chain-zero' : 'chain-v'
   return (
-    <span className={missing ? 'chain-v chain-missing' : 'chain-v'} aria-label={missing ? 'no quote' : undefined}>
+    <span className={cls} aria-label={missing ? 'no quote' : undefined}>
       {props.text}
     </span>
   )
@@ -171,14 +185,23 @@ function Fig(props: { text: string }): React.ReactElement {
 // ----------------------------------------------------------------- a row
 
 /** The hover text for one side: everything the row may have no room for. */
-function sideTitle(type: 'Call' | 'Put', strike: number, s: ChainSide | null | undefined): string {
+function sideTitle(
+  type: 'Call' | 'Put',
+  strike: number,
+  s: ChainSide | null | undefined,
+  intrinsic: number | null,
+): string {
   const head = `${type} ${upTo(strike, 2)}`
-  if (s === null || s === undefined) return `${head}: no quote`
+  const intr = `intrinsic ${fixed(intrinsic, 2)}`
+  if (s === null || s === undefined) return intrinsic === null ? `${head}: no quote` : `${head}: no quote\n${intr}`
+  // The mark, split: what is intrinsic, and the time value still on top of it.
+  const tv = finite(s.mark) && intrinsic !== null ? s.mark - intrinsic : null
   return [
     head,
     `bid ${fixed(s.bid, 2)} × ${upTo(s.bidSize, 3)}`,
     `ask ${fixed(s.ask, 2)} × ${upTo(s.askSize, 3)}`,
     `mark ${fixed(s.mark, 2)}   IV ${pct(s.iv)}`,
+    `${intr}   time value ${fixed(tv, 2)}`,
     `delta ${fixed(s.delta, 2)}   gamma ${upTo(s.gamma, 6)}`,
     `theta ${fixed(s.theta, 2)}   vega ${fixed(s.vega, 2)}`,
   ].join('\n')
@@ -193,6 +216,8 @@ interface SideView {
   readonly heat: number | null
   /** 1 or 2 when this strike is the side's highest or second-highest OI. */
   readonly rank: 1 | 2 | null
+  /** This side's intrinsic value at the index; null without an index. */
+  readonly intrinsic: number | null
 }
 
 function SideCells(props: {
@@ -202,8 +227,8 @@ function SideCells(props: {
   cols: readonly ColKey[]
   contractSize: number
 }): React.ReactElement {
-  const { side, itm, oiPct, heat, rank } = props.view
-  const title = sideTitle(props.type, props.strike, side)
+  const { side, itm, oiPct, heat, rank, intrinsic } = props.view
+  const title = sideTitle(props.type, props.strike, side, intrinsic)
   /** A price cell's hover leads with what one contract of it costs. */
   const priceTitle = (v: number | null | undefined): string => {
     const each = perContractText(v, props.contractSize, CHAIN_VENUE.inrPerUnit)
@@ -215,8 +240,9 @@ function SideCells(props: {
     <>
       {props.cols.map((key) => {
         const col = COLS[key]
-        const value = quoted ? col.value(side) : null
-        const text = quoted ? col.text(side) : MISSING
+        const isIntr = key === 'intr'
+        const value = isIntr ? intrinsic : quoted ? col.value(side) : null
+        const text = isIntr ? fixed(intrinsic, 2) : quoted ? col.text(side) : MISSING
         const isHeat = key === 'iv' && heat !== null
         return (
           <td
@@ -246,7 +272,9 @@ function SideCells(props: {
                 </span>
                 <Flash value={value} text={text} />
               </span>
-            ) : FLASHES.has(key) ? <Flash value={value} text={text} /> : <Fig text={text} />}
+            ) : FLASHES.has(key) ? <Flash value={value} text={text} />
+              // An out-of-the-money side's 0 is a quiet zero, so the in-the-money figures stand out.
+              : <Fig text={text} zero={isIntr && intrinsic === 0} />}
           </td>
         )
       })}
@@ -265,7 +293,8 @@ function sameSide(a: ChainSide | null | undefined, b: ChainSide | null | undefin
 }
 
 function sameView(a: SideView, b: SideView): boolean {
-  return a.itm === b.itm && a.oiPct === b.oiPct && a.heat === b.heat && a.rank === b.rank && sameSide(a.side, b.side)
+  return a.itm === b.itm && a.oiPct === b.oiPct && a.heat === b.heat && a.rank === b.rank
+    && a.intrinsic === b.intrinsic && sameSide(a.side, b.side)
 }
 
 interface RowProps {
@@ -329,6 +358,8 @@ export function ChainTable(props: {
   expiry: string
   density: Density
   greeks: boolean
+  /** The intrinsic-value column on each side. */
+  intrinsic: boolean
   /** Fixed per expiry for the dimming, so the table never re-renders on the clock. */
   msToSettle: number
   /** The top two OI strikes per side. Absent: computed here. */
@@ -340,8 +371,14 @@ export function ChainTable(props: {
   contractSize?: number
 }): React.ReactElement {
   const { rows, spot } = props
-  const ceCols = useMemo(() => callColumns(props.density, props.greeks), [props.density, props.greeks])
-  const peCols = useMemo(() => putColumns(props.density, props.greeks), [props.density, props.greeks])
+  const ceCols = useMemo(
+    () => callColumns(props.density, props.greeks, props.intrinsic),
+    [props.density, props.greeks, props.intrinsic],
+  )
+  const peCols = useMemo(
+    () => putColumns(props.density, props.greeks, props.intrinsic),
+    [props.density, props.greeks, props.intrinsic],
+  )
 
   const strikes = rows.map((r) => r.strike)
   const atm = atmStrike(strikes, spot)
@@ -361,7 +398,12 @@ export function ChainTable(props: {
   }
   const walls = props.walls ?? oiWalls(rows, spot)
   const onHot = props.onHot ?? noHot
-  const view = (s: ChainSide | null | undefined, itm: boolean, rank: 1 | 2 | null): SideView => {
+  const view = (
+    s: ChainSide | null | undefined,
+    itm: boolean,
+    rank: 1 | 2 | null,
+    intrinsic: number | null,
+  ): SideView => {
     const oi = s?.oi
     return {
       side: s,
@@ -369,6 +411,7 @@ export function ChainTable(props: {
       oiPct: oiMax > 0 && finite(oi) ? Math.round((oi / oiMax) * 100) : 0,
       heat: heatStep(s?.iv, ivLo, ivHi),
       rank,
+      intrinsic,
     }
   }
 
@@ -378,12 +421,13 @@ export function ChainTable(props: {
   rows.forEach((r, i) => {
     if (lineAt === i) body.push(line)
     const itm = itmSides(r.strike, spot)
+    const intr = intrinsicValue(r.strike, spot)
     body.push(
       <ChainRow
         key={r.strike}
         strike={r.strike}
-        ce={view(r.CE, itm.ce, wallRank(walls.ce, r.strike))}
-        pe={view(r.PE, itm.pe, wallRank(walls.pe, r.strike))}
+        ce={view(r.CE, itm.ce, wallRank(walls.ce, r.strike), intr.ce)}
+        pe={view(r.PE, itm.pe, wallRank(walls.pe, r.strike), intr.pe)}
         atm={r.strike === atm}
         far={isFar(r.strike, spot, iv, props.msToSettle)}
         ceCols={ceCols}
@@ -611,6 +655,7 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
   const [picked, setPicked] = useState<string | null>(null)
   const [density, setDensity] = useStored<Density>('desk.chain.density', 'full', ['compact', 'full'])
   const [greeks, setGreeks] = useStored<'on' | 'off'>('desk.chain.greeks', 'off', ['on', 'off'])
+  const [intrinsic, setIntrinsic] = useStored<'on' | 'off'>('desk.chain.intrinsic', 'on', ['on', 'off'])
   const [chart, setChart] = useStored<'shown' | 'hidden'>('desk.chain.chart', 'shown', ['shown', 'hidden'])
   /** The strike highlighted in both the OI chart and the table. */
   const [hot, setHot] = useState<number | null>(null)
@@ -677,6 +722,14 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
             onClick={() => setGreeks(greeks === 'on' ? 'off' : 'on')}
           >
             Greeks
+          </button>
+          <button
+            type="button"
+            className="chain-seg-btn chain-intrinsic-toggle"
+            aria-pressed={intrinsic === 'on'}
+            onClick={() => setIntrinsic(intrinsic === 'on' ? 'off' : 'on')}
+          >
+            Intrinsic
           </button>
         </div>
       </div>
@@ -761,6 +814,7 @@ export function ChainPage(props: { underlying?: string }): React.ReactElement {
           expiry={expiry}
           density={density}
           greeks={greeks === 'on'}
+          intrinsic={intrinsic === 'on'}
           msToSettle={msToSettle}
           walls={walls}
           hot={hot}
