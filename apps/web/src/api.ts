@@ -153,6 +153,18 @@ export interface PositionsResponse {
    */
   realised?: number | null
   /**
+   * The venue fees on every fill behind `realised` (already inside it — it
+   * stays net), GST included on Delta; 0 on NSE. Null when `realised` is.
+   */
+  feesPaid?: number | null
+  /**
+   * The estimated venue fees to close every open leg NOW — present only where
+   * the venue charges one (Delta), and its presence is what turns the summary
+   * block into Open / Realised / Fees paid / Closing fees / Net if closed now
+   * (`summaryRows`). Null when any open leg could not be priced.
+   */
+  closeFees?: number | null
+  /**
    * A MULTI-LEG REPAIR IS EXECUTING ON THIS BOOK RIGHT NOW.
    *
    * `heldAt` is when the run started, `untilMs` when the hold lapses on its own

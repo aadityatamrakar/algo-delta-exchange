@@ -42,6 +42,7 @@ import { loadStoredInstruments } from '../../marketdata/src/sync-runner.ts'
 import { MasterRefresher, collectionFingerprint } from './master-refresh.ts'
 import type { ApiDeps } from './routes/kit.ts'
 import { API_VENUE } from './venue.ts'
+import { dxCloseFee } from './dx-close-fee.ts'
 import { createAuthGate } from './authsvc.ts'
 import { healthRoutes } from './routes/health.ts'
 import { systemRoutes } from './routes/system.ts'
@@ -694,6 +695,10 @@ export async function main(): Promise<void> {
     displayMarks: (token) => marks.displayMark(token),
     displayExitQuotes: (token, exit) => marks.displayExitQuote(token, exit),
     displaySpot: (underlying, token) => marks.displaySpot(underlying, token),
+    // What closing an open leg would cost in Delta's fees, so the Positions
+    // page and the P&L cards can show net-if-closed-now. Delta only: NSE
+    // fills carry no fee, and there the payload keeps no `closeFees` at all.
+    ...(API_VENUE.id === 'dx' ? { closeFeeOf: dxCloseFee } : {}),
     ...(demoMarks === null
       ? {}
       : {

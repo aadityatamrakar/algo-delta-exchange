@@ -18,7 +18,7 @@ import { expect, test, describe, vi, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   bookBreakevens, bookTotals, compareLadder, consolidatePositions, shortsOnlyGreeks,
-  summaryRows, type PositionRow,
+  sinceEntryTotal, summaryRows, type PositionRow,
 } from '../src/positions.ts'
 import { PositionsPage } from '../src/pages.tsx'
 import { ModeProvider } from '../src/mode.tsx'
@@ -1012,6 +1012,74 @@ describe('summaryRows', () => {
     expect(out[2]?.posDelta).toBe(707.25)
     expect(out[2]?.pnl).toBe(690 + 690 - 95_524)
   })
+
+  /**
+   * NET IF CLOSED NOW (operator, 5 Nov: "we just want to see actual net pnl
+   * which if we close book now, we will get in account"). Where the venue
+   * charges to close (Delta: the payload carries `closeFees`), the block says
+   * what fees have cost and will cost, each on its own line, and its answer is
+   * what would land in the account. The figures are the 06-11 book's.
+   */
+  test('with a closing cost: Open, Realised before fees, Fees paid, Closing fees, Net if closed now', () => {
+    const out = summaryRows([row({ pnl: 136.882 })], -82.621, undefined, { feesPaid: 12.05, closeFees: 7.01 })
+
+    expect(out.map((r) => r.summary?.label)).toEqual(['Open', 'Realised', 'Fees paid', 'Closing fees', 'Net if closed now'])
+    expect(out[0]?.pnl).toBe(136.882)
+    // `realised` arrives NET of the fees paid; the row shows it before them so
+    // the fees are counted once, on their own line.
+    expect(out[1]?.pnl).toBeCloseTo(-82.621 + 12.05, 9)
+    expect(out[2]?.pnl).toBe(-12.05)
+    expect(out[3]?.pnl).toBe(-7.01)
+    expect(out[4]?.pnl).toBeCloseTo(136.882 - 82.621 - 7.01, 9)
+    // The four lines above the answer ADD UP to it — checkable by eye.
+    expect((out[0]?.pnl ?? 0) + (out[1]?.pnl ?? 0) + (out[2]?.pnl ?? 0) + (out[3]?.pnl ?? 0)).toBeCloseTo(out[4]?.pnl ?? NaN, 9)
+    expect(out.map((r) => r.summary?.strong === true)).toEqual([false, false, false, false, true])
+    expect(out.map((r) => r.posDelta)).toEqual([null, null, null, null, 707.25])
+    expect(out.every((r) => r.isTotal === true)).toBe(true)
+  })
+
+  test('an unknown closing cost keeps the lines it knows and makes the net unknown', () => {
+    const out = summaryRows([row({})], -82.621, undefined, { feesPaid: 12.05, closeFees: null })
+    expect(out[2]?.pnl).toBe(-12.05)
+    expect(out[3]?.pnl).toBe(null)
+    expect(out[4]?.pnl).toBe(null)
+  })
+
+  test('NSE — no closing cost on the payload — keeps the three rows it always had, feesPaid or not', () => {
+    const out = summaryRows([row({})], -95_524, undefined, { feesPaid: 0 })
+    expect(out.map((r) => r.summary?.label)).toEqual(['Open', 'Realised', 'Total'])
+    expect(out[2]?.pnl).toBe(690 - 95_524)
+  })
+
+  test('no realised figure but a closing cost: the one Total row, less what closing costs', () => {
+    const out = summaryRows([row({})], null, undefined, { feesPaid: null, closeFees: 7.01 })
+    expect(out).toHaveLength(1)
+    expect(out[0]?.pnl).toBeCloseTo(690 - 7.01, 9)
+    expect(out[0]?.summary).toEqual({ label: 'Total', note: 'open, since entry, less closing fees', strong: true })
+  })
+})
+
+/** The P&L tile's figure — the same sum as the block's answer, by construction. */
+describe('sinceEntryTotal with a closing cost', () => {
+  const row = (pnl: number | null): PositionRow => ({
+    tradingsymbol: 'C-BTC-80000-061126', strike: 80000, type: 'CE', qty: -0.1, entry: 731.4, entries: [731.4],
+    fills: 1, mark: 917, iv: 0.358, delta: 0.623, lotSize: 0.001, posDelta: -0.062, pnl, quote: null,
+    unpriced: false, modelPriced: false,
+  })
+
+  test('open + realised − closing fees: the Net if closed now row', () => {
+    expect(sinceEntryTotal([row(136.882)], -82.621, 7.01)).toBeCloseTo(136.882 - 82.621 - 7.01, 9)
+    const block = summaryRows([row(136.882)], -82.621, undefined, { feesPaid: 12.05, closeFees: 7.01 })
+    expect(sinceEntryTotal([row(136.882)], -82.621, 7.01)).toBeCloseTo(block[4]?.pnl ?? NaN, 9)
+  })
+
+  test('no closing cost on the payload: exactly as before', () => {
+    expect(sinceEntryTotal([row(136.882)], -82.621)).toBeCloseTo(136.882 - 82.621, 9)
+  })
+
+  test('an unknown closing cost with legs open is an unknown total', () => {
+    expect(sinceEntryTotal([row(136.882)], -82.621, null)).toBe(null)
+  })
 })
 
 /**
@@ -1056,13 +1124,14 @@ describe('shortsOnlyGreeks', () => {
 })
 
 describe('the summary block on screen', () => {
-  function mountWithRealised(realised: number | null): void {
+  function mountWithRealised(realised: number | null, costs: Record<string, number | null> = {}): void {
     installFetch(({ path }) => {
       if (path === '/v1/desk/positions') {
         return {
           body: {
             tag: TAG, symbol: 'ITC', mode: 'paper', spot: 279, asOf: Date.now(), complete: true,
             realised,
+            ...costs,
             legs: [leg({ deskTag: 'L1', tradingsymbol: 'ITC26AUG280PE', qty: -1725, entryPrice: 5 })],
             greeks: bookGreeks([priced({ tradingsymbol: 'ITC26AUG280PE', qty: -1725, delta: -0.41 })]),
           },
@@ -1098,6 +1167,22 @@ describe('the summary block on screen', () => {
     // TWICE, by design: the P&L tile and the Total row are one number now —
     // `sinceEntryTotal` feeds both, so both render −94,834.
     expect(screen.getAllByText('-94,834')).toHaveLength(2)
+  })
+
+  test('with a closing cost on the payload: the fee lines, and Net if closed now in the tile and the foot', async () => {
+    // −1,725 x (4.6 − 5) = +690 open; realised −95,524 net of 24 fees paid; 30 to close.
+    mountWithRealised(-95_524, { feesPaid: 24, closeFees: 30 })
+    await waitFor(() => expect(screen.getByText('ITC 280 PE')).toBeTruthy())
+
+    expect(screen.getByText('Fees paid')).toBeTruthy()
+    expect(screen.getByText('Closing fees')).toBeTruthy()
+    expect(screen.getByText('Net if closed now')).toBeTruthy()
+    expect(screen.getByText('net if closed now')).toBeTruthy()
+    expect(screen.getByText('-95,500')).toBeTruthy()
+    expect(screen.getByText('-24')).toBeTruthy()
+    expect(screen.getByText('-30')).toBeTruthy()
+    // The tile and the answer row: one number, 690 − 95,524 − 30.
+    expect(screen.getAllByText('-94,864')).toHaveLength(2)
   })
 
   test('a payload with realised NULL renders the one Total row it always had', async () => {

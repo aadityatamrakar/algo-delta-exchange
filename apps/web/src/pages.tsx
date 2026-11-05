@@ -50,7 +50,7 @@ import { Switch } from '@astryxdesign/core/Switch'
 import type { TableColumn, TableSortState } from '@astryxdesign/core/Table'
 import {
   ApiError, api, ago, closeAllFailed, explain, inSession, inr, inrCompact,
-  localTime, signed, sign,
+  localTime, money, signed, sign,
   NOWRAP, RED,
   type BookDiff, type BookMargin, type BookSummary, type BrokerFunds, type CloseAllResult, type DeskMode,
   type FeedStatus, type PositionsResponse,
@@ -608,7 +608,10 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
   const rows: PositionRow[] = consolidatePositions(pos?.legs ?? [], g, pos?.quotes)
   // THE page's one P&L: open-vs-entry plus realised, shared with the table's
   // Total row so the tile and the foot cannot disagree. See `sinceEntryTotal`.
-  const sinceEntry = sinceEntryTotal(rows, pos?.realised ?? null)
+  // Where the venue charges to close (Delta: `closeFees` on the payload) the
+  // figure is NET IF CLOSED NOW — the same answer the block's last row gives.
+  const sinceEntry = sinceEntryTotal(rows, pos?.realised ?? null, pos?.closeFees)
+  const netIfClosed = pos?.closeFees !== undefined
   // `?? []` on the ARRAY, not `?.` on the length: a bridge one deploy behind
   // can answer without `legs` at all, and `undefined.length` throws during
   // render — a blank page mid-session where a dash would do. See api.ts.
@@ -683,6 +686,7 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
       sortedData,
       pos?.realised ?? null,
       shortsOnly ? sortedData.filter((r) => r.qty < 0) : sortedData,
+      { feesPaid: pos?.feesPaid, closeFees: pos?.closeFees },
     ),
   ]
 
@@ -805,7 +809,9 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
               weight={r.isTotal === true && r.summary?.strong === true ? 'bold' : 'medium'}
               style={sign(r.pnl)}
             >
-              {signed(r.pnl)}
+              {/* `money`: whole rupees on NSE (what `signed` printed), dollars
+                  and cents on Delta — not `+29.624`. */}
+              {money(r.pnl)}
             </Text>
           )
       ) },
@@ -1136,13 +1142,18 @@ export function PositionsPage(props: { mode: DeskMode; tag: string | null }): Re
             where day is the question: the after-close broker reconciliation
             reads the journal, not this tile.
           */
-          labelNote="since entry"
+          labelNote={netIfClosed ? 'net if closed now' : 'since entry'}
           title={
-            'Open legs marked against the prices the desk entered them at, plus what has been ' +
-            'booked on closed legs — the same figure as the Total row under the table, computed ' +
-            'from the same payload. Null the moment any open leg is unpriced.'
+            netIfClosed
+              ? 'What closing the whole book now would leave in the account: open legs at their ' +
+                'closing prices against their entries, plus what closed legs booked, less every fee ' +
+                'paid and the estimated fees to close the open legs — the Net if closed now row ' +
+                'under the table. Null the moment any open leg is unpriced.'
+              : 'Open legs marked against the prices the desk entered them at, plus what has been ' +
+                'booked on closed legs — the same figure as the Total row under the table, computed ' +
+                'from the same payload. Null the moment any open leg is unpriced.'
           }
-          value={sinceEntry === null ? '—' : signed(sinceEntry)}
+          value={sinceEntry === null ? '—' : money(sinceEntry)}
           {...(sinceEntry === null ? {} : { tone: sinceEntry })}
         />
         {/*

@@ -290,19 +290,42 @@ export function consolidatePositions(
 export function sinceEntryTotal(
   rows: readonly PositionRow[],
   realised: number | null,
+  /**
+   * What closing the open legs now would cost (`closeFees` on the payload —
+   * Delta only). Absent: the figure is exactly what it always was. Taken off
+   * so the tile is the block's "Net if closed now", and the API's card figure
+   * (`sinceEntryOf`), to the cent. Null with legs open: unknown.
+   */
+  closeFees?: number | null,
 ): number | null {
   if (rows.length === 0) return realised
   const openPnl = rows.some((r) => r.pnl === null)
     ? null
     : rows.reduce((n, r) => n + (r.pnl ?? 0), 0)
   if (openPnl === null) return null
-  return realised === null ? openPnl : openPnl + realised
+  const base = realised === null ? openPnl : openPnl + realised
+  if (closeFees === undefined) return base
+  return closeFees === null ? null : base - closeFees
+}
+
+/**
+ * The venue costs a block can show, off the positions payload. `closeFees`
+ * PRESENT (a number or null) is what switches the block to its fee lines:
+ * the API sends it only where the venue charges to close (Delta). `feesPaid`
+ * alone — NSE sends 0 — changes nothing.
+ */
+export interface BookCosts {
+  // `| undefined` so a caller can hand the payload's optional fields straight
+  // through (`exactOptionalPropertyTypes`).
+  readonly feesPaid?: number | null | undefined
+  readonly closeFees?: number | null | undefined
 }
 
 export function summaryRows(
   rows: readonly PositionRow[],
   realised: number | null,
   deltaRows: readonly PositionRow[] = rows,
+  costs: BookCosts = {},
 ): PositionRow[] {
   if (rows.length === 0) return []
   const sumOrNull = (
@@ -323,11 +346,54 @@ export function summaryRows(
     lotSize: 0,
     unpriced: false, modelPriced: false, isTotal: true,
   }
+  const close = costs.closeFees
   if (realised === null) {
+    if (close === undefined) {
+      return [{
+        ...blank, tradingsymbol: 'Total', pnl: openPnl, posDelta,
+        summary: { label: 'Total', note: 'open, since entry', strong: true },
+      }]
+    }
     return [{
-      ...blank, tradingsymbol: 'Total', pnl: openPnl, posDelta,
-      summary: { label: 'Total', note: 'open, since entry', strong: true },
+      ...blank, tradingsymbol: 'Total',
+      pnl: openPnl === null || close === null ? null : openPnl - close, posDelta,
+      summary: { label: 'Total', note: 'open, since entry, less closing fees', strong: true },
     }]
+  }
+  /*
+    NET IF CLOSED NOW (operator, 5 Nov: "we just want to see actual net pnl
+    which if we close book now, we will get in account"). Where the venue
+    charges to close, the block names every fee: `realised` arrives NET of
+    the fees paid, so its row shows it BEFORE them and the fees appear once,
+    on a line of their own; the closing estimate is the next line; the four
+    add up to the answer. A fees-paid figure the API could not vouch for is
+    impossible here — it is null only when `realised` is.
+  */
+  if (close !== undefined) {
+    const paid = costs.feesPaid ?? 0
+    return [
+      {
+        ...blank, tradingsymbol: 'Open', pnl: openPnl,
+        summary: { label: 'Open', note: 'open legs, at closing price' },
+      },
+      {
+        ...blank, tradingsymbol: 'Realised', pnl: realised + paid,
+        summary: { label: 'Realised', note: 'closed legs, before fees' },
+      },
+      {
+        ...blank, tradingsymbol: 'Fees paid', pnl: -paid,
+        summary: { label: 'Fees paid', note: 'every fill so far, GST incl.' },
+      },
+      {
+        ...blank, tradingsymbol: 'Closing fees', pnl: close === null ? null : -close,
+        summary: { label: 'Closing fees', note: 'est., to close the open legs now' },
+      },
+      {
+        ...blank, tradingsymbol: 'Net if closed now',
+        pnl: openPnl === null || close === null ? null : openPnl + realised - close, posDelta,
+        summary: { label: 'Net if closed now', note: 'what the account would get', strong: true },
+      },
+    ]
   }
   return [
     {

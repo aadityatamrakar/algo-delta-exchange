@@ -19,6 +19,7 @@ import { limitOf, modeOf } from './kit.ts'
 import { venueDay, venueDayRange } from '../venue.ts'
 import { PnlStore } from '../pnlstore.ts'
 import { pnlFor, type PnlOptions } from '../pnl-jobs.ts'
+import type { PositionsResponse } from '../service.ts'
 
 export function pnlRoutes(deps: ApiDeps, opts: PnlOptions = {}): Route {
   const store = new PnlStore(deps.db, deps.venue)
@@ -108,32 +109,50 @@ async function withSinceEntry<
         const doc = await deps.db.collection('desk-books').findOne({ tag: s.tag, mode })
         if (doc === null) return s
         const pos = await deps.service.positions(s.tag, mode, { realised: true })
-        const marks = new Map(pos.greeks.legs.map((l) => [l.tradingsymbol, l.price]))
-        let open = 0
-        let sinceEntry: number | null = 0
-        for (const leg of pos.legs) {
-          if (leg.qty === 0) continue
-          const mark = marks.get(leg.instrument.tradingsymbol)
-          if (mark === undefined) {
-            // One unpriced open leg makes the figure unknown, never a
-            // confident number understated by an unknown amount — the same
-            // rule the rollup's own `total` states.
-            sinceEntry = null
-            break
-          }
-          open += (mark - leg.entryPrice) * leg.qty
-        }
-        if (sinceEntry !== null) {
-          const realised = pos.realised ?? null
-          sinceEntry = realised === null ? open : open + realised
-        }
-        return { ...s, sinceEntry }
+        return { ...s, sinceEntry: sinceEntryOf(pos) }
       } catch {
         return s
       }
     }),
   )
   return { ...summary, strategies }
+}
+
+/**
+ * THE BOOK FIGURE A CARD SHOWS, off one `positions(…, { realised: true })`:
+ *
+ *   open legs at their marks against their entries
+ * + realised-to-date (already NET of every fee paid — `feesPaid` is inside it)
+ * − what closing the open legs now would cost, where the venue charges it
+ *
+ * — "net pnl which if we close book now, we will get in account" (operator,
+ * 5 Nov). The Positions page's Total row is the same sum (`positions.ts`).
+ * With no `closeFees` on the payload (NSE) the figure is exactly what it was.
+ *
+ * Null — never a confident number understated by an unknown amount, the
+ * rollup's own `total` rule — when an open leg is unmarked, or when the
+ * closing cost of legs still open is unknown.
+ */
+export function sinceEntryOf(
+  pos: Pick<PositionsResponse, 'legs' | 'greeks' | 'realised' | 'closeFees'>,
+): number | null {
+  const marks = new Map(pos.greeks.legs.map((l) => [l.tradingsymbol, l.price]))
+  let open = 0
+  let anyOpen = false
+  for (const leg of pos.legs) {
+    if (leg.qty === 0) continue
+    anyOpen = true
+    const mark = marks.get(leg.instrument.tradingsymbol)
+    if (mark === undefined) return null
+    open += (mark - leg.entryPrice) * leg.qty
+  }
+  const realised = pos.realised ?? null
+  let net = realised === null ? open : open + realised
+  if (pos.closeFees !== undefined) {
+    if (pos.closeFees === null) return anyOpen ? null : net
+    net -= pos.closeFees
+  }
+  return net
 }
 
 function epochParam(url: URL, name: string): number | null {

@@ -297,6 +297,27 @@ export interface PositionsResponse {
    * would understate silently. The page renders the Total exactly as before.
    */
   readonly realised?: number | null
+  /**
+   * THE VENUE FEES ON EVERY FILL behind `realised` — opening and closing,
+   * open legs and closed — over the same window, GST included on Delta. Already
+   * subtracted inside `realised`, which stays net; carried separately so the
+   * page can show what fees have cost as a line of its own (operator, 5 Nov).
+   * 0 on NSE, whose fills carry no fee. Null whenever `realised` is: the same
+   * fills, the same doubt. Present exactly when `realised` is.
+   */
+  readonly feesPaid?: number | null
+  /**
+   * WHAT CLOSING EVERY OPEN LEG NOW WOULD COST in venue fees — the estimate
+   * `closeFeeOf` gives for each open leg at its closing price (the same price
+   * its P&L is marked at) against the spot. With it the page can say "net if
+   * closed now": what would actually land in the account.
+   *
+   * Present only when `realised` was asked for AND the venue charges one
+   * (`closeFeeOf` wired: Delta). 0 for a flat book. Null — never a smaller
+   * number — when any open leg has no price, there is no spot, or the venue's
+   * formula refused an input.
+   */
+  readonly closeFees?: number | null
 }
 
 export interface Clock {
@@ -334,6 +355,13 @@ export interface BridgeDeps {
   readonly demoDisplayExitQuotes?: (token: number, exit: ExitSide | null) => ExitQuote | null
   /** Which feed marks a book (`RailIndex.venueOf`). Absent: production for all. */
   readonly marksVenue?: (tag: string, mode: DeskMode) => MarksVenue
+  /**
+   * The venue's fee to close ONE open leg now (`dx-close-fee.ts`): `qty` its
+   * size (unsigned), `price` its closing price, `index` the spot. Wired on
+   * Delta only; absent where closing costs nothing the desk models (NSE), and
+   * then `positions()` carries no `closeFees` at all.
+   */
+  readonly closeFeeOf?: (leg: { readonly qty: number; readonly price: number; readonly index: number }) => number
   /**
    * Told about fills the moment they are journalled, so the in-memory book
    * (`livebook.ts`) does not have to wait for its 60s reconcile to see them.
@@ -1892,8 +1920,31 @@ export class BridgeService {
       // says absent, and a reader must be able to tell "not asked for" (absent)
       // from "asked for and unknowable" (null).
       ...(opts.realised === true
-        ? { realised: await this.#realisedToDate(tag, mode, now) }
+        ? await this.#bookedAndCosts(tag, mode, now, legs, greeks, new Set([...stillUnmarked, ...greeks.unpriced]), spot)
         : {}),
+    }
+  }
+
+  /**
+   * The opt-in money fields: `realised` and the `feesPaid` inside it, plus
+   * `closeFees` where the venue charges to close (see `PositionsResponse`).
+   */
+  async #bookedAndCosts(
+    tag: string,
+    mode: DeskMode,
+    nowMs: number,
+    legs: readonly BridgeLeg[],
+    greeks: BookGreeks,
+    unpriced: ReadonlySet<string>,
+    spot: number | null,
+  ): Promise<Pick<PositionsResponse, 'realised' | 'feesPaid' | 'closeFees'>> {
+    const booked = await this.#realisedToDate(tag, mode, nowMs)
+    return {
+      realised: booked === null ? null : booked.realised,
+      feesPaid: booked === null ? null : booked.fees,
+      ...(this.#d.closeFeeOf === undefined
+        ? {}
+        : { closeFees: closeFeesOf(this.#d.closeFeeOf, legs, greeks, unpriced, spot) }),
     }
   }
 
@@ -1930,7 +1981,11 @@ export class BridgeService {
    * legs and greeks above are the page, and they must not 500 because a
    * decoration on them could not be computed.
    */
-  async #realisedToDate(tag: string, mode: DeskMode, nowMs: number): Promise<number | null> {
+  async #realisedToDate(
+    tag: string,
+    mode: DeskMode,
+    nowMs: number,
+  ): Promise<{ readonly realised: number; readonly fees: number } | null> {
     try {
       const load = await new PnlStore(this.#d.store).loadFills({
         from: nowMs - lookbackDaysOf({}) * DAY_MS,
@@ -1947,9 +2002,11 @@ export class BridgeService {
       let realised = 0
       for (const p of positions) realised += p.realised
       // NET of the venue's fees, as the day's `cumRealized` is. 0 on NSE,
-      // whose fills carry no `fee`.
-      for (const f of fills) realised -= feeOf(f)
-      return realised
+      // whose fills carry no `fee`. The fees are handed back too, so the page
+      // can show them as their own line (`PositionsResponse.feesPaid`).
+      let fees = 0
+      for (const f of fills) fees += feeOf(f)
+      return { realised: realised - fees, fees }
     } catch {
       return null
     }
@@ -2357,4 +2414,44 @@ export interface BookListing {
   readonly stale?: boolean
   /** When the oldest displayed mark was true. Null when all of them are live. */
   readonly marksAsOf?: number | null
+}
+
+/**
+ * `PositionsResponse.closeFees`: the venue's fee to close every OPEN leg now,
+ * each at the price its P&L is marked at (`greeks.legs[].price` — the exit
+ * side when that seam is wired, the market quote over a model price) against
+ * the spot. Exported for tests.
+ *
+ * 0 for a flat book. NULL, never a smaller number, when any open leg is
+ * unpriced or carries no price, when there is no spot, or when the fee
+ * function refuses an input or answers with something that is not a fee: a
+ * sum over the legs that DID price is a confident figure understated by an
+ * unknown amount, the rule every total on this payload keeps.
+ */
+export function closeFeesOf(
+  feeOf: NonNullable<BridgeDeps['closeFeeOf']>,
+  legs: readonly BridgeLeg[],
+  greeks: BookGreeks,
+  unpriced: ReadonlySet<string>,
+  spot: number | null,
+): number | null {
+  const open = legs.filter((l) => l.qty !== 0)
+  if (open.length === 0) return 0
+  if (spot === null || !Number.isFinite(spot)) return null
+  const priceOf = new Map(greeks.legs.map((l) => [l.tradingsymbol, l.price]))
+  let total = 0
+  for (const l of open) {
+    const symbol = l.instrument.tradingsymbol
+    const price = priceOf.get(symbol)
+    if (unpriced.has(symbol) || price === undefined || !Number.isFinite(price)) return null
+    let fee: number
+    try {
+      fee = feeOf({ qty: Math.abs(l.qty), price, index: spot })
+    } catch {
+      return null
+    }
+    if (!Number.isFinite(fee) || fee < 0) return null
+    total += fee
+  }
+  return total
 }

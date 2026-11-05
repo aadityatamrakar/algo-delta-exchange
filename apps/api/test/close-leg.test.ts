@@ -967,3 +967,127 @@ describe('realised-to-date on the positions payload', () => {
     assert.equal(p.realised, 0)
   })
 })
+
+// ------------------------------------------------- what closing would cost
+
+/**
+ * NET IF CLOSED NOW (operator, 5 Nov: "we just want to see actual net pnl
+ * which if we close book now, we will get in account").
+ *
+ * Two figures ride the realised one. `feesPaid` is the venue fees on every
+ * fill so far — already inside `realised`, which stays net, but now said out
+ * loud so the page can show it as its own line. `closeFees` is what the venue
+ * would charge to close every open leg NOW, and exists only where a venue
+ * charges one: the `closeFeeOf` seam is wired on Delta alone.
+ */
+describe('fees paid and the cost of closing, on the positions payload', () => {
+  const decide = async (decisionId: string, createdAt: number, fills: Record<string, unknown>[]): Promise<void> => {
+    await db.collection(COLLECTIONS.decisions).insertOne({ decisionId, tag: TAG, mode: MODE, createdAt, fills })
+  }
+
+  /** A service with the closing-fee seam, recording what it was asked. */
+  const withSeam = (marks: StaticMarks = MARKS): {
+    svc: BridgeService
+    calls: { qty: number; price: number; index: number }[]
+  } => {
+    const calls: { qty: number; price: number; index: number }[] = []
+    const s = new BridgeService({
+      store,
+      rails: { paper, live },
+      master: { current: master },
+      marks,
+      clock: { now: () => clockMs },
+      closeFeeOf: (a) => {
+        calls.push(a)
+        return a.qty * 0.01
+      },
+    })
+    return { svc: s, calls }
+  }
+
+  test('feesPaid is the fees on every fill so far; realised stays net of them', async () => {
+    await seedBook()
+    await decide('fp-open', NOW - 3 * 86_400_000, [
+      { tradingsymbol: DEAD, side: 'Sell', qty: 5 * LOT, price: 30.9, ts: NOW - 3 * 86_400_000, op: 'open', fee: 2.5 },
+    ])
+    await decide('fp-close', NOW - 3_600_000, [
+      { tradingsymbol: DEAD, side: 'Buy', qty: 5 * LOT, price: 40, ts: NOW - 3_600_000, op: 'close', fee: 1.5 },
+    ])
+    const p = await svc.positions(TAG, MODE, { realised: true })
+    assert.equal(p.feesPaid, 4)
+    assert.ok(Math.abs((p.realised ?? NaN) - (5 * LOT * (30.9 - 40) - 4)) < 1e-9)
+  })
+
+  test('feesPaid is null whenever realised is — the same fills, the same doubt', async () => {
+    await seedBook()
+    await decide('fp-orphan', NOW - 3_600_000, [
+      { tradingsymbol: DEAD, side: 'Buy', qty: 5 * LOT, price: 40, ts: NOW - 3_600_000, op: 'close', fee: 1.5 },
+    ])
+    const p = await svc.positions(TAG, MODE, { realised: true })
+    assert.equal(p.realised, null)
+    assert.equal(p.feesPaid, null)
+  })
+
+  test('no closing-fee seam (NSE): no closeFees field at all, and feesPaid is 0', async () => {
+    await seedBook()
+    const p = await svc.positions(TAG, MODE, { realised: true })
+    assert.equal('closeFees' in p, false)
+    assert.equal(p.feesPaid, 0)
+  })
+
+  test('closeFees sums the seam over every open leg: its size, its closing price, the spot', async () => {
+    await seedBook()
+    const { svc: s, calls } = withSeam()
+    const p = await s.positions(TAG, MODE, { realised: true })
+    assert.ok(Math.abs((p.closeFees ?? NaN) - 3 * 5 * LOT * 0.01) < 1e-9)
+    // Each leg's price is the one its P&L is marked at (`greeks.legs[].price`),
+    // which is the quote round-tripped through its solved IV — equal to the
+    // mark to a few millionths, not bit-for-bit.
+    const seen = [...calls].sort((a, b) => a.price - b.price)
+    assert.deepEqual(seen.map((c) => [c.qty, c.index]), [[5 * LOT, 2366.2], [5 * LOT, 2366.2], [5 * LOT, 2366.2]])
+    const marks = [1.1, 10.75, 86.4]
+    seen.forEach((c, i) => assert.ok(Math.abs(c.price - (marks[i] ?? NaN)) < 1e-4, `${c.price} vs ${marks[i]}`))
+  })
+
+  test('a flat book costs nothing to close: 0, not null', async () => {
+    const { svc: s } = withSeam()
+    const p = await s.positions(TAG, MODE, { realised: true })
+    assert.equal(p.closeFees, 0)
+  })
+
+  test('an open leg nothing can price makes closeFees NULL, never a smaller number', async () => {
+    await seedBook()
+    // No quote anywhere, so no IV for the model pass either: every leg stays
+    // unpriced. (One quoted leg would let the model price the other two.)
+    const { svc: s } = withSeam(new StaticMarks({}, { TCS: 2366.2 }))
+    const p = await s.positions(TAG, MODE, { realised: true })
+    assert.ok(p.greeks.unpriced.length > 0, 'fixture: some leg must be unpriced')
+    assert.equal(p.closeFees, null)
+  })
+
+  test('a seam that throws makes closeFees NULL rather than failing the page', async () => {
+    await seedBook()
+    const s = new BridgeService({
+      store,
+      rails: { paper, live },
+      master: { current: master },
+      marks: MARKS,
+      clock: { now: () => clockMs },
+      closeFeeOf: () => {
+        throw new RangeError('bad input')
+      },
+    })
+    const p = await s.positions(TAG, MODE, { realised: true })
+    assert.equal(p.closeFees, null)
+    assert.equal(p.legs.length, 3)
+  })
+
+  test('both are OPT-IN with realised: the plain call carries neither', async () => {
+    await seedBook()
+    const { svc: s, calls } = withSeam()
+    const p = await s.positions(TAG, MODE)
+    assert.equal('feesPaid' in p, false)
+    assert.equal('closeFees' in p, false)
+    assert.equal(calls.length, 0)
+  })
+})
